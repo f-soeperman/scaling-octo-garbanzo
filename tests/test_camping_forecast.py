@@ -174,6 +174,21 @@ def test_wisselvallig_alleen_bij_droge_som_met_hoge_kans():
     assert "wisselvallig" not in redenen  # echte regen wint van de kans
 
 
+def test_wisselvallig_heeft_twee_trappen_op_de_kans():
+    # Onder POP_DAY_LIKELY: "wisselvallig" (kort buitje) — een reëel maar
+    # klein ongemak, net niet meer "top". Erboven: "wisselvallig_nat"
+    # (vrijwel de hele dag nat) — een echt probleem, landt in "matig".
+    score_kort, redenen_kort = cf.score_day(_dag_m(pop=cf.POP_DAY_LIKELY - 1), _nacht_m())
+    assert redenen_kort == ["wisselvallig"]
+    assert cf.category(score_kort, []) == "goed"
+    score_nat, redenen_nat = cf.score_day(_dag_m(pop=cf.POP_DAY_LIKELY), _nacht_m())
+    assert redenen_nat == ["wisselvallig_nat"]
+    assert cf.category(score_nat, []) == "matig"
+    # Geen enkele trap mag nog "top" opleveren — dat was precies de melding.
+    assert cf.category(score_kort, []) != "top"
+    assert cf.category(score_nat, []) != "top"
+
+
 def test_nachtregen_wisselvallig_alleen_bij_droge_som_met_hoge_kans():
     # Nachtelijk spiegelbeeld van de vorige test — tot aug 2026 bestond dit
     # signaal niet: een droge modeluitkomst met een hoge ensemble-regenkans
@@ -188,10 +203,13 @@ def test_meerdere_lichte_dagproblemen_stapelen_niet_op_elkaar():
     # Drie lichte dagongemakken (elk uit MINOR_REASONS, alle in DAY_REASONS)
     # mogen samen niet zwaarder wegen dan het zwaarste ervan — alleen "echte"
     # problemen tellen vol mee. Een prima nacht laat het nachtdeel op 0.
+    # ("wisselvallig" zit sinds aug 2026 niet meer in MINOR_REASONS — zie
+    # test_wisselvallig_heeft_twee_trappen_op_de_kans — dus deze test gebruikt
+    # dagregen_licht als derde lichte dagreden.)
     score, redenen = cf.score_day(
-        _dag_m(tmax=cf.DAY_TMAX_WARM, pop=cf.POP_DAY_UNSETTLED, gust=cf.GUST_BREEZY_KMH),
+        _dag_m(tmax=cf.DAY_TMAX_WARM, rain=cf.DAY_RAIN_DRY_MM, gust=cf.GUST_BREEZY_KMH),
         _nacht_m())
-    assert set(redenen) == {"hitte_naderend", "wisselvallig", "wind_fris"}
+    assert set(redenen) == {"hitte_naderend", "dagregen_licht", "wind_fris"}
     assert score == max(cf.PEN[r] for r in redenen)
 
 
@@ -243,8 +261,8 @@ def test_minor_reasons_zijn_de_goedkoopste_trap_en_dekken_pen_niet_leeg():
 
 
 def test_split_parts_dempt_lichte_redenen_ook_per_deel():
-    parts = cf.split_parts(["wind_fris", "wisselvallig"], [], warn_day=False, warn_night=False)
-    assert parts["score_day"] == max(cf.PEN["wind_fris"], cf.PEN["wisselvallig"])
+    parts = cf.split_parts(["wind_fris", "dagregen_licht"], [], warn_day=False, warn_night=False)
+    assert parts["score_day"] == max(cf.PEN["wind_fris"], cf.PEN["dagregen_licht"])
     assert parts["score_night"] == 0
 
 

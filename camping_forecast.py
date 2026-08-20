@@ -139,11 +139,21 @@ NIGHT_RAIN_RED_MM = 10.0
 GUST_BREEZY_KMH, GUST_POOR_KMH = 35.0, 45.0
 DAY_RAIN_DRY_MM, DAY_RAIN_SOME_MM, DAY_RAIN_BAD_MM = 1.0, 3.0, 8.0
 NIGHT_RAIN_DRY_MM, NIGHT_RAIN_SOME_MM, NIGHT_RAIN_BAD_MM = 0.3, 1.0, 5.0
-POP_DAY_UNSETTLED = 60  # % — droge som maar hoge kans → kleine straf
+POP_DAY_UNSETTLED = 60  # % — droge som maar hoge kans → "wisselvallig" (kort buitje)
+# Tot aug 2026 had "wisselvallig" precies één trap (8 punten, MINOR_REASONS):
+# een 61%-kans en een 97%-kans golden identiek, en zelfs een 97%-kans-op-regen-
+# de-hele-dag kon nooit boven "top" uitkomen (gemeld door de gebruiker — een
+# dag met vrijwel zekere miezer toonde donkergroen). POP_DAY_LIKELY splitst de
+# ladder daarom net als dagregen (licht/matig/zwaar) in twee trappen: onder
+# deze grens is het een kort buitje ("wisselvallig", nog altijd een reëel maar
+# klein ongemak — net geen "top" meer), erboven is het vrijwel de hele dag
+# nat ("wisselvallig_nat", een écht probleem — landt in "matig").
+POP_DAY_LIKELY = 85
 # Nachtelijk spiegelbeeld van POP_DAY_UNSETTLED — zelfde precedentie (een
 # gemeten hoeveelheid wint altijd van de kans, zie score_day()), maar dan voor
 # het nachtdeel, dat tot aug 2026 geen enkel kans-signaal had: een droge
-# modeluitkomst met een zeer natte ensemble-kans bleef onopgemerkt.
+# modeluitkomst met een zeer natte ensemble-kans bleef onopgemerkt. Bewust
+# (nog) geen tweede trap zoals overdag — niet gemeld, niet aangepast.
 POP_NIGHT_UNSETTLED = 60
 DEW_MARGIN_GOOD, DEW_MARGIN_POOR = 2.0, 1.0  # min(T − Td) over de nacht
 
@@ -165,7 +175,11 @@ PEN = {
     "koele_nacht": 8, "koude_nacht": 31, "te_koude_nacht": 40,  # Tmin 10–12 / 8–10 / 5–8
     "dauw_krap": 10, "dauw_nat": 12,                            # marge <2 / <1 °C
     "dagregen_licht": 8, "dagregen_matig": 20, "dagregen_zwaar": 40,
-    "wisselvallig": 8,
+    # "wisselvallig" (kort buitje) staat sinds aug 2026 bewust NIET meer in
+    # MINOR_REASONS — een reëel kans-op-regen-signaal mag alléén nog nooit
+    # "top" opleveren (12 > CAT_TOP), ook helemaal alleen. "wisselvallig_nat"
+    # (vrijwel de hele dag nat) is een echt probleem, geen "kleine straf".
+    "wisselvallig": 12, "wisselvallig_nat": 32,
     "nachtregen_licht": 5, "nachtregen_matig": 12, "nachtregen_zwaar": 30,
     "nachtregen_wisselvallig": 5,  # nachtelijk spiegelbeeld van "wisselvallig"
     "wind_fris": 10, "wind_hard": 25,
@@ -205,7 +219,8 @@ RED_DAY_PENALTY = 5000
 # exact en disjunct dekt. "waarschuwing" splitst niet hier maar op
 # vensteroverlap (zie split_parts).
 DAY_REASONS = frozenset({"hitte_naderend", "hitte", "dagregen_licht", "dagregen_matig",
-                         "dagregen_zwaar", "wisselvallig", "wind_fris", "wind_hard"})
+                         "dagregen_zwaar", "wisselvallig", "wisselvallig_nat",
+                         "wind_fris", "wind_hard"})
 NIGHT_REASONS = frozenset({"koele_nacht", "koude_nacht", "te_koude_nacht",
                            "dauw_krap", "dauw_nat",
                            "nachtregen_licht", "nachtregen_matig", "nachtregen_zwaar",
@@ -222,7 +237,7 @@ NIGHT_FLAGS = frozenset({"koude_nacht_extreem", "stortregen_nacht"})
 # waarde, zodat een latere herweging van PEN deze indeling niet stilzwijgend
 # verschuift.
 MINOR_REASONS = frozenset({"hitte_naderend", "koele_nacht", "dauw_krap",
-                           "dagregen_licht", "wisselvallig", "nachtregen_licht", "wind_fris",
+                           "dagregen_licht", "nachtregen_licht", "wind_fris",
                            "nachtregen_wisselvallig"})
 
 # Zekerheid: de zwakste ensemble-fractie bepaalt de tier, afgetopt op de
@@ -427,6 +442,8 @@ def score_day(day_m: dict, night_m: dict | None) -> tuple[int, list[str]]:
         reasons.append("dagregen_matig")
     elif day_m["rain_mm"] >= DAY_RAIN_DRY_MM:
         reasons.append("dagregen_licht")
+    elif day_m["pop_max"] is not None and day_m["pop_max"] >= POP_DAY_LIKELY:
+        reasons.append("wisselvallig_nat")
     elif day_m["pop_max"] is not None and day_m["pop_max"] >= POP_DAY_UNSETTLED:
         reasons.append("wisselvallig")
 
