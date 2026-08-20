@@ -173,7 +173,16 @@ PEN = {
     # gebruikerscriterium en mag dus nooit in een kampeervenster vallen. Bij
     # elke wijziging van CAT_GOED moet deze waarde er strikt boven blijven.
     "koele_nacht": 8, "koude_nacht": 31, "te_koude_nacht": 40,  # Tmin 10–12 / 8–10 / 5–8
-    "dauw_krap": 10, "dauw_nat": 12,                            # marge <2 / <1 °C
+    # Dauw weegt bewust licht (een droge dag gaat voor een droge tent), maar
+    # moet een verder perfecte dag altijd uit "top" trekken — vóór aug 2026
+    # stond "dauw_krap" in MINOR_REASONS op precies 10, en CAT_TOP is "≤10":
+    # een top-dag met alléén een krappe dauwmarge bleef dus "top" i.p.v. naar
+    # "goed" te zakken (gemeld door de gebruiker; empirisch trof dat 28 van de
+    # 179 dagen in het toenmalige artefact). Beide trappen liggen nu ruim
+    # onder CAT_GOED (30), dus dauw alléén kan een top-dag hoogstens naar
+    # "goed" duwen, nooit naar "matig" — "nat" weegt zwaarder dan "krap", net
+    # als vóór deze fix.
+    "dauw_krap": 12, "dauw_nat": 15,                            # marge <2 / <1 °C
     "dagregen_licht": 8, "dagregen_matig": 20, "dagregen_zwaar": 40,
     # "wisselvallig" (kort buitje) staat sinds aug 2026 bewust NIET meer in
     # MINOR_REASONS — een reëel kans-op-regen-signaal mag alléén nog nooit
@@ -211,8 +220,11 @@ MOVE_PENALTY = 8
 # ongelijkheid, zodat een PEN-hertuning hem niet stilzwijgend breekt). Routes
 # rangschikken zo eerst op het aantal onvermijdelijke rode dagen en pas
 # daarna op score. Bewust eindig: bij "overal rood" bestaat er tóch een route
-# (die het dashboard dan eerlijk rood toont).
-RED_DAY_PENALTY = 5000
+# (die het dashboard dan eerlijk rood toont). Ruim boven het minimum van de
+# pinning-test gehouden (niet strak op 5000) — een eerdere PEN-hertuning
+# (dauw, aug 2026) kromp de marge al eens tot 8, dus dit geeft toekomstige
+# hertuningen wat lucht voor ze de test opnieuw raken.
+RED_DAY_PENALTY = 10000
 
 # Partitie van de PEN-redenen over dagdeel (09–21u) en nacht (21–09u), voor de
 # aparte dag- en nachttegels op de regiokaarten. Een test bewaakt dat dit PEN
@@ -236,7 +248,7 @@ NIGHT_FLAGS = frozenset({"koude_nacht_extreem", "stortregen_nacht"})
 # _score_reasons(). Bewust een expliciete lijst i.p.v. afgeleid van de
 # waarde, zodat een latere herweging van PEN deze indeling niet stilzwijgend
 # verschuift.
-MINOR_REASONS = frozenset({"hitte_naderend", "koele_nacht", "dauw_krap",
+MINOR_REASONS = frozenset({"hitte_naderend", "koele_nacht",
                            "dagregen_licht", "nachtregen_licht", "wind_fris",
                            "nachtregen_wisselvallig"})
 
