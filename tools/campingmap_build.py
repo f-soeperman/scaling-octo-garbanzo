@@ -30,8 +30,8 @@ CACHE_PATH = os.getenv("CAMPINGMAP_NE_CACHE", "/tmp/ne_50m_admin_0_countries.geo
 OUT_PATH = os.getenv("CAMPINGMAP_OUT", "docs/js/campingmap.js")
 
 # Kampeer-window: lon/lat-bounding box die alle twaalf streken + genoeg
-# buurland-context dekt (bewust ruim rond Bretagne t/m Kärnten).
-LON_MIN, LON_MAX = -6.0, 17.8
+# buurland-context dekt (bewust ruim rond Bretagne t/m Süd-Steiermark).
+LON_MIN, LON_MAX = -6.0, 19.2
 LAT_MIN, LAT_MAX = 42.5, 54.2
 VIEW_W = 1000
 LAT0 = 48.0  # referentiebreedte voor de cos-correctie
@@ -56,9 +56,9 @@ WANTED = {
 LABEL_OFFSET = {
     "utrecht": [14, -6, "start"],
     "salzburgerland": [-8, -20, "middle"],
-    "tirol": [-90, 4, "end"],
-    "karnten": [34, 26, "start"],
-    "steiermark": [46, -10, "start"],
+    "tirol": [-95, 4, "end"],
+    "karnten": [22, 28, "start"],
+    "steiermark": [40, -12, "start"],
     "normandie": [14, -10, "start"],
     "bretagne": [14, 6, "start"],
     "auvergne": [16, 4, "start"],
@@ -80,9 +80,9 @@ LABEL_OFFSET = {
 REGIONS = [
     {"id": "utrecht", "label": "Utrecht", "country": "NL", "lat": 52.09, "lon": 5.12},
     {"id": "salzburgerland", "label": "Salzburgerland", "country": "AT", "lat": 47.32, "lon": 12.80},
-    {"id": "tirol", "label": "Tirol", "country": "AT", "lat": 47.16, "lon": 11.86},
+    {"id": "tirol", "label": "Tirol", "country": "AT", "lat": 47.05, "lon": 10.94},
     {"id": "karnten", "label": "Kärnten", "country": "AT", "lat": 46.61, "lon": 13.86},
-    {"id": "steiermark", "label": "Steiermark", "country": "AT", "lat": 47.40, "lon": 13.69},
+    {"id": "steiermark", "label": "Steiermark", "country": "AT", "lat": 46.73, "lon": 15.36},
     {"id": "normandie", "label": "Normandië", "country": "FR", "lat": 49.38, "lon": -1.75},
     {"id": "bretagne", "label": "Bretagne", "country": "FR", "lat": 48.25, "lon": -4.49},
     {"id": "auvergne", "label": "Auvergne", "country": "FR", "lat": 45.57, "lon": 2.87},

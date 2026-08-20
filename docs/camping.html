@@ -150,19 +150,22 @@
 
     /* ── overzichtskaart ──────────────────────────────────────────────── */
     .map-card svg { display: block; width: 100%; height: auto; }
-    .map-sea { fill: #cfe0ee; }
+    .map-sea { fill: url(#mapZee); }
     .map-ctx-land { fill: #ece4cd; }
     .map-ctx-land path { stroke: #b3a98d; stroke-width: 1; }
     .map-focus-land { fill: var(--paper); }
     .map-focus-land path { stroke: var(--night); stroke-width: 2; stroke-linejoin: round; }
     .map-leader { stroke: var(--night-soft); stroke-width: 1; }
-    .map-pin { stroke: var(--night); stroke-width: 1.5; }
+    /* Tent-silhouet i.p.v. een generieke kaart-teardrop (zie tentPinSVG). */
+    .map-pin { stroke: var(--night); stroke-width: 1.2; stroke-linejoin: round; }
     .map-pin.cat-top    { fill: var(--cat-top); }
     .map-pin.cat-goed   { fill: var(--cat-goed); }
     .map-pin.cat-matig  { fill: var(--cat-matig); }
     .map-pin.cat-slecht { fill: var(--cat-slecht); }
     .map-pin.cat-rood   { fill: var(--cat-rood); }
-    .map-pin.map-pin-geen { fill: var(--night-soft); opacity: 0.45; }
+    .map-pin.map-pin-geen { fill: var(--night-soft); opacity: 0.55; }
+    .map-pin-deur { fill: var(--night); opacity: 0.35; }
+    .map-pin-nok { stroke: var(--night); stroke-width: 0.8; opacity: 0.5; }
     .map-pin-home { stroke: var(--night); stroke-width: 2; stroke-dasharray: 3 2; fill: none; }
     .map-lbl { font: 600 15px "Barlow Condensed", sans-serif; fill: var(--night); }
     .map-lbl-shadow { font: 600 15px "Barlow Condensed", sans-serif; fill: var(--paper); stroke: var(--paper); stroke-width: 3; paint-order: stroke; }
@@ -170,6 +173,13 @@
     .map-legend { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin-top: 10px; font-family: "Barlow Condensed", sans-serif; font-size: 13px; color: var(--night-soft); }
     .map-legend .sw { display: inline-block; width: 12px; height: 12px; border-radius: 50%; vertical-align: -2px; margin-right: 5px; border: 1px solid var(--hair); }
     .map-legend .sw-home { border-radius: 50%; box-shadow: inset 0 0 0 2px var(--night); background: transparent; }
+    /* Kompasroos + schaalbalk: kaartornamenten, geen data. */
+    .map-compass circle { fill: none; stroke: var(--night); stroke-width: 1; opacity: 0.55; }
+    .map-compass line { stroke: var(--night); stroke-width: 1; opacity: 0.55; }
+    .map-compass-n { fill: var(--night); opacity: 0.75; }
+    .map-compass text { font: 600 11px "IBM Plex Mono", monospace; fill: var(--night); opacity: 0.7; }
+    .map-scale line { stroke: var(--night); stroke-width: 1.3; opacity: 0.65; }
+    .map-scale text { font: 500 10px "IBM Plex Mono", monospace; fill: var(--night-soft); }
 
     /* ── flex-tegels (super-regio's, ronde 3) ─────────────────────────── */
     .flex-scroll { overflow-x: auto; margin-top: 12px; padding: 2px 0 4px; }
@@ -194,6 +204,11 @@
     .day-rows > span { padding: 4px 2px; border-bottom: 1px dashed var(--hair); white-space: nowrap; }
     .day-rows .hdr { font-family: "Barlow Condensed", sans-serif; font-size: 10px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--night-soft); }
     .day-rows .num-r { text-align: right; }
+    /* Venster-markering in de volledige-dagen-tabel: lichte amberwas, geen
+       aparte legenda nodig — het bovenliggende "(venster gemarkeerd)"-label
+       op de park-rule zegt genoeg, en de dag/nacht-strip erboven toont
+       dezelfde amber .win-mark-rand al voor hetzelfde venster. */
+    .day-rows .dr-win { background: #c6811522; }
     .dr-sw { display: inline-block; width: 9px; height: 9px; margin-right: 2px; border: 1px solid var(--hair); }
 
     /* ── footer ───────────────────────────────────────────────────────── */
@@ -258,7 +273,7 @@
 </footer>
 
 </div>
-<script src="js/campingmap.js?v=1"></script>
-<script src="js/camping.js?v=10"></script>
+<script src="js/campingmap.js?v=2"></script>
+<script src="js/camping.js?v=11"></script>
 </body>
 </html>

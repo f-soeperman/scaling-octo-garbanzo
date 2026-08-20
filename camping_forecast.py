@@ -71,7 +71,7 @@ REGIONS = [
      "area_patterns": ("salzburg", "flachgau", "tennengau", "pongau", "pinzgau", "lungau",
                        "hallein", "zell am see", "tamsweg")},
     {"id": "tirol", "label": "Tirol", "country": "AT",
-     "lat": 47.16, "lon": 11.86,  # Zillertal (Bezirk Schwaz)
+     "lat": 47.05, "lon": 10.94,  # Ötztal/Längenfeld (Bezirk Imst) — west-Tirol
      "area_patterns": ("tirol", "innsbruck", "unterland", "oberland", "imst", "kitzbühel",
                        "kitzbuhel", "kufstein", "landeck", "reutte", "schwaz", "lienz")},
     {"id": "karnten", "label": "Kärnten", "country": "AT",
@@ -80,7 +80,7 @@ REGIONS = [
                        "hermagor", "spittal", "völkermarkt", "volkermarkt", "wolfsberg",
                        "sankt veit", "st. veit")},
     {"id": "steiermark", "label": "Steiermark", "country": "AT",
-     "lat": 47.40, "lon": 13.69,  # Schladming/Ennstal
+     "lat": 46.73, "lon": 15.36,  # Süd-Steiermark/Gamlitz (Bezirk Leibnitz) — zuidoost
      "area_patterns": ("steiermark", "graz-umgebung", "graz", "deutschlandsberg",
                        "hartberg-fürstenfeld", "hartberg-furstenfeld", "leibnitz", "leoben",
                        "liezen", "murau", "murtal", "südoststeiermark", "sudoststeiermark",
