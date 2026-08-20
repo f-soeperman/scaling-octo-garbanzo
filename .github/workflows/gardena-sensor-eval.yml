@@ -1,0 +1,84 @@
+name: Gardena-sensor vs. bodemmodel
+
+# Draait op aanvraag `tools/gardena_sensor_eval.py` (de handmatige
+# sensor/model-diagnose van Project 16, zie SOIL_SENSOR_ASSESSMENT.md) tegen
+# de échte modelcurve. Die tool is zelf bewust "geen netwerk" (zuivere
+# functies over lokale bestanden); `tools/gardena_eval_fetch.py` is de dunne
+# ophaal-laag ervoor die de twee benodigde gist-artefacten read-only naar
+# schijf haalt: `data.json` uit de privé artefact-gist (`ARTEFACT_GIST_ID`,
+# het bodemmodel) en — optioneel, alleen voor de bodemtemperatuur-
+# dempingsvergelijking — de buitentemperatuur uit de twin2-maandshards in de
+# privé Gist (`GIST_ID`). De twin2-fetch laat `rooms` (per-kamer temp/vocht,
+# gedragsdata) bewust overal weg, ook in het geüploade artefact hieronder.
+#
+# LET OP (privacy): het rapport gaat over tuinbodemvocht/-temperatuur, geen
+# afwezigheids-/aanwezigheidssignaal — maar op een publieke repo kan élke
+# ingelogde GitHub-gebruiker de joblog en het artefact van een
+# workflow_dispatch-run lezen zolang de retentie loopt. Alleen bewust
+# dispatchen (zelfde voorbehoud als ml-dataset.yml).
+
+on:
+  workflow_dispatch:
+    inputs:
+      zone:
+        description: "Zone waarin de prikker zit"
+        type: choice
+        options: ["shrubs", "lawn"]
+        default: "shrubs"
+      settle_h:
+        description: "Inregel-venster na installatie (uur, 0 = niets weglaten)"
+        type: string
+        default: "2"
+
+# Alleen lezen: dit schrijft niets terug naar de repo, enkel een artefact.
+permissions:
+  contents: read
+
+concurrency:
+  group: gardena-sensor-eval
+  cancel-in-progress: false
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Fetch gist artefacts (read-only)
+        env:
+          ARTEFACT_GIST_ID: ${{ secrets.ARTEFACT_GIST_ID }}
+          GIST_ID: ${{ secrets.GIST_ID }}
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+        run: |
+          python tools/gardena_eval_fetch.py \
+            --out-data "$RUNNER_TEMP/gardena_eval/data.json" \
+            --out-twin-dir "$RUNNER_TEMP/gardena_eval/twin2"
+
+      - name: Run the evaluation
+        env:
+          ZONE: ${{ inputs.zone }}
+          SETTLE_H: ${{ inputs.settle_h }}
+        run: |
+          python tools/gardena_sensor_eval.py \
+            --data "$RUNNER_TEMP/gardena_eval/data.json" \
+            --twin-dir "$RUNNER_TEMP/gardena_eval/twin2" \
+            --zone "$ZONE" \
+            --settle-h "$SETTLE_H" \
+            --json "$RUNNER_TEMP/gardena_eval/report.json"
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gardena-sensor-eval-report
+          path: ${{ runner.temp }}/gardena_eval/report.json
+          if-no-files-found: error
+          retention-days: 14
