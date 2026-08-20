@@ -167,11 +167,42 @@ def test_krappe_dauwmarge_kost_punten():
     assert redenen == ["dauw_nat"]
 
 
+def test_dauw_trekt_een_top_dag_altijd_naar_goed_maar_nooit_verder():
+    # Vóór aug 2026 stond "dauw_krap" in MINOR_REASONS op precies CAT_TOP
+    # (10), dus een verder perfecte dag met alléén een krappe dauwmarge bleef
+    # "top" — gemeld door de gebruiker (droge dag gaat voor droge tent, maar
+    # dauw moet wel zichtbaar zijn). Beide trappen liggen nu boven CAT_TOP en
+    # ruim onder CAT_GOED: dauw alléén duwt een top-dag naar "goed", nooit
+    # naar "matig". "nat" weegt zwaarder dan "krap".
+    score_krap, redenen_krap = cf.score_day(_dag_m(), _nacht_m(marge=cf.DEW_MARGIN_GOOD - 0.1))
+    assert redenen_krap == ["dauw_krap"]
+    assert cf.category(score_krap, []) == "goed"
+    score_nat, redenen_nat = cf.score_day(_dag_m(), _nacht_m(marge=cf.DEW_MARGIN_POOR - 0.1))
+    assert redenen_nat == ["dauw_nat"]
+    assert cf.category(score_nat, []) == "goed"
+    assert cf.PEN["dauw_nat"] > cf.PEN["dauw_krap"]
+
+
 def test_wisselvallig_alleen_bij_droge_som_met_hoge_kans():
     _, redenen = cf.score_day(_dag_m(pop=cf.POP_DAY_UNSETTLED), _nacht_m())
     assert redenen == ["wisselvallig"]
     _, redenen = cf.score_day(_dag_m(rain=cf.DAY_RAIN_SOME_MM, pop=cf.POP_DAY_UNSETTLED), _nacht_m())
     assert "wisselvallig" not in redenen  # echte regen wint van de kans
+
+
+def test_wisselvallig_heeft_twee_trappen_op_de_kans():
+    # Onder POP_DAY_LIKELY: "wisselvallig" (kort buitje) — een reëel maar
+    # klein ongemak, net niet meer "top". Erboven: "wisselvallig_nat"
+    # (vrijwel de hele dag nat) — een echt probleem, landt in "matig".
+    score_kort, redenen_kort = cf.score_day(_dag_m(pop=cf.POP_DAY_LIKELY - 1), _nacht_m())
+    assert redenen_kort == ["wisselvallig"]
+    assert cf.category(score_kort, []) == "goed"
+    score_nat, redenen_nat = cf.score_day(_dag_m(pop=cf.POP_DAY_LIKELY), _nacht_m())
+    assert redenen_nat == ["wisselvallig_nat"]
+    assert cf.category(score_nat, []) == "matig"
+    # Geen enkele trap mag nog "top" opleveren — dat was precies de melding.
+    assert cf.category(score_kort, []) != "top"
+    assert cf.category(score_nat, []) != "top"
 
 
 def test_nachtregen_wisselvallig_alleen_bij_droge_som_met_hoge_kans():
@@ -188,10 +219,13 @@ def test_meerdere_lichte_dagproblemen_stapelen_niet_op_elkaar():
     # Drie lichte dagongemakken (elk uit MINOR_REASONS, alle in DAY_REASONS)
     # mogen samen niet zwaarder wegen dan het zwaarste ervan — alleen "echte"
     # problemen tellen vol mee. Een prima nacht laat het nachtdeel op 0.
+    # ("wisselvallig" zit sinds aug 2026 niet meer in MINOR_REASONS — zie
+    # test_wisselvallig_heeft_twee_trappen_op_de_kans — dus deze test gebruikt
+    # dagregen_licht als derde lichte dagreden.)
     score, redenen = cf.score_day(
-        _dag_m(tmax=cf.DAY_TMAX_WARM, pop=cf.POP_DAY_UNSETTLED, gust=cf.GUST_BREEZY_KMH),
+        _dag_m(tmax=cf.DAY_TMAX_WARM, rain=cf.DAY_RAIN_DRY_MM, gust=cf.GUST_BREEZY_KMH),
         _nacht_m())
-    assert set(redenen) == {"hitte_naderend", "wisselvallig", "wind_fris"}
+    assert set(redenen) == {"hitte_naderend", "dagregen_licht", "wind_fris"}
     assert score == max(cf.PEN[r] for r in redenen)
 
 
@@ -225,7 +259,7 @@ def test_gecombineerde_cel_is_nooit_slechter_dan_de_slechtste_helft():
     # gecombineerd niet in 'slecht' vallen alleen omdat je de twee helften bij
     # elkaar optelt — de som (54) zou dat wél doen, het echte model niet.
     day_m = _dag_m(tmax=28.0, rain=cf.DAY_RAIN_SOME_MM)  # hitte_naderend + dagregen_matig → 30
-    night_m = _nacht_m(marge=cf.DEW_MARGIN_POOR - 0.1, rain=cf.NIGHT_RAIN_SOME_MM)  # dauw_nat + nachtregen_matig → 24
+    night_m = _nacht_m(marge=cf.DEW_MARGIN_POOR - 0.1, rain=cf.NIGHT_RAIN_SOME_MM)  # dauw_nat + nachtregen_matig → 27
     score, redenen = cf.score_day(day_m, night_m)
     parts = cf.split_parts(redenen, [], warn_day=False, warn_night=False)
     assert parts["score_day"] + parts["score_night"] > cf.CAT_MATIG  # de (foute) som zou "slecht" zijn
@@ -243,8 +277,8 @@ def test_minor_reasons_zijn_de_goedkoopste_trap_en_dekken_pen_niet_leeg():
 
 
 def test_split_parts_dempt_lichte_redenen_ook_per_deel():
-    parts = cf.split_parts(["wind_fris", "wisselvallig"], [], warn_day=False, warn_night=False)
-    assert parts["score_day"] == max(cf.PEN["wind_fris"], cf.PEN["wisselvallig"])
+    parts = cf.split_parts(["wind_fris", "dagregen_licht"], [], warn_day=False, warn_night=False)
+    assert parts["score_day"] == max(cf.PEN["wind_fris"], cf.PEN["dagregen_licht"])
     assert parts["score_night"] == 0
 
 
@@ -377,9 +411,10 @@ def test_nachtwaarschuwing_maakt_alleen_de_nachttegel_rood():
 # ── main_reason (het "waarom?"-icoon) ────────────────────────────────────────
 
 def test_main_reason_kiest_de_zwaarste_reden_van_de_zwaarste_helft():
-    # Dagdeel (dagregen_matig, 20) weegt zwaarder dan het nachtdeel (twee
-    # lichte redenen die niet stapelen → 10), ook al heeft de nacht méér
-    # redenen — de dominante helft bepaalt de celkleur, dus ook het icoon.
+    # Dagdeel (dagregen_matig, 20) weegt zwaarder dan het nachtdeel
+    # (dauw_krap 12 + het zwaarste lichte ongemak 5 → 17), ook al heeft de
+    # nacht méér redenen — de dominante helft bepaalt de celkleur, dus ook
+    # het icoon.
     reden = cf.main_reason(["dagregen_matig", "dauw_krap", "nachtregen_licht"])
     assert reden == "dagregen_matig"
     # En andersom: een zwaar nachtprobleem wint van een licht dagprobleem.
@@ -387,8 +422,8 @@ def test_main_reason_kiest_de_zwaarste_reden_van_de_zwaarste_helft():
 
 
 def test_main_reason_gelijke_helften_kiest_de_dag():
-    assert cf.PEN["wind_fris"] == cf.PEN["dauw_krap"]  # premisse van het gelijkspel
-    assert cf.main_reason(["wind_fris", "dauw_krap"]) == "wind_fris"
+    assert cf.PEN["dagregen_licht"] == cf.PEN["koele_nacht"]  # premisse van het gelijkspel
+    assert cf.main_reason(["dagregen_licht", "koele_nacht"]) == "dagregen_licht"
 
 
 def test_main_reason_leeg_is_none():

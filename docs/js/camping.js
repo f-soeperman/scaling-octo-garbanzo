@@ -23,7 +23,8 @@ const TILE_TEKST = { top: "tile-licht", goed: "tile-donker", matig: "tile-licht"
 // "Waarom?"-toggle: één icoon per matig/slecht-cel voor de dominante reden
 // (main_reason uit het artefact — de zwaarste reden van de zwaarste helft).
 const REDEN_ICOON = {
-  dagregen_licht: "☂", dagregen_matig: "☂", dagregen_zwaar: "☂", wisselvallig: "☂",
+  dagregen_licht: "☂", dagregen_matig: "☂", dagregen_zwaar: "☂",
+  wisselvallig: "☂", wisselvallig_nat: "☂",
   nachtregen_licht: "☂", nachtregen_matig: "☂", nachtregen_zwaar: "☂", nachtregen_wisselvallig: "☂",
   hitte_naderend: "☀", hitte: "☀",
   koele_nacht: "❄", koude_nacht: "❄", te_koude_nacht: "❄",
@@ -50,7 +51,8 @@ const REDEN_TEKST = {
   te_koude_nacht: "veel te koude nacht",
   dauw_krap: "krappe dauwmarge", dauw_nat: "natte tent door dauw",
   dagregen_licht: "wat dagregen", dagregen_matig: "matige dagregen", dagregen_zwaar: "zware dagregen",
-  wisselvallig: "wisselvallig — hoge buienkans",
+  wisselvallig: "wisselvallig — kans op een bui",
+  wisselvallig_nat: "wisselvallig — vrijwel de hele dag kans op regen",
   nachtregen_licht: "wat nachtregen", nachtregen_matig: "matige nachtregen",
   nachtregen_zwaar: "zware nachtregen",
   nachtregen_wisselvallig: "wisselvallig — hoge buienkans 's nachts",
