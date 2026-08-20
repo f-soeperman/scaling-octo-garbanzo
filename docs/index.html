@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'none';
+  script-src 'self' https://cdn.jsdelivr.net;
+  style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+  font-src https://fonts.gstatic.com;
+  img-src 'self' data:;
+  connect-src 'self' https://api.github.com;
+  frame-ancestors 'none';
+  base-uri 'none';
+  form-action 'none';
+">
+<title>Pineapple Under The Sea</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" crossorigin="anonymous">
+<!--
+  SRI: hashes berekend uit de npm-tarballs (registry.npmjs.org) — jsDelivr
+  serveert package-bestanden byte-identiek. chart.umd.js (al geminified in het
+  package) i.p.v. chart.umd.min.js: dat laatste bestaat niet in het package en
+  is jsDelivr's eigen auto-minify, waarvan de bytes niet onafhankelijk te
+  pinnen zijn. Bij een versie-bump: nieuwe tarball → openssl dgst -sha384
+  -binary | openssl base64 -A → integrity bijwerken (in alle dashboards).
+-->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js" integrity="sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js" integrity="sha384-oNtu+d18330MVFpltUTve1DatxCkkctlpA2AC3GulbVFOSqhHdDat3qHse/Lbuek" crossorigin="anonymous"></script>
+<link rel="stylesheet" href="css/shared.css?v=2">
+  <style>
+    /* Palet komt uit css/shared.css (:root) — hier niet herdefiniëren. */
+    .stamp {
+    display: inline-block; padding: 3px 10px;
+    border: 1.5px solid currentColor;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px; letter-spacing: 0.2em;
+    text-transform: uppercase; transform: rotate(-1.5deg);
+  }
+    h1 { font-size: clamp(44px, 6vw, 84px); line-height: 0.95; margin: 8px 0 4px; font-weight: 500; letter-spacing: -0.02em; font-style: italic; }
+    .subtitle { font-size: 13px; font-style: italic; color: var(--ink-soft); max-width: 520px; margin-top: 4px; }
+    .hairline { border-top: 1px solid #2a241b33; }
+    .dash { border-top: 1px dashed #2a241b66; }
+    .grid { display: grid; gap: 24px; }
+    .grid-2 { grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
+    /* Tegel 1+2: altijd 2 kolommen naast elkaar */
+    .grid-status { grid-template-columns: 1fr 1fr; gap: 24px; }
+    @media (max-width: 680px) { .grid-status { grid-template-columns: 1fr; } }
+    .card-title-big { font-size: 32px; }
+    .zone-chips { display: flex; gap: 8px; margin: 10px 0 14px; }
+    .zone-chip {
+    padding: 8px 18px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase;
+    background: transparent; border: 1px solid #2a241b44;
+    cursor: pointer; transition: all 0.2s; color: var(--ink);
+  }
+    .zone-chip.active { background: var(--ink); color: var(--parchment); border-color: var(--ink); }
+    .stat-row { display: flex; justify-content: space-between; align-items: baseline; padding: 7px 0; border-bottom: 1px dashed #2a241b22; }
+    .stat-val { font-size: 14px; font-weight: 600; }
+    .stat-sub { font-size: 11px; color: var(--ink-soft); margin-left: 6px; }
+    /* Dual zone status tiles */
+    .zone-col { display: flex; flex-direction: column; gap: 0; }
+    .zone-header { font-size: 11px; font-family: "JetBrains Mono", monospace; letter-spacing: 0.2em; text-transform: uppercase; color: var(--ink-soft); margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid #2a241b22; }
+    .gauge-row { display: flex; gap: 14px; align-items: center; margin-bottom: 10px; }
+    .gauge-big { font-family: "JetBrains Mono", monospace; font-size: 40px; font-weight: 600; line-height: 1; }
+    .gauge-big span { font-size: 18px; color: var(--ink-soft); margin-left: 3px; }
+    .gauge-sub { font-size: 11px; font-style: italic; color: var(--ink-soft); margin-top: 3px; }
+    /* Proposal box */
+    .proposal-box {
+    margin-top: 12px; padding: 10px 12px;
+    border: 1px solid currentColor;
+    display: flex; flex-direction: column; gap: 3px;
+  }
+    .proposal-min { font-family: "JetBrains Mono", monospace; font-size: 28px; font-weight: 600; line-height: 1; }
+    .proposal-mm { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--ink-soft); }
+    .chart-wrap { height: clamp(260px, 42vh, 360px); margin-top: 20px; position: relative; }
+    .chart-wrap-small { height: clamp(180px, 28vh, 220px); position: relative; }
+    .chart-wrap-month { height: clamp(220px, 34vh, 280px); position: relative; }
+    .chart-header { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 12px; margin-bottom: 8px; }
+    .legend-row { display: flex; gap: 20px; margin-top: 14px; font-size: 11px; flex-wrap: wrap; font-family: "JetBrains Mono", monospace; color: var(--ink-soft); }
+    .legend-item { display: inline-flex; align-items: center; gap: 6px; }
+    .legend-line { display: inline-block; width: 18px; height: 2px; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    /* Modal */
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(42,36,27,.55); display: flex; align-items: center; justify-content: center; z-index: 100; opacity: 0; pointer-events: none; transition: opacity 0.2s; }
+    .modal-backdrop.open { opacity: 1; pointer-events: auto; }
+    .modal { background: var(--parchment); padding: 32px; width: min(520px, calc(100vw - 24px)); max-height: calc(100vh - 32px); overflow-y: auto; border: 1px solid var(--ink); box-shadow: 6px 8px 0 #2a241b33; transform: translateY(20px); transition: transform 0.2s; background-image: radial-gradient(#2a241b08 1px, transparent 1px), radial-gradient(#2a241b05 1px, transparent 1px); background-size: 3px 3px, 7px 7px; }
+    .modal-backdrop.open .modal { transform: translateY(0); }
+    .modal h2 { font-size: 26px; font-style: italic; font-weight: 500; margin-bottom: 4px; }
+    .input-field { background: transparent; border: none; border-bottom: 1px solid #2a241b66; padding: 7px 2px; margin-top: 4px; font-family: "JetBrains Mono", monospace; font-size: 15px; color: var(--ink); outline: none; width: 100%; }
+    .input-field:focus { border-bottom-color: var(--clay); }
+    .preset-chips { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+    .preset-chip { padding: 8px 14px; min-height: 36px; font-family: "JetBrains Mono", monospace; font-size: 10px; letter-spacing: 0.15em; background: transparent; border: 1px solid #2a241b44; cursor: pointer; color: var(--ink-soft); }
+    .preset-chip:hover { background: var(--ink); color: var(--parchment); }
+    /* Modal zone grid */
+    .modal-zones { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+    .modal-zone-box { padding: 14px; border: 1px solid #2a241b22; background: var(--parchment-deep); }
+    .modal-zone-box h4 { font-size: 13px; font-family: "JetBrains Mono", monospace; letter-spacing: 0.15em; text-transform: uppercase; color: var(--ink-soft); margin-bottom: 8px; }
+    .modal-zone-result { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--moss); margin-top: 6px; min-height: 16px; }
+    .water-log { max-height: 120px; overflow-y: auto; margin-top: 8px; font-family: "JetBrains Mono", monospace; font-size: 11px; }
+    .log-entry { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px dashed #2a241b22; color: var(--ink-soft); }
+    .log-entry .rm { cursor: pointer; color: var(--clay); opacity: 0.5; padding: 0 4px; }
+    .log-entry .rm:hover { opacity: 1; }
+    footer { padding: 16px 40px 0; display: grid; gap: 24px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); font-size: 12px; font-style: italic; color: var(--ink-soft); margin-top: 32px; }
+    footer .hairline { margin-bottom: 18px; grid-column: 1/-1; }
+    section { padding: 28px 0 0; }
+    @media (max-width: 480px) {
+    header { padding: 22px 16px 12px; }
+    .pad { padding: 0 16px; }
+    .grid-status { grid-template-columns: 1fr; gap: 16px; }
+    .banner { margin: 8px 16px; }
+    footer { padding: 16px 16px 0; }
+    .modal { padding: 22px; }
+    .modal-zones { grid-template-columns: 1fr !important; }
+    h1 { font-size: clamp(36px, 12vw, 56px); }
+    .date-big { font-size: 17px; }
+    .gauge-big { font-size: 34px; }
+    .proposal-min { font-size: 24px; }
+    /* override inline section padding=40px on mobile */
+    section[style*="padding"] { padding-left: 16px !important; padding-right: 16px !important; }
+    /* loading state */
+    #content[style*="padding:80px 40px"] { padding: 60px 16px !important; }
+  }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="title-row">
+    <div>
+      <div class="corner-mark" id="folio-mark"></div>
+      <h1>Pineapple Under The Sea</h1>
+      <div class="subtitle">Een dagelijkse afweging van bodem, zon en regen — voor de tuin op 52.09°N, 5.12°E, geworteld in het zand van Utrecht Oost.</div>
+    </div>
+    <div style="text-align:right;">
+      <div class="corner-mark">Vandaag</div>
+      <div class="num date-big" id="today-date"></div>
+      <div class="corner-mark" style="margin-top:6px;">Bodem: zand · <span id="soil-params">FC — · WP —</span></div>
+      <div style="margin-top:8px;display:flex;gap:14px;justify-content:flex-end;flex-wrap:wrap;"><a href="model.html" style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:0.2em;text-transform:uppercase;color:var(--ink-soft);text-decoration:none;border-bottom:1px solid currentColor;padding-bottom:2px;">Het model →</a><a href="mowing.html" style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:0.2em;text-transform:uppercase;color:var(--ink-soft);text-decoration:none;border-bottom:1px solid currentColor;padding-bottom:2px;">Maaien →</a><a href="window.html" style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:0.2em;text-transform:uppercase;color:var(--ink-soft);text-decoration:none;border-bottom:1px solid currentColor;padding-bottom:2px;">Ramen →</a><a href="accuracy.html" style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:0.2em;text-transform:uppercase;color:var(--ink-soft);text-decoration:none;border-bottom:1px solid currentColor;padding-bottom:2px;">IJking →</a><a href="vent.html" style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:0.2em;text-transform:uppercase;color:var(--ink-soft);text-decoration:none;border-bottom:1px solid currentColor;padding-bottom:2px;">Ventilatie →</a><a href="grafiek.html" style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:0.2em;text-transform:uppercase;color:var(--ink-soft);text-decoration:none;border-bottom:1px solid currentColor;padding-bottom:2px;">Grafiek →</a></div>
+    </div>
+  </div>
+  <div class="hairline-bold"></div>
+</header>
+
+<section style="padding:14px 40px 0;display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+  <button class="btn" id="water-btn">💧 Ik heb water gegeven</button>
+  <button class="btn btn-secondary" id="refresh-btn">↻ Refresh</button>
+  <button class="btn btn-secondary" id="account-btn" title="Gist/token koppelen of wijzigen">🔑 Account</button>
+  <span id="source-label" style="font-size:11px;color:var(--ink-soft);font-style:italic;"></span>
+</section>
+
+<div id="banner-slot"></div>
+<div id="content" style="padding:80px 40px;text-align:center;">
+  <div class="pulse" style="font-size:22px;font-style:italic;color:var(--ink-soft);">Het grootboek van lucht en aarde samenstellen…</div>
+</div>
+
+<!-- Modal -->
+<div class="modal-backdrop" id="water-modal">
+  <div class="modal">
+    <div class="corner-mark">💧 Registreer irrigatie</div>
+    <h2>Hoeveel water heb je gegeven?</h2>
+    <p style="font-style:italic;color:var(--ink-soft);margin-top:6px;font-size:13px;">Voer in minuten in. Het dashboard rekent automatisch naar mm op basis van jouw irrigatiesnelheden.</p>
+
+    <div style="margin-top:18px;">
+      <div class="rule-label">Datum</div>
+      <input type="date" class="input-field" id="water-date" />
+    </div>
+
+    <div class="modal-zones">
+      <div class="modal-zone-box">
+        <h4>🌿 Gras (sproeier)</h4>
+        <div class="rule-label">Minuten</div>
+        <input type="number" step="1" min="0" class="input-field" id="water-min-lawn" placeholder="0" />
+        <div class="preset-chips">
+          <button class="preset-chip" data-zone="lawn" data-min="5">5 min</button>
+          <button class="preset-chip" data-zone="lawn" data-min="10">10 min</button>
+          <button class="preset-chip" data-zone="lawn" data-min="15">15 min</button>
+          <button class="preset-chip" data-zone="lawn" data-min="20">20 min</button>
+        </div>
+        <div class="modal-zone-result" id="preview-lawn">—</div>
+      </div>
+      <div class="modal-zone-box">
+        <h4>🌳 Struiken (druppelslang)</h4>
+        <div class="rule-label">Minuten</div>
+        <input type="number" step="1" min="0" class="input-field" id="water-min-shrubs" placeholder="0" />
+        <div class="preset-chips">
+          <button class="preset-chip" data-zone="shrubs" data-min="30">30 min</button>
+          <button class="preset-chip" data-zone="shrubs" data-min="60">60 min</button>
+          <button class="preset-chip" data-zone="shrubs" data-min="90">90 min</button>
+          <button class="preset-chip" data-zone="shrubs" data-min="120">120 min</button>
+        </div>
+        <div class="modal-zone-result" id="preview-shrubs">—</div>
+      </div>
+    </div>
+
+    <div style="margin-top:18px;">
+      <div class="rule-label">Recente irrigaties</div>
+      <div class="water-log" id="water-log"><div style="color:var(--ink-soft);font-style:italic;padding:6px 0;">Geen ingevoerd.</div></div>
+    </div>
+
+    <div style="margin-top:24px;display:flex;gap:12px;justify-content:flex-end;">
+      <button class="btn btn-secondary" id="water-cancel">Annuleer</button>
+      <button class="btn" id="water-save">Opslaan</button>
+    </div>
+    <div id="water-status" style="margin-top:10px;font-size:12px;font-style:italic;color:var(--ink-soft);"></div>
+  </div>
+</div>
+
+<footer>
+  <div class="hairline"></div>
+  <div><div class="rule-label" style="margin-bottom:6px;">Methode</div>FAO-56 Penman-Monteith voor referentie-ET₀. Single-bucket bodemwaterbalans per zone met seizoensgebonden Kc en bodemtemperatuur drempel (≤5°C = geen verdamping).</div>
+  <div><div class="rule-label" style="margin-bottom:6px;">Bodem</div>Zandgrond Utrecht Oost: veldcapaciteit ≈ 0,17 v/v, verwelkingspunt ≈ 0,07 v/v. Snel drainerend, weinig opslag.</div>
+  <div><div class="rule-label" style="margin-bottom:6px;">Bronnen</div>Wunderground PWS voor regen en temperatuur. Open-Meteo voor zonnestraling en 7-daagse voorspelling. Irrigaties uit GitHub Gist.</div>
+</footer>
+
+<script src="js/theme.js"></script>
+<script src="js/shared.js?v=3"></script>
+<script src="js/index.js?v=3"></script>
+</body>
+</html>

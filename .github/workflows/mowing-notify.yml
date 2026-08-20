@@ -1,0 +1,131 @@
+name: Grasmaai-adviseur
+
+on:
+  schedule:
+    # Fallback ~45 min ná het meldmoment (06:15 Amsterdam). De orchestrator vuurt
+    # maaien sinds aug 2026 elk uur af, zodra de bodem-check van dát uur geslaagd
+    # is. Deze cron staat op 07:00 — ~20 min ná de bodem-fallback (06:40) — zodat
+    # ook het fallback-pad maaien ná de bodem draait en dus verse `docs/data.json`
+    # leest. De guard-job hieronder voorkomt dubbel als de orchestrator het al deed.
+    - cron: '0 7 * * *'
+      timezone: 'Europe/Amsterdam'
+  workflow_dispatch:
+
+# Eén run tegelijk: een handmatige dispatch tijdens de cron zou anders
+# tegelijk met die run mowing_data.json + mowing_state.json committen.
+concurrency:
+  group: mowing-notify
+  cancel-in-progress: false
+
+jobs:
+  # Dedup t.o.v. de orchestrator: skip de fallback-cron als er sinds het
+  # meldmoment al een (niet-mislukte) run was. Alleen op `schedule` — handmatige
+  # en orchestrator-dispatches (beide workflow_dispatch) draaien altijd door.
+  #
+  # `since` is bewust 06:15 en niet middernacht: met de uurlijkse cadans stonden
+  # de nachtelijke verversingsruns er altijd al, dus een middernacht-venster zou
+  # de fallback áltijd laten skippen — juist in het scenario waarvoor hij bestaat
+  # (orchestrator ligt eruit, advies van 06:15 blijft uit). Zie daily-check.yml.
+  guard:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      handled: ${{ steps.check.outputs.handled }}
+    steps:
+      - name: Skip if the advice slot was already handled
+        id: check
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          since=$(TZ=Europe/Amsterdam date -d "today 06:15" +%s)
+          others=$(gh run list --workflow mowing-notify.yml -L 40 \
+            --json databaseId,createdAt,conclusion \
+            --jq "[.[] | select(.databaseId != ${{ github.run_id }}
+                   and (.createdAt|fromdateiso8601) >= $since
+                   and .conclusion != \"failure\" and .conclusion != \"cancelled\"
+                   and .conclusion != \"timed_out\" and .conclusion != \"startup_failure\")] | length")
+          if [ "${others:-0}" -gt 0 ]; then
+            echo "handled=1" >> "$GITHUB_OUTPUT"
+            echo "Al gedraaid sinds 06:15 (${others} run(s)) — orchestrator deed dit al, sla over."
+          fi
+
+  advise:
+    needs: guard
+    if: needs.guard.outputs.handled != '1'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # Cap dekt ook de in-job herkansing (10 min slaap + tweede poging).
+    timeout-minutes: 30
+    steps:
+      # Op de branch-tip, niet op `github.sha` (= de stand bij het dispatchen).
+      # Deze job leest twee gecommitte bestanden die vlak vóór hem geschreven
+      # zijn: `docs/data.json` (de bodem-check van dít uur — de hele groeidriver)
+      # en `mowing_state.json` (het meldslot). Met de uurlijkse cadans dispatcht
+      # de orchestrator maaien ~15 min ná de bodem-check, dus een oudere
+      # momentopname zou precies de verse data.json missen waarvoor de volgorde
+      # bestaat. Zelfde pin en zelfde reden als shade-notify.yml.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run mowing advisor
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GIST_ID: ${{ secrets.GIST_ID }}
+          GH_TOKEN: ${{ secrets.GIST_TOKEN }}
+          # Privé artefact-gist voor data.json + mowing_data.json (aug 2026).
+          ARTEFACT_GIST_ID: ${{ secrets.ARTEFACT_GIST_ID }}
+          DASHBOARD_URL: ${{ vars.DASHBOARD_URL }}
+        # Eén herkansing na 10 min: een transiente Open-Meteo/Gist-hapering
+        # kost dan geen run. run_guarded telt mee in RUNNER_TEMP (zelfde job)
+        # en alert pas bij de 2e mislukking (fail_threshold=2).
+        run: |
+          python mowing_advisor.py || {
+            echo "::warning::eerste poging mislukt — herkansing over 10 min"
+            sleep 600
+            python mowing_advisor.py
+          }
+
+      - name: Commit updated data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # docs/mowing_data.json én mowing_state.json bestaan alleen nog in de
+          # bootstrap-terugval (zonder ARTEFACT_GIST_ID) — zie daily-check.yml.
+          # De state ging mee naar de privé-gist omdat `last_seen_mow_date` een
+          # handmatige actie dateerde (privacy-sweep aug 2026).
+          [ ! -f mowing_state.json ] || git add mowing_state.json
+          [ ! -f docs/mowing_data.json ] || git add docs/mowing_data.json
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "data: mowing advisor refresh $(date -u +%Y-%m-%dT%H:%M) [skip ci]"
+            # De uurlijkse soil-run en de window/vent-loops committen de hele
+            # dag door naar main — rebase vóór push. De artefacten worden elke
+            # run volledig opnieuw gegenereerd, dus bij conflict wint onze
+            # verse versie (-X theirs). Falen blijft hard en zichtbaar
+            # (exit 1), niet stil via `|| true`: een rode run houdt
+            # `handled_since` in de orchestrator op "niet gedaan", zodat de
+            # volgende tick het opnieuw probeert — en het meldslot in
+            # mowing_state.json niet uiteenloopt met wat er verstuurd is.
+            git rebase --abort 2>/dev/null || true
+            if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}"; then
+              git push
+            else
+              git rebase --abort 2>/dev/null || true
+              echo "::error::rebase failed, mowing data not pushed"
+              exit 1
+            fi
+          fi

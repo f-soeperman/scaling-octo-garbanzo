@@ -1,0 +1,125 @@
+name: Gardena Control
+
+on:
+  schedule:
+    # Fallback alléén rond de twee beslismomenten (gras 05:00, struiken 22:00,
+    # zie gardena_control.py). De uurlijkse cadans komt van de orchestrator;
+    # deze cron redt enkel een beslissing als die uitvalt. De guard-job dedupt
+    # tegen het lopende klokuur.
+    - cron: '35 5,22 * * *'
+      timezone: 'Europe/Amsterdam'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Reken alles door en rapporteer privé, zonder commando of write'
+        type: boolean
+        default: false
+      force_zone:
+        description: 'lawn|shrubs — korte testsessie buiten de beslisvensters'
+        required: false
+      force_minutes:
+        description: 'minuten voor de testsessie'
+        required: false
+        default: '2'
+
+# Eén run tegelijk: twee runs zouden allebei kraan-commando's kunnen sturen
+# en tegelijk de sensor-shards committen.
+concurrency:
+  group: gardena-control
+  cancel-in-progress: false
+
+jobs:
+  # Dedup t.o.v. de orchestrator, venster = het lopende klokuur (epoch-
+  # afronding, DST-veilig — zelfde keuze als de orchestrator zelf). Alleen op
+  # `schedule`; dispatches draaien altijd door.
+  guard:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      handled: ${{ steps.check.outputs.handled }}
+    steps:
+      - name: Skip if this hour was already handled
+        id: check
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          now_epoch=$(date +%s)
+          since=$(( now_epoch - now_epoch % 3600 ))
+          others=$(gh run list --workflow gardena-control.yml -L 40 \
+            --json databaseId,createdAt,conclusion \
+            --jq "[.[] | select(.databaseId != ${{ github.run_id }}
+                   and (.createdAt|fromdateiso8601) >= $since
+                   and .conclusion != \"failure\" and .conclusion != \"cancelled\"
+                   and .conclusion != \"timed_out\" and .conclusion != \"startup_failure\")] | length")
+          if [ "${others:-0}" -gt 0 ]; then
+            echo "handled=1" >> "$GITHUB_OUTPUT"
+            echo "Al gedraaid dit uur (${others} run(s)) — orchestrator deed dit al, sla over."
+          fi
+
+  control:
+    needs: guard
+    if: needs.guard.outputs.handled != '1'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 15
+    steps:
+      # Op de branch-tip: deze job leest zijn eigen gecommitte sensor-shards
+      # én docs/data.json van de uurlijkse bodem-run terug, terwijl de
+      # window/vent-loops de hele dag door naar main committen. Zelfde pin en
+      # zelfde reden als daily-check.yml.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run control
+        env:
+          GARDENA_APP_KEY: ${{ secrets.GARDENA_APP_KEY }}
+          GARDENA_APP_SECRET: ${{ secrets.GARDENA_APP_SECRET }}
+          GIST_ID: ${{ secrets.GIST_ID }}
+          GH_TOKEN: ${{ secrets.GIST_TOKEN }}
+          # data.json komt sinds de privatisering (aug 2026) uit de artefact-gist.
+          ARTEFACT_GIST_ID: ${{ secrets.ARTEFACT_GIST_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+          FORCE_ZONE: ${{ inputs.force_zone }}
+          FORCE_MINUTES: ${{ inputs.force_minutes }}
+        # Bewust GÉÉN in-job herkansing (afwijking van daily-check.yml):
+        # API-fouten handelt het script zelf af (exit 0 + privé-alert met
+        # cooldown) — een herkansing zou het maandelijkse GARDENA-callbudget
+        # opeten precies wanneer de API hapert, en de volgende uurlijkse run
+        # probeert sowieso opnieuw.
+        run: python gardena_control.py
+
+      - name: Commit sensor archive
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # De map bestaat pas na de eerste run mét werkende sensor.
+          if [ -d data/gardena_history ]; then
+            git add data/gardena_history
+          fi
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "data: gardena sensor shard $(date -u +%Y-%m-%dT%H:%M) [skip ci]"
+            git rebase --abort 2>/dev/null || true
+            if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}"; then
+              git push
+            else
+              git rebase --abort 2>/dev/null || true
+              echo "::error::rebase failed, sensor archive not pushed"
+              exit 1
+            fi
+          fi

@@ -1,0 +1,170 @@
+# Ventilatie-tweeling — ML-dataset
+
+Een platte, model-agnostische dataset om **lokaal** (bv. op een MacBook, in een
+notebook) zelf een model te trainen op de digitale tweeling van het huis:
+voorspel per kamer de temperatuur (en vocht) uit het weer, de zonstand en de
+gemelde raam-/deur-/roosterstanden — en experimenteer met de "perfecte"
+modelstructuur en parameters.
+
+De **bron** leeft sinds de privacy-assessment (aug 2026) volledig in de **privé
+GIST_ID-gist**: de twin2-maand-shards (`twin2_history_<YYYY-MM>.json`, kamertemps +
+weer, elk kwartier bijgewerkt) én het openingen-archief
+(`house_openings_<YYYY-MM>.json`). Kamerreeksen op kwartierresolutie zijn
+gedragsdata en staan daarom bewust niet (meer) in de publieke repo — zie de
+PRIVACY-banner in CLAUDE.md. Deze map bevat de *afgeleide, platte* export; er
+gaat geen dataset-inhoud in git.
+
+## Bouwen
+
+```bash
+# vanaf de repo-root; GIST_ID + GIST_TOKEN nodig (kamersamples + openingen),
+# of wijs VENT_HISTORY_DIR / VENT_OPENINGS_ARCHIVE_DIR naar lokale kopieën:
+python tools/export_ml_dataset.py                 # incl. fysica-baseline (~1 min)
+python tools/export_ml_dataset.py --no-baseline   # alleen data (paar seconden)
+```
+
+Of bouw het via GitHub Actions → workflow **"ML-dataset export"** → *Run
+workflow* → artefact `ventilation-ml-dataset` (bevat ook `.parquet`).
+**Let op:** op een publieke repo kan élke ingelogde GitHub-gebruiker een
+run-artefact downloaden zolang de retentie loopt — dispatch bewust en verwijder
+het artefact na het downloaden (run → Artifacts → delete); lokaal bouwen heeft
+dat nadeel niet.
+
+Uitvoer (in `data/ml/`, niet in git — regenereert):
+
+| bestand | inhoud |
+|---|---|
+| `ventilation_long.csv` / `.parquet`  | **één rij per (tijdstip, kamer)** — handig voor per-kamer- en pooled-modellen |
+| `ventilation_wide.csv` / `.parquet`  | **één rij per tijdstip**, kamertemps als kolommen — handig voor state-space / RC / multi-output |
+| `schema.json`                        | data-dictionary: elke kolom → betekenis + eenheid |
+
+`.parquet` verschijnt alleen als `pandas` + `pyarrow` geïnstalleerd zijn
+(`pip install pandas pyarrow`).
+
+## Kolommen (kort)
+
+Volledige beschrijving + eenheden staan in `schema.json`. Hoofdgroepen:
+
+- **Doelwaarden** (wat je voorspelt): `temp_c` (gemeten tado-kamertemp, °C),
+  `humidity` (%RH). Leeg wanneer er geen meting binnen `--join-tol-min` (10 min)
+  van het rooster-tijdstip lag.
+- **Weer** (gedeeld per tijdstip): `t_out_c`, `rh_out`, `wind_speed_ms`,
+  `wind_dir_deg`, `gust_ms`, `precip_mm`, `solar_direct/diffuse/global_wm2`,
+  `sun_az_deg`, `sun_el_deg`, `neighbor_anchor_c` (party-muur-buur-anker).
+- **Per-kamer drivers**: `solar_glass_w` (instraling dóór het glas, som over de
+  ramen), `roof_irr_w` (dak-instraling, alleen bovenverdieping).
+- **Bedieningsstanden** (`open_<element>`, 0..1): elke raam/deur/rooster —
+  `0`=dicht, `1`=open, kier = het element-eigen `tilt_frac`. Gedeeld per
+  tijdstip (het huis is gekoppeld: een open deur tussen twee kamers hoort in
+  beide modellen te zitten).
+- **Uitsluit-vlaggen**: `heating` (tado stookt in deze kamer), `ac_here` (de
+  mobiele airco staat hier), `ac_room` (welke kamer). De tweeling **laat deze
+  samples uit de kalibratie vallen** omdat de fysica geen actieve verwarming/
+  koeling kent — reproduceer dat door ze te filteren (zie hieronder). Pauze-
+  vensters zijn er al úit gefilterd; een aparte pauze-kolom is er bewust niet
+  (dit artefact is publiek downloadbaar).
+- **Fysica-baseline** (optioneel, `--baseline`): `pred_twin1_c` — de grey-box
+  voorspelling van de vent-tweeling (2-knoops RC, `vent_physics`, Project 13).
+  De rúwe fysica-voorspelling in sensor-ruimte, hergeseed per niet-overlappend
+  5-daags venster met 24 u warmup (dezelfde manier waarop het dashboard
+  scoort). Dit is je lat om te verslaan, of het doel voor residu-leren.
+  (`pred_twin2_c` is verwijderd, aug 2026: tweeling 2 is met pensioen.)
+
+In het **wide**-formaat krijgen de per-kamer-kolommen een `__<kamer>`-suffix
+(bv. `temp_c__office`, `pred_twin1_c__nursery`); de weer-/stand-kolommen staan er
+één keer.
+
+## Snel starten (pandas)
+
+```python
+import pandas as pd
+
+df = pd.read_parquet("data/ml/ventilation_long.parquet")   # of read_csv(...)
+
+# Schone trainingsset: alleen echte metingen, geen stook/airco/pauze-momenten
+# (net als de tweeling zelf kalibreert).
+clean = df[
+    df["temp_c"].notna()
+    & (df["heating"] == 0)
+    & (df["ac_here"] == 0)
+].copy()
+
+# Hoe goed doet de bestaande grey-box het al? (de lat)
+mae_twin = (clean["temp_c"] - clean["pred_twin1_c"]).abs().mean()
+print(f"vent-twin MAE = {mae_twin:.2f} °C")
+```
+
+### Je eigen model trainen
+
+```python
+from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.metrics import mean_absolute_error
+
+feat = [c for c in clean.columns if c.startswith("open_")] + [
+    "t_out_c", "rh_out", "wind_speed_ms", "wind_dir_deg", "gust_ms",
+    "solar_glass_w", "roof_irr_w", "sun_el_deg", "neighbor_anchor_c",
+]
+# tijd-split: train op het verleden, test op de laatste 20%
+clean = clean.sort_values("t_epoch")
+cut = int(len(clean) * 0.8)
+tr, te = clean.iloc[:cut], clean.iloc[cut:]
+
+m = HistGradientBoostingRegressor().fit(tr[feat], tr["temp_c"])
+print("mijn MAE:", mean_absolute_error(te["temp_c"], m.predict(te[feat])))
+```
+
+### Residu-leren (leer alleen de fout van de fysica)
+
+Vaak sterker dan from-scratch: laat het ML-model enkel de systematische
+afwijking van de grey-box corrigeren.
+
+```python
+d = clean[clean["pred_twin1_c"].notna()].copy()
+d["residual"] = d["temp_c"] - d["pred_twin1_c"]          # doel = de fysica-fout
+# ... train op d[feat] → d["residual"], en tel de voorspelde residu bij
+#     pred_twin1_c op. Meet weer tegen temp_c.
+```
+
+## Belangrijk
+
+- **Tijd-splits, geen willekeurige shuffle**: opeenvolgende rijen zijn sterk
+  gecorreleerd (15-min cadans). Split op `t_epoch` of gebruik
+  `TimeSeriesSplit`, anders lek je toekomst naar het verleden.
+- **Kamers zijn gekoppeld**: deuren/roosters verbinden kamers; een
+  hele-huis- (wide) of pooled-model met de `open_*`-standen kan die koppeling
+  leren die een per-kamer-model mist.
+- **Groeit vanzelf**: de shards worden elk kwartier aangevuld — draai de export
+  opnieuw na een `git pull` voor verse data. Mei 2026 is dun (pre-kwartier-
+  commit-tijdperk); juni–juli zijn dicht.
+- De export raakt **niets** in de pipelines aan; het is een read-only afgeleide
+  van de gecommitte shards.
+
+## Overdracht (een nieuwe sessie oppakken)
+
+Draai `python tools/export_ml_dataset.py` vanaf de repo-root (`--no-baseline`
+voor een snelle data-only build in seconden, of laat 'm aan voor de ~1-min-run
+die de vent-tweeling-fysica-baseline (`pred_twin1_c`) toevoegt; eerst
+`pip install pandas pyarrow` als je `.parquet` naast de altijd-geschreven
+CSV's wilt). Raakt niets in de pipelines. De **bron van waarheid** is
+`data/twin2_history/<YYYY-MM>.json` — gecommitte maand-shards (kolomsgewijs:
+per kamer `ts`/`temp`×10/`hum`/`heat`, plus uur-`weather`-rijen), elk kwartier
+aangevuld — sámen met het privé openingen-archief in de Gist
+(`house_openings_<YYYY-MM>.json`; GIST_ID/GIST_TOKEN of een lokale kopie via
+VENT_OPENINGS_ARCHIVE_DIR nodig). Een `git pull` ververst de repo-helft en
+opnieuw draaien regenereert alles. De exporter hergebruikt de
+bestaande loaders (`vent_io.load_dataset` → `vent_io.build_timeline` + de pure
+`vent_physics`-helpers, met een expliciete `RunContext`) en schrijft naar het
+gitignore'de `data/ml/`:
+`ventilation_long.csv/.parquet` (één rij per tijdstip × kamer),
+`ventilation_wide.csv/.parquet` (één rij per tijdstip, kamers als
+`__<kamer>`-kolommen) en `schema.json` (de kolom-dictionary — lees die eerst).
+Kolommen splitsen in features (weer, zon az/el, per-raam zon-door-glas,
+dak-instraling, `open_<element>`-fracties), doelwaarden (`temp_c`, `humidity`),
+uitsluit-vlaggen (`heating`/`ac_here`, die de tweeling uit de
+kalibratie laat vallen; pauze-vensters zijn al weggefilterd) en de optionele baseline (`pred_twin1_c`;
+`pred_twin2_c` is verwijderd — tweeling 2 is met pensioen).
+Om een verse sessie te oriënteren: begin met deze `README.md`, dan
+`tools/export_ml_dataset.py`, met de tweeling-interne werking gedocumenteerd
+onder Project 13 in `CLAUDE.md`; de manual-dispatch `ml-dataset.yml`-
+workflow bouwt dezelfde bestanden als download-artefact als je liever niet
+cloont.

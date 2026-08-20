@@ -1,0 +1,141 @@
+name: Tado Window Advisor
+
+on:
+  schedule:
+    # GitHub's scheduler is best-effort and drops/delays most ticks under load
+    # (observed: whole days with only ~3 of 24 hourly runs firing). We therefore
+    # do NOT rely on the schedule for cadence — instead each run is a self-contained
+    # ~5h loop that does the advice once per 15 minutes internally (see the
+    # "quarter-hourly loop" step). The schedule here is only a *restart kick*:
+    # thanks to the concurrency guard below, a tick that fires while a loop is
+    # running is held pending and starts the next loop the instant the current
+    # one ends, so coverage barely blinks. Firing several times/hour just means
+    # a fresh loop restarts promptly even when GitHub drops most ticks; the
+    # extra kicks are superseded harmlessly by concurrency.
+    - cron: "7,27,47 * * * *"
+      timezone: "Europe/Amsterdam"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print advies zonder te versturen (één run, geen loop)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+# Serialize runs: exactly one loop alive at a time. The advisor rotates the tado
+# refresh token on every run (tado revokes the previous one), so two overlapping
+# runs would read the same token and the second rotation would break the chain.
+# cancel-in-progress:false means a restart kick waits for the running loop to
+# finish, then takes over — never overlaps it.
+concurrency:
+  group: window-advisor
+  cancel-in-progress: false
+
+jobs:
+  advise:
+    runs-on: ubuntu-latest
+    # The quarter-hourly loop runs ~20 iterations spaced to the next 15-min mark,
+    # i.e. up to ~5h wall time. Cap below the 6h hard limit so the job ends cleanly
+    # and a pending restart kick can take over.
+    timeout-minutes: 350
+    steps:
+      # Branch-tip, niet de dispatch-SHA. Een restart-kick wordt door de
+      # concurrency-guard tot ~5u vastgehouden, maar `github.sha` blijft de stand
+      # van het moment van inplannen — de overnemende loop checkt dus een uren-oude
+      # window_data.json uit. Gevolg (gemeten 5 aug 2026): de solar-mediaan van
+      # `smoothed_solar` vindt geen recente samples meer en valt terug op één
+      # instantane meting, waardoor twee runs op hetzelfde moment dezelfde
+      # stationsmeting van 28.1 °C als 27.2 en 26.2 °C publiceerden; bovendien
+      # rebaset de nieuwe run zijn oude historie over de tussenliggende samples heen
+      # (gat 14:00→15:45 in outside_history). Zelfde pin als shade-notify.yml.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run window advisor (quarter-hourly loop)
+        env:
+          TADO_GIST_ID:           ${{ secrets.TADO_GIST_ID }}
+          GIST_TOKEN:             ${{ secrets.GIST_TOKEN }}
+          # Voor de stille-modus-poort in notify.py (notify_prefs.json, read-only).
+          GIST_ID:                ${{ secrets.GIST_ID }}
+          WU_STATION_ID:          ${{ secrets.WU_STATION_ID }}
+          WU_API_KEY:             ${{ secrets.WU_API_KEY }}
+          TELEGRAM_BOT_TOKEN:     ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:       ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Alleen het dagplan gaat naar de groep; het per-kamer-advies en de
+          # operationele alerts blijven op de privé-chat hierboven.
+          TELEGRAM_CHAT_GROUP_ID: ${{ secrets.TELEGRAM_CHAT_GROUP_ID }}
+          # Optionele brug gepubliceerde kamernaam → tado-zonenaam (privacy:
+          # een persoonsnaam als zonenaam blijft zo uit de publieke repo).
+          TADO_ZONE_ALIASES:      ${{ secrets.TADO_ZONE_ALIASES }}
+          # Privé artefact-gist voor window_data.json (privacy-sweep aug 2026);
+          # afwezig → artefact_io valt terug op het lokale docs/-pad.
+          ARTEFACT_GIST_ID:       ${{ secrets.ARTEFACT_GIST_ID }}
+          DRY_RUN:                ${{ inputs.dry_run && '1' || '' }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # One advice cycle: run the advisor, then commit/push the dashboard JSON
+          # if it changed. A transient failure (network, tado hiccup) must not kill
+          # the whole loop — log it and let the next hour retry.
+          run_once () {
+            python window_advisor.py || echo "::warning::window_advisor.py failed this iteration, continuing"
+            # docs/window_data.json bestaat alleen nog in de bootstrap-terugval
+            # (zonder ARTEFACT_GIST_ID) — normaal schrijft artefact_io naar de
+            # privé-gist en valt er hier niets te committen.
+            [ ! -f docs/window_data.json ] || git add docs/window_data.json
+            if git diff --staged --quiet; then
+              echo "No changes to commit"
+            else
+              git commit -m "data: window advisor refresh $(date -u +%Y-%m-%dT%H:%M) [skip ci]"
+              # Andere workflows kunnen in hetzelfde venster gepusht hebben — rebase eerst.
+              # window_data.json wordt elke run volledig opnieuw gegenereerd, dus een
+              # content-conflict op main is onvermijdelijk. Ruim een eventueel vastgelopen
+              # rebase van een vorige iteratie eerst op (anders blijft .git/rebase-merge
+              # staan en raakt de HEAD detached → alle latere pushes falen), en los het
+              # conflict op door altijd onze vers gegenereerde versie te houden
+              # (-X theirs houdt tijdens een rebase de commit die opnieuw wordt afgespeeld).
+              git rebase --abort 2>/dev/null || true
+              if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}"; then
+                git push || echo "::warning::push failed this iteration, continuing"
+              else
+                # Rebase kon niet schoon afronden — afbreken zodat we op een branch
+                # blijven (geen detached HEAD) en de volgende iteratie het opnieuw probeert.
+                git rebase --abort 2>/dev/null || true
+                echo "::warning::rebase failed this iteration, skipping push, continuing"
+              fi
+            fi
+          }
+
+          # Dry run = a single manual test, no hourly loop.
+          if [ "${DRY_RUN}" = "1" ]; then
+            run_once
+            exit 0
+          fi
+
+          # GitHub's scheduler can't be trusted to fire on time, so we drive the
+          # cadence ourselves: run now, then once at the next :00/:15/:30/:45 mark,
+          # for up to ITERS iterations (~5h wall time at 15-min spacing). The
+          # concurrency guard keeps this the only loop running, so the tado token
+          # rotation stays serialized.
+          ITERS=20
+          for i in $(seq 1 "${ITERS}"); do
+            echo "=== iteration ${i}/${ITERS} at $(date -u +%H:%M:%SZ) ==="
+            run_once
+            if [ "${i}" -lt "${ITERS}" ]; then
+              now=$(date -u +%s)
+              next=$(( (now / 900 + 1) * 900 ))   # next 15-min mark UTC (900s = 15 min)
+              sleep $(( next - now ))
+            fi
+          done

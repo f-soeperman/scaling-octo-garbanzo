@@ -1,0 +1,123 @@
+name: Verwarmingsexperiment (wekelijks)
+
+# Bestandsnaam bewust ongewijzigd (`heating-temp-notify.yml`): de orchestrator
+# dispatcht erop, de guard-job dedupt via `gh run list --workflow` op deze naam,
+# en de run-historie hangt eraan. Alleen de inhoud is van dagelijks nachtsetpoint
+# naar wekelijks ochtend-opstookexperiment gegaan.
+
+on:
+  schedule:
+    # Fallback ~40 min ná het orchestrator-doel (maandag 21:00 Amsterdam).
+    # Normaal heeft de Timing Orchestrator deze job al om 21:00 gedispatcht;
+    # deze cron vuurt alleen als de orchestrator uitviel. De cron vuurt enkel
+    # op maandag, dus de dag-window-check van de guard-job volstaat.
+    - cron: "40 21 * * 1"
+      timezone: "Europe/Amsterdam"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print zonder Telegram te sturen (en zonder state te schrijven)"
+        type: boolean
+        default: false
+      force:
+        description: "Ook buiten het stookseizoen (okt–apr) versturen"
+        type: boolean
+        default: false
+
+# Eén run tegelijk: een handmatige dispatch tijdens de cron-run zou anders
+# tegelijk heating_experiment_state.json committen.
+concurrency:
+  group: heating-experiment
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Dedup t.o.v. de orchestrator: skip de fallback-cron als deze workflow vandaag
+  # al een (niet-mislukte) run had. Alleen op `schedule` — handmatige en
+  # orchestrator-dispatches (beide workflow_dispatch) draaien altijd door.
+  guard:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      handled: ${{ steps.check.outputs.handled }}
+    steps:
+      - name: Skip if already handled today
+        id: check
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          since=$(TZ=Europe/Amsterdam date -d "today 00:00" +%s)
+          others=$(gh run list --workflow heating-temp-notify.yml -L 40 \
+            --json databaseId,createdAt,conclusion \
+            --jq "[.[] | select(.databaseId != ${{ github.run_id }}
+                   and (.createdAt|fromdateiso8601) >= $since
+                   and .conclusion != \"failure\" and .conclusion != \"cancelled\"
+                   and .conclusion != \"timed_out\" and .conclusion != \"startup_failure\")] | length")
+          if [ "${others:-0}" -gt 0 ]; then
+            echo "handled=1" >> "$GITHUB_OUTPUT"
+            echo "Al gedraaid vandaag (${others} run(s)) — orchestrator deed dit al, sla over."
+          fi
+
+  notify:
+    needs: guard
+    if: needs.guard.outputs.handled != '1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Send weekly heating experiment arm
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          DRY_RUN:    ${{ github.event.inputs.dry_run == 'true' && '1' || '0' }}
+          FORCE_SEND: ${{ github.event.inputs.force   == 'true' && '1' || '0' }}
+          # Voor de stille-modus-poort in notify.py (notify_prefs.json, read-only).
+          GIST_ID:    ${{ secrets.GIST_ID }}
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+        run: python heating_experiment_notify.py
+
+      - name: Commit experiment log
+        run: |
+          # Buiten het stookseizoen (en op de allereerste dry-run) schrijft het
+          # script geen state; `git add` op een niet-bestaand pad faalt hard.
+          if [ ! -f heating_experiment_state.json ]; then
+            echo "Geen state geschreven — niets te committen."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add heating_experiment_state.json
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update heating_experiment_state.json [skip ci]"
+            # De window/vent-loops committen elk kwartier naar main — zonder
+            # rebase raced deze push en faalt hij. De weekregel is idempotent
+            # (upsert op weeklabel), dus bij conflict wint onze verse versie.
+            git rebase --abort 2>/dev/null || true
+            if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}"; then
+              git push
+            else
+              git rebase --abort 2>/dev/null || true
+              echo "::error::rebase failed, heating experiment state not pushed"
+              exit 1
+            fi
+          fi

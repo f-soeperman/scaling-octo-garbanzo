@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'none';
+  script-src 'self' https://cdn.jsdelivr.net;
+  style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+  font-src https://fonts.gstatic.com;
+  img-src 'self' data:;
+  connect-src 'self' https://api.github.com;
+  frame-ancestors 'none';
+  base-uri 'none';
+  form-action 'none';
+">
+<title>Grasmaai-adviseur · Pineapple Under The Sea</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" crossorigin="anonymous">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js" integrity="sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js" integrity="sha384-oNtu+d18330MVFpltUTve1DatxCkkctlpA2AC3GulbVFOSqhHdDat3qHse/Lbuek" crossorigin="anonymous"></script>
+<link rel="stylesheet" href="css/shared.css?v=2">
+  <style>
+    h1 { font-size: clamp(40px, 5.5vw, 72px); line-height: 0.95; margin: 8px 0 4px; font-weight: 500; letter-spacing: -0.02em; font-style: italic; }
+    .subtitle { font-size: 13px; font-style: italic; color: var(--ink-soft); max-width: 520px; margin-top: 4px; }
+    .grid-2 { grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); }
+    .big-num { font-family: "JetBrains Mono", monospace; font-size: 52px; font-weight: 600; line-height: 1; }
+    .big-num span { font-size: 20px; color: var(--ink-soft); margin-left: 3px; }
+    .badge { display: inline-block; padding: 4px 12px; font-family: "JetBrains Mono", monospace; font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase; border: 1px solid currentColor; }
+    .badge-ready { color: var(--moss); }
+    .badge-wait { color: var(--ink-soft); }
+    .badge-over { color: var(--dry); }
+    .chart-box { position: relative; height: 320px; margin-top: 10px; }
+    table { width: 100%; border-collapse: collapse; font-family: "JetBrains Mono", monospace; font-size: 12px; margin-top: 6px; }
+    th, td { text-align: left; padding: 7px 8px; border-bottom: 1px dashed #2a241b22; }
+    th { color: var(--ink-soft); font-weight: 600; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; }
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(42,36,27,.55); display: flex; align-items: center; justify-content: center; z-index: 100; opacity: 0; pointer-events: none; transition: opacity 0.2s; }
+    .modal-backdrop.open { opacity: 1; pointer-events: auto; }
+    .modal { background: var(--parchment); padding: 32px; width: min(480px, calc(100vw - 24px)); max-height: calc(100vh - 32px); overflow-y: auto; border: 1px solid var(--ink); box-shadow: 6px 8px 0 #2a241b33; }
+    .modal h2 { font-size: 26px; font-style: italic; font-weight: 500; margin-bottom: 4px; }
+    .input-field { background: transparent; border: none; border-bottom: 1px solid #2a241b66; padding: 7px 2px; margin-top: 4px; font-family: "JetBrains Mono", monospace; font-size: 15px; color: var(--ink); outline: none; width: 100%; }
+    .input-field:focus { border-bottom-color: var(--clay); }
+    .len-chips { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+    .len-chip { padding: 12px 20px; min-height: 44px; font-family: "JetBrains Mono", monospace; font-size: 13px; letter-spacing: 0.1em; background: transparent; border: 1px solid #2a241b44; cursor: pointer; color: var(--ink-soft); transition: all 0.15s; }
+    .len-chip:hover { border-color: var(--ink); }
+    .len-chip.active { background: var(--ink); color: var(--parchment); border-color: var(--ink); }
+    .mow-log { max-height: 140px; overflow-y: auto; margin-top: 8px; font-family: "JetBrains Mono", monospace; font-size: 11px; }
+    .log-entry { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px dashed #2a241b22; color: var(--ink-soft); }
+    .log-entry .rm { cursor: pointer; color: var(--clay); opacity: 0.5; padding: 0 4px; }
+    .log-entry .rm:hover { opacity: 1; }
+    @media (max-width: 680px) {
+    header { padding: 24px 16px 12px; }
+    .pad, .grid { padding-left: 16px; padding-right: 16px; }
+    .banner { margin: 8px 16px; }
+    .modal { padding: 22px; }
+  }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="title-row">
+    <div>
+      <div class="corner-mark" id="folio-mark"></div>
+      <h1>Grasmaai-adviseur</h1>
+      <div class="subtitle">Wanneer is het gazon weer toe aan een beurt — en op welke hoogte? Gebaseerd op de FAO-56 grasgroei uit het bodemmodel, met oog voor een sterk wortelstelsel.</div>
+    </div>
+    <div style="text-align:right;">
+      <div class="corner-mark">Vandaag</div>
+      <div class="num date-big" id="today-date"></div>
+      <div style="margin-top:8px;display:flex;gap:14px;justify-content:flex-end;flex-wrap:wrap;"><a class="link" href="index.html">← Bodem</a><a class="link" href="window.html">Ramen →</a><a class="link" href="accuracy.html">IJking →</a><a class="link" href="vent.html">Ventilatie →</a><a class="link" href="grafiek.html">Grafiek →</a></div>
+    </div>
+  </div>
+  <div class="hairline-bold"></div>
+</header>
+
+<section style="padding:14px 40px 0;display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+  <button class="btn" id="mow-btn">✂️ Ik heb gemaaid</button>
+  <button class="btn btn-secondary" id="refresh-btn">↻ Refresh</button>
+  <button class="btn btn-secondary" id="account-btn" title="Gist/token koppelen of wijzigen">🔑 Account</button>
+  <span id="source-label" style="font-size:11px;color:var(--ink-soft);font-style:italic;"></span>
+</section>
+
+<div id="banner-slot"></div>
+
+<div id="content">
+  <div style="padding:80px 40px;text-align:center;">
+    <div class="pulse" style="font-size:22px;font-style:italic;color:var(--ink-soft);">Het grasboek opslaan…</div>
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="modal-backdrop" id="mow-modal">
+  <div class="modal">
+    <div class="corner-mark">✂️ Registreer maaibeurt</div>
+    <h2>Wanneer &amp; hoe hoog gemaaid?</h2>
+    <p style="font-style:italic;color:var(--ink-soft);margin-top:6px;font-size:13px;">Datum + ingestelde maaihoogte. De duur doet er niet toe — je maait toch alles.</p>
+
+    <div style="margin-top:18px;">
+      <div class="rule-label">Datum</div>
+      <input type="date" class="input-field" id="mow-date" />
+    </div>
+
+    <div style="margin-top:18px;">
+      <div class="rule-label">Maaihoogte</div>
+      <div class="len-chips" id="len-chips">
+        <button class="len-chip" data-len="30">30 mm</button>
+        <button class="len-chip active" data-len="40">40 mm</button>
+        <button class="len-chip" data-len="50">50 mm</button>
+      </div>
+    </div>
+
+    <div style="margin-top:18px;">
+      <div class="rule-label">Recente maaibeurten</div>
+      <div class="mow-log" id="mow-log"><div style="color:var(--ink-soft);font-style:italic;padding:6px 0;">Nog niets gelogd.</div></div>
+    </div>
+
+    <div style="margin-top:24px;display:flex;gap:12px;justify-content:flex-end;">
+      <button class="btn btn-secondary" id="mow-cancel">Annuleer</button>
+      <button class="btn" id="mow-save">Opslaan</button>
+    </div>
+    <div id="mow-status" style="margin-top:10px;font-size:12px;font-style:italic;color:var(--ink-soft);"></div>
+  </div>
+</div>
+
+<footer>
+  <div class="rule-label" style="margin-bottom:6px;">Methode</div>
+  Groei-eenheden = actuele transpiratie (lawn_T uit het FAO-56 bodemmodel) × hitte-demping. Bij hitte transpireert gras wel, maar groeit het nauwelijks. De accumulatie sinds de laatste maaibeurt bepaalt de maairijpheid; het weer in de komende dagen bepaalt de beste maaidag en de hoogte. Hoog maaien (50 mm) beschermt de wortels bij hitte/droogte; kort (30 mm) mag bij koel, vochtig, rustig groeiend gras.
+</footer>
+
+<script src="js/theme.js"></script>
+<script src="js/shared.js?v=3"></script>
+<script src="js/mowing.js?v=4"></script>
+</body>
+</html>

@@ -1,0 +1,139 @@
+name: Tweeling-evaluatie
+
+# Wekelijkse evaluatierun van de ventilatie-tweeling (aug 2026). Vóór deze cron
+# waren tools/horizon_backtest.py en tools/export_uncertainty.py handmatig — en
+# dus verouderde docs/js/uncertainty.json stilzwijgend t.o.v. de live geleerde
+# params (dezelfde les als de maandcron van station-accuracy). Deze run:
+#
+#   1. ververst het shard-weer uit het ERA5-archief (alleen in-job, zie hieronder);
+#   2. draait de rollende-oorsprong-backtest (hindcast = perfecte-forecast-aanname)
+#      en append't de kopcijfers aan docs/twin_eval.json — het trendspoor;
+#   3. draait dezelfde backtest op de ÉCHTE gelogde Open-Meteo-forecasts
+#      (data/forecast_log, --weather forecast) — zolang het log jong is scoort
+#      die 0 oorsprongen en is de regel in twin_eval.json daar eerlijk over;
+#   4. exporteert de empirische p10/p90-band naar docs/js/uncertainty.json;
+#   5. rekent de gelogde nachtvoorspellingen af (tools/night_verify.py →
+#      night_verify.json in de privé artefact-gist — per-nacht scores van de
+#      kinderkamer horen niet onder docs/, zie de privacy-assessment aug 2026).
+#
+# Het ERA5-ververste shard-weer blijft bewust in-job: de twin2-shards leven
+# sinds de privacy-assessment (aug 2026) in de privé Gist met de kwartierloop
+# als enige schrijver — deze stap draait dus zónder Gist-env, waardoor
+# vio.refresh_shard_weather lokale (weggegooide) overlay-bestanden schrijft die
+# vio.load_dataset per tijdstip over de Gist-kopie merge't. Zo krijgt de
+# evaluatie ERA5-kwaliteit weer zonder een tweede Gist-schrijver die met de
+# loop zou racen. tools/vent_seed.py ververst zelf wanneer het moet.
+on:
+  schedule:
+    # Zondag 05:10 lokaal — ruim buiten het spitsuur van de kwartierloops en vóór
+    # het weekjournaal (zo 20:00), zodat dat later dit spoor kan citeren.
+    - cron: "10 5 * * 0"
+      timezone: "Europe/Amsterdam"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: twin-eval
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      # Branch-tip: deze workflow commit een groeiend spoor (twin_eval.json);
+      # committen vanaf een oudere momentopname zou eerdere regels wegrebasen.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # De openingen-historie leeft sinds aug 2026 in het privé Gist-archief
+      # (house_openings_<YYYY-MM>.json) i.p.v. in de gecommitte shards; elke stap
+      # die vio.load_dataset gebruikt heeft de Gist-env dus read-only nodig.
+
+      # BEWUST zonder Gist-env: met creds zou refresh_shard_weather naar de
+      # privé Gist PATCHen en met de kwartierloop (de enige Gist-schrijver)
+      # racen. Zonder creds schrijft hij lokale overlay-bestanden die
+      # load_dataset over de Gist-kopie merge't — zie de workflow-kop.
+      - name: Refresh shard weather from ERA5 (in-job only)
+        run: |
+          python - <<'EOF'
+          from datetime import date, timedelta
+          import vent_io as vio
+          house = vio.load_house()
+          lat, lon = vio.house_location(house)
+          end = date.today()
+          rows = vio.fetch_weather_archive(lat, lon, end - timedelta(days=14), end)
+          n = vio.refresh_shard_weather(rows)
+          print(f"{n} nieuwe uur-rijen; {len(rows)} rijen ge-merged (niet gecommit)")
+          EOF
+
+      - name: Horizon backtest (hindcast)
+        env:
+          GIST_ID:    ${{ secrets.GIST_ID }}
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+          # vio.load_learned() leest sinds de privatisering (aug 2026) uit de
+          # artefact-gist.
+          ARTEFACT_GIST_ID: ${{ secrets.ARTEFACT_GIST_ID }}
+        run: |
+          python tools/horizon_backtest.py --out tools/out/h12.json \
+            --summary-out docs/twin_eval.json
+
+      - name: Horizon backtest (echte forecasts)
+        env:
+          GIST_ID:    ${{ secrets.GIST_ID }}
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+          # vio.load_learned() leest sinds de privatisering (aug 2026) uit de
+          # artefact-gist.
+          ARTEFACT_GIST_ID: ${{ secrets.ARTEFACT_GIST_ID }}
+        run: |
+          python tools/horizon_backtest.py --weather forecast \
+            --summary-out docs/twin_eval.json
+
+      - name: Export uncertainty band
+        env:
+          # Kamersamples komen sinds de shard-privatisering uit de Gist (read-only).
+          GIST_ID:    ${{ secrets.GIST_ID }}
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+        run: python tools/export_uncertainty.py --backtest tools/out/h12.json
+
+      - name: Verify night forecasts
+        env:
+          # Gemeten kinderkamertemps uit de Gist-shards (read-only); de uitkomst
+          # gaat naar de artefact-gist i.p.v. onder docs/ (privacy-assessment).
+          GIST_ID:    ${{ secrets.GIST_ID }}
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+          ARTEFACT_GIST_ID: ${{ secrets.ARTEFACT_GIST_ID }}
+        run: python tools/night_verify.py
+
+      - name: Commit evaluation artefacts
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/twin_eval.json docs/js/uncertainty.json
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "data: tweeling-evaluatie $(date -u +%Y-%m-%dT%H:%M) [skip ci]"
+            # Zelfde geharde blok als daily-check.yml: de kwartierloops
+            # committen continu naar main, dus een race is hier routine.
+            # Beide artefacten worden door déze run gegenereerd →
+            # onze versie wint (-X theirs); falen blijft hard en zichtbaar.
+            git rebase --abort 2>/dev/null || true
+            if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}"; then
+              git push
+            else
+              git rebase --abort 2>/dev/null || true
+              echo "::error::rebase failed, twin evaluation not pushed"
+              exit 1
+            fi
+          fi

@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'none';
+  script-src 'self';
+  style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+  font-src https://fonts.gstatic.com;
+  img-src 'self' data:;
+  connect-src 'self';
+  frame-ancestors 'none';
+  base-uri 'none';
+  form-action 'none';
+">
+<title>Kampeerkompas · Pineapple Under The Sea</title>
+<link href="https://fonts.googleapis.com/css2?family=Alfa+Slab+One&family=Barlow+Condensed:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" crossorigin="anonymous">
+  <style>
+    /* Eigen posterthema (retro nationaal park) — bewust géén shared.css/theme.js.
+       Eén lichte "drukwerk"-modus: een poster heeft geen dark mode.
+       Geen Chart.js/CDN: script-src blijft 'self'. */
+    :root {
+      --paper: #f5ecd7;        /* kaart-/celoppervlak (validator-surface) */
+      --paper-deep: #eadfc2;   /* paginaachtergrond */
+      --night: #14243c;        /* nachtnavy: inkt, kaders, footer */
+      --night-soft: #536178;
+      --pine: #24523b;
+      --lake: #3f6ea6;
+      --amber: #c68115;
+      --hair: rgba(20, 36, 60, 0.18);
+      /* Kwaliteitsladder — gevalideerd (dataviz-validator) op --paper:
+         slechtst aangrenzend paar normaal ΔE 23.2, alles PASS. "matig" is
+         stormblauw en "slecht" amber (bewonersbesluit aug 2026: oranje voelt
+         slechter dan blauw). Rood draagt altijd een glyph (⚠/✕) — status
+         hangt nooit op kleur alleen. De contrast-WARN op goed/slecht wordt
+         gedekt door de celrand, de legenda en de per-dag-rijen als
+         tabelweergave. */
+      --cat-top: #2b7d4d;
+      --cat-goed: #8fc055;
+      --cat-matig: #3f6ea6;
+      --cat-slecht: #c68115;
+      --cat-rood: #9c2140;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--paper-deep);
+      color: var(--night);
+      font-family: "Barlow Condensed", "Arial Narrow", sans-serif;
+      font-size: 16px;
+      min-height: 100vh;
+    }
+    .frame { margin: clamp(8px, 2vw, 20px); border: 3px solid var(--night); position: relative; background: var(--paper-deep); }
+    .frame::after { content: ""; position: absolute; inset: 6px; border: 1px solid var(--night); pointer-events: none; z-index: 5; }
+
+    /* ── hero ─────────────────────────────────────────────────────────── */
+    .poster-hero { position: relative; overflow: hidden; }
+    .poster-hero svg { display: block; width: 100%; height: clamp(260px, 38vw, 440px); }
+    .hero-title { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding-top: clamp(18px, 5vw, 56px); text-align: center; color: var(--paper); }
+    .kicker { font-weight: 600; font-size: clamp(10px, 1.6vw, 14px); letter-spacing: 0.35em; text-transform: uppercase; opacity: 0.92; }
+    h1 { font-family: "Alfa Slab One", serif; font-weight: 400; font-size: clamp(30px, 6.4vw, 80px); letter-spacing: 0.02em; line-height: 1.05; margin-top: 6px; text-shadow: 0 2px 0 #14243c66; }
+    .hero-rule { font-size: clamp(10px, 1.6vw, 14px); letter-spacing: 0.5em; margin-top: 6px; opacity: 0.85; }
+    .hero-sub { font-style: italic; font-size: clamp(12px, 1.9vw, 17px); letter-spacing: 0.12em; margin-top: 2px; opacity: 0.92; }
+    .date-badge { position: absolute; top: 14px; right: 16px; border: 2px solid var(--paper); padding: 6px 12px 7px; transform: rotate(-2deg); color: var(--paper); text-align: center; background: #14243c55; }
+    .date-badge .db-lbl { display: block; font-weight: 600; font-size: 9px; letter-spacing: 0.3em; text-transform: uppercase; }
+    .date-badge span:last-child { font-family: "IBM Plex Mono", monospace; font-size: 12px; }
+    .trim { height: 10px; background: var(--night); border-bottom: 3px solid var(--amber); }
+
+    /* ── controls & banners ───────────────────────────────────────────── */
+    .controls { padding: 16px clamp(14px, 3vw, 36px) 0; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+    .btn { background: var(--night); color: var(--paper); border: none; font-family: "Barlow Condensed", sans-serif; font-weight: 600; font-size: 13px; letter-spacing: 0.2em; text-transform: uppercase; padding: 10px 18px; min-height: 42px; cursor: pointer; }
+    .btn:hover { background: var(--pine); }
+    #source-label { font-style: italic; font-size: 14px; color: var(--night-soft); }
+    .banner { margin: 12px clamp(14px, 3vw, 36px) 0; padding: 10px 14px; font-size: 15px; background: var(--paper); border: 1px solid var(--hair); border-left: 6px solid var(--amber); }
+    .banner-warn { border-left-color: var(--amber); }
+    .banner-error { border-left-color: var(--cat-rood); }
+    .pulse { animation: pulse 1.6s ease-in-out infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+
+    /* ── kaarten ──────────────────────────────────────────────────────── */
+    .grid { display: grid; gap: 20px; padding: 20px clamp(14px, 3vw, 36px) 0; }
+    .grid-tiles { grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); }
+    .park-card { background: var(--paper); border: 2px solid var(--pine); border-radius: 10px; box-shadow: inset 0 0 0 1px var(--paper), inset 0 0 0 2px var(--pine), 0 3px 0 #14243c22; overflow: hidden; }
+    .card-pad { padding: 16px 20px 20px; }
+    .park-eyebrow { background: var(--pine); color: var(--paper); font-weight: 600; font-size: 13px; letter-spacing: 0.22em; text-transform: uppercase; padding: 8px 20px; }
+    .park-rule { font-weight: 600; font-size: 11px; letter-spacing: 0.25em; text-transform: uppercase; color: var(--night-soft); margin-top: 16px; border-bottom: 1px solid var(--hair); padding-bottom: 3px; }
+    .status-line { font-size: 21px; font-style: italic; margin-top: 10px; line-height: 1.3; }
+    .win-extra { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--night-soft); margin-top: 4px; }
+    .verwachting { font-size: 16.5px; line-height: 1.45; margin-top: 6px; }
+    .stat-row { display: flex; justify-content: space-between; align-items: baseline; padding: 4px 0; border-bottom: 1px dashed var(--hair); font-family: "IBM Plex Mono", monospace; font-size: 12px; font-feature-settings: "tnum"; }
+    .stat-row .lbl { font-family: "Barlow Condensed", sans-serif; font-size: 14px; color: var(--night-soft); }
+    .warn-line { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--cat-rood); margin-top: 6px; }
+    .conf-line { font-style: italic; font-size: 14px; color: var(--night-soft); margin-top: 10px; }
+
+    /* ── regiomatrix (structuur = ronde 1, alleen het palet is nieuw) ──── */
+    .matrix-scroll { overflow-x: auto; padding: 4px 0 6px; }
+    /* Het aantal dagkolommen volgt de data via --nd (gezet door camping.js):
+       vroege-ochtendruns leveren 15 dagen i.p.v. 16 (Open-Meteo ankert zijn
+       venster dan nog op gisteren) en een hard getal liet elke rij één kolom
+       opschuiven — regionamen in de cellen, dagen scheef (gemeld 14 aug 2026). */
+    .matrix { display: grid; grid-template-columns: 110px repeat(var(--nd, 16), minmax(26px, 1fr)); gap: 4px 2px; align-items: center; min-width: 640px; }
+    .mx-head { font-family: "IBM Plex Mono", monospace; font-size: 9px; color: var(--night-soft); text-align: center; line-height: 1.35; padding-bottom: 2px; align-self: end; }
+    .mx-head b { display: block; font-weight: 600; color: var(--night); }
+    .mx-head.mx-today b { border-bottom: 2px solid var(--night); }
+    .mx-region { font-family: "Barlow Condensed", sans-serif; font-weight: 600; font-size: 14px; letter-spacing: 0.04em; color: var(--night); padding-right: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mx-cell { height: 28px; position: relative; border: 1px solid var(--hair); }
+    .cat-top    { background: var(--cat-top); }
+    .cat-goed   { background: var(--cat-goed); }
+    .cat-matig  { background: var(--cat-matig); }
+    .cat-slecht { background: var(--cat-slecht); }
+    .cat-rood   { background: var(--cat-rood); }
+    .mx-missing { background: transparent; border-style: dashed; }
+    .conf-middel { opacity: 0.78; }
+    .conf-laag   { opacity: 0.55; background-image: repeating-linear-gradient(45deg, transparent 0 3px, #f5ecd780 3px 6px); }
+    .mx-glyph::after { content: attr(data-glyph); position: absolute; inset: 0; display: grid; place-items: center; font-size: 11px; color: var(--paper); }
+    /* "Waarom?"-toggle: reden-icoon op matig/slecht-cellen; standaard
+       verborgen, aan via de .toon-waarom-klasse op de matrix. */
+    .matrix.toon-waarom .mx-cell[data-icoon]:not(.mx-glyph)::after { content: attr(data-icoon); position: absolute; inset: 0; display: grid; place-items: center; font-size: 11px; color: var(--paper); }
+    .matrix.toon-waarom .mx-cell.cat-slecht[data-icoon]:not(.mx-glyph)::after { color: var(--night); }
+    /* Rode cellen (.mx-glyph, ⚠ of ✕) kregen tot nu toe geen "waarom" — de
+       kale glyph zegt alleen "officieel" of "extreem", niet welk weertype.
+       Een ✕ heeft geen eigen tekst en het icoon vervángt 'm dus; een ⚠ IS al
+       een reden (officiële waarschuwing) en houdt zijn glyph, het icoon komt
+       ernaast — vandaar twee losse regels i.p.v. één generieke. */
+    .matrix.toon-waarom .mx-glyph[data-glyph="✕"][data-icoon]::after { content: attr(data-icoon); }
+    .matrix.toon-waarom .mx-glyph[data-glyph="⚠"][data-icoon]::after { content: attr(data-glyph) attr(data-icoon); font-size: 9px; }
+    .mx-card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+    .btn-mini { min-height: 30px; padding: 5px 12px; font-size: 11px; letter-spacing: 0.15em; }
+    /* Eén grid-item per venster i.p.v. per-cel box-shadow: het venster valt
+       altijd op cat-top/cat-goed (het venstercriterium sluit matig/slecht/rood
+       al uit). Amber (WCAG-contrast ~1.5:1 tegen beide groentinten) bleek
+       ondanks het andere kleurtype te weinig LUMINANTIE-contrast te hebben om
+       als rand op te vallen — var(--night) haalt ~3:1 op cat-top en ~7:1 op
+       cat-goed, en is bovendien al de inktkleur die de rest van de poster
+       voor kaders/tekst gebruikt. align-self:stretch negeert de
+       align-items:center van .matrix zodat de rand de volle celhoogte pakt.
+       z-index:1 is nodig omdat .conf-middel/.conf-laag opacity zetten op
+       .mx-cell — opacity<1 vormt een eigen stacking context, en zo'n context
+       schildert (ongeacht DOM-volgorde) vóór een gewoon niet-gepositioneerd
+       grid-item. Zonder z-index verdween de rand dus achter/onder elke
+       lager-vertrouwen-cel binnen het venster, en scheen hij daar vaag door
+       de opacity heen — geen transparantie op de rand zelf, maar de cel erbovenop. */
+    .win-mark  { pointer-events: none; align-self: stretch; border: 3px solid var(--night); z-index: 1; }
+    .mx-far-first { border-left: 2px dashed #53617888; }
+    .mx-note { font-size: 13px; font-style: italic; color: var(--night-soft); margin-top: 8px; }
+    .mx-legend { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin-top: 12px; font-family: "Barlow Condensed", sans-serif; font-size: 13px; color: var(--night-soft); }
+    .mx-legend .sw { display: inline-block; width: 14px; height: 14px; vertical-align: -2px; margin-right: 5px; border: 1px solid var(--hair); position: relative; }
+    .mx-legend .sw-win { background: transparent; box-shadow: inset 0 0 0 2px var(--night); }
+    .strip-legende { padding: 14px clamp(14px, 3vw, 36px) 0; font-family: "Barlow Condensed", sans-serif; font-size: 14px; color: var(--night-soft); }
+
+    /* ── flex-tegels (super-regio's, ronde 3) ─────────────────────────── */
+    .flex-scroll { overflow-x: auto; margin-top: 12px; padding: 2px 0 4px; }
+    .flex-strip { display: grid; grid-template-columns: repeat(var(--nd, 16), minmax(18px, 1fr)); gap: 2px; align-items: center; min-width: 340px; }
+    /* Verkasdag: donkere linkerrand — status hangt nooit op kleur alleen
+       (zelfde principe als de ⚠/✕-glyphs op rode cellen). */
+    .flex-move { box-shadow: inset 4px 0 0 var(--night); }
+    .flex-route { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--night-soft); margin-top: 8px; }
+
+    /* ── dag/nacht-strip op de regiokaarten ───────────────────────────── */
+    .dn-scroll { overflow-x: auto; margin-top: 14px; }
+    .dn-strip { display: grid; gap: 2px; align-items: center; min-width: 560px; }
+    .dn-dag   { height: 40px; position: relative; border: 1px solid var(--hair); }
+    .dn-nacht { height: 26px; position: relative; border: 1px solid var(--hair); }
+    .dn-vandaag { outline: 2px solid var(--night); outline-offset: 1px; }
+    .dn-datum { position: absolute; top: 2px; left: 3px; font: 500 8px "IBM Plex Mono", monospace; }
+    .tile-licht { color: var(--paper); }
+    .tile-donker { color: var(--night); }
+
+    /* ── per-dag-rijen ────────────────────────────────────────────────── */
+    .day-rows { display: grid; grid-template-columns: 38px 58px 1fr 1fr 1.5fr 1fr 1fr; font-family: "IBM Plex Mono", monospace; font-size: 11px; font-feature-settings: "tnum"; margin-top: 10px; }
+    .day-rows > span { padding: 4px 2px; border-bottom: 1px dashed var(--hair); white-space: nowrap; }
+    .day-rows .hdr { font-family: "Barlow Condensed", sans-serif; font-size: 10px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--night-soft); }
+    .day-rows .num-r { text-align: right; }
+    .dr-sw { display: inline-block; width: 9px; height: 9px; margin-right: 2px; border: 1px solid var(--hair); }
+
+    /* ── footer ───────────────────────────────────────────────────────── */
+    footer { margin-top: 28px; background: var(--night); color: var(--paper); padding: 26px clamp(14px, 3vw, 36px) 30px; font-size: 15px; line-height: 1.5; }
+    footer .park-rule { color: #f5ecd7aa; border-color: #f5ecd733; margin-top: 0; margin-bottom: 10px; }
+
+    @media (max-width: 680px) {
+      .matrix { grid-template-columns: 84px repeat(var(--nd, 16), minmax(22px, 1fr)); min-width: 520px; }
+      .mx-region { font-size: 12px; }
+      .date-badge { top: 8px; right: 8px; padding: 4px 8px 5px; }
+      .day-rows { font-size: 10px; }
+    }
+  </style>
+</head>
+<body>
+<div class="frame">
+
+<header class="poster-hero">
+  <svg viewBox="0 0 1440 520" preserveAspectRatio="xMidYMax slice" role="img" aria-label="Berglandschap bij schemering">
+    <defs>
+      <linearGradient id="lucht" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#14243c"/>
+        <stop offset="45%" stop-color="#2c4a6e"/>
+        <stop offset="78%" stop-color="#c97a3c"/>
+        <stop offset="100%" stop-color="#f0b45e"/>
+      </linearGradient>
+    </defs>
+    <rect width="1440" height="520" fill="url(#lucht)"/>
+    <circle cx="1010" cy="330" r="52" fill="#f6d488"/>
+    <circle cx="1010" cy="330" r="74" fill="none" stroke="#f6d48855" stroke-width="10"/>
+    <path fill="#6d84a0" d="M0,340 L140,268 L250,332 L390,244 L520,330 L650,282 L800,352 L950,296 L1100,354 L1240,300 L1360,344 L1440,320 V520 H0 Z"/>
+    <path fill="#3a5878" d="M0,392 L120,330 L260,398 L420,306 L560,396 L700,346 L860,412 L1020,342 L1180,408 L1320,362 L1440,400 V520 H0 Z"/>
+    <path fill="#22384f" d="M0,448 L180,386 L340,452 L520,376 L680,450 L840,404 L1000,458 L1160,398 L1320,452 L1440,430 V520 H0 Z"/>
+    <path fill="#16281f" d="M0,520 L0,504 L30,458 L60,500 L90,472 L120,504 L150,450 L180,508 L210,480 L240,500 L270,462 L300,504 L330,445 L360,508 L390,476 L420,500 L450,455 L480,504 L510,468 L540,508 L570,448 L600,500 L630,474 L660,504 L690,460 L720,508 L750,452 L780,500 L810,478 L840,504 L870,456 L900,508 L930,470 L960,500 L990,446 L1020,504 L1050,466 L1080,508 L1110,458 L1140,500 L1170,480 L1200,504 L1230,452 L1260,508 L1290,472 L1320,500 L1350,462 L1380,504 L1410,448 L1440,508 L1440,520 Z"/>
+  </svg>
+  <div class="hero-title">
+    <div class="kicker">Twaalf streken · zestien dagen vooruit</div>
+    <h1>KAMPEERKOMPAS</h1>
+    <div class="hero-rule">— ◆ —</div>
+    <div class="hero-sub">tent · peuter · auto</div>
+  </div>
+  <div class="date-badge"><span class="db-lbl">Vandaag</span><span id="today-date"></span></div>
+</header>
+<div class="trim"></div>
+
+<section class="controls">
+  <button class="btn" id="refresh-btn">↻ Ververs</button>
+  <span id="source-label"></span>
+</section>
+
+<div id="banner-slot"></div>
+
+<div id="content">
+  <div style="padding:80px 40px;text-align:center;">
+    <div class="pulse" style="font-size:22px;font-style:italic;color:var(--night-soft);">De hemel boven twaalf streken lezen…</div>
+  </div>
+</div>
+
+<footer>
+  <div class="park-rule">Methode</div>
+  Vier keer per dag (00/06/12/18u) leest een GitHub Action de Open-Meteo-voorspelling van zestien dagen voor twaalf kampeerstreken. Elke dagcel beoordeelt het dagdeel (09–21u) én de nacht die die avond begint: dag onder de 30°, nacht boven de 10°, temperatuur ruim boven het dauwpunt (anders wordt de tent nat van binnenuit), en dagregen telt dubbel zo zwaar als nachtregen. Officiële MeteoAlarm-waarschuwingen van <strong>oranje of rood</strong> kleuren een dag rood (⚠) — <strong>gele waarschuwingen negeren we bewust</strong> (anders kleurt een gele hittegolf de hele kaart rood); voorbij hun horizon van een paar dagen doen extreem voorspelde waarden dat (✕). Een kampeervenster is minstens drie aaneengesloten goede nachten; het vertrekadvies zoekt een droge laatste nacht plus droge ochtend. De zekerheid komt uit het ECMWF-ensemble van ~51 rekenleden: hoe minder leden het eens zijn over de criteria, hoe bleker en gearceerder de cel. Drie flex-tegels rekenen daarnaast per grote regio (Oostenrijk, Noordwest- en Oost-Frankrijk) de beste route uit als je bereid bent te verkassen — minimaal drie nachten per plek, en verkassen kost strafpunten zodat de route alleen verhuist als het echt loont. Voorbij een dag of tien is élke voorspelling indicatief — de verwachting verschuift dan nog dagelijks, dus kijk vooral naar het patroon, niet naar de precieze dag.
+</footer>
+
+</div>
+<script src="js/camping.js?v=8"></script>
+</body>
+</html>

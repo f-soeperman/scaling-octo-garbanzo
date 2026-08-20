@@ -1,0 +1,123 @@
+name: Kampeerkompas
+
+# Project 15 — kampeergeschiktheid van zeven streken, 16 dagen vooruit, ververst
+# op de orchestrator-slots 00:00/06:00/12:00/18:00 (Europe/Amsterdam). Deze cron
+# is de fallback ~30 min later per slot; de guard-job hieronder dedupt per slot
+# tegen de orchestrator-dispatch. Dashboard-only: geen Telegram-advies, alleen
+# de run_guarded-crash-alert.
+on:
+  schedule:
+    - cron: "30 0,6,12,18 * * *"
+      timezone: "Europe/Amsterdam"
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: "Dagdeel (informatief — het script rekent zelf vanaf 'nu')"
+        type: choice
+        options: ["00", "06", "12", "18"]
+        default: "12"
+      dry_run:
+        description: "Rekenen + loggen zonder artefact te schrijven"
+        type: boolean
+        default: false
+
+concurrency:
+  group: camping-forecast
+  cancel-in-progress: false
+
+jobs:
+  # Dedup t.o.v. de orchestrator, per slot. Het anker is het begin van het
+  # lopende 6-uursslot (00/06/12/18 lokaal), NIET middernacht: met 4 runs/dag
+  # staat er 's middags altijd al een run van vandaag in het ledger en zou een
+  # middernacht-venster de fallback altijd laten skippen — precies het scenario
+  # waarvoor hij bestaat (de soil/mowing-les). 00/06/12/18 bestaan ook op
+  # DST-nachten (de wissel valt om 02/03). Alleen op `schedule` — handmatige en
+  # orchestrator-dispatches draaien altijd door.
+  guard:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      handled: ${{ steps.check.outputs.handled }}
+    steps:
+      - name: Skip if this slot was already handled
+        id: check
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          h=$(TZ=Europe/Amsterdam date +%H)
+          slot=$(( (10#$h / 6) * 6 ))
+          since=$(TZ=Europe/Amsterdam date -d "today $(printf '%02d' "$slot"):00" +%s)
+          others=$(gh run list --workflow camping-forecast.yml -L 40 \
+            --json databaseId,createdAt,conclusion \
+            --jq "[.[] | select(.databaseId != ${{ github.run_id }}
+                   and (.createdAt|fromdateiso8601) >= $since
+                   and .conclusion != \"failure\" and .conclusion != \"cancelled\"
+                   and .conclusion != \"timed_out\" and .conclusion != \"startup_failure\")] | length")
+          if [ "${others:-0}" -gt 0 ]; then
+            echo "handled=1" >> "$GITHUB_OUTPUT"
+            echo "Slot al gedraaid (${others} run(s)) — orchestrator deed dit al, sla over."
+          fi
+
+  forecast:
+    needs: guard
+    if: needs.guard.outputs.handled != '1'
+    runs-on: ubuntu-latest
+    # Commit het dashboard-artefact — vandaar contents: write + de
+    # branch-tip-pin op de checkout (een dispatch mag niet vanaf een oudere
+    # momentopname committen, zelfde reden als shade-notify/night-forecast).
+    permissions:
+      contents: write
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run camping forecast
+        env:
+          # Alleen voor de run_guarded-crash-alert; het script stuurt zelf niets.
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+        # Eén herkansing na 10 min; run_guarded alert pas bij de 2e mislukking
+        # (fail_threshold=2).
+        run: |
+          python camping_forecast.py || {
+            echo "::warning::eerste poging mislukt — herkansing over 10 min"
+            sleep 600
+            python camping_forecast.py
+          }
+
+      - name: Commit updated data
+        # Onder dry_run schrijft het script niets → "No changes to commit".
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/camping_data.json
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "data: kampeerkompas refresh $(date -u +%Y-%m-%dT%H:%M) [skip ci]"
+            # Zelfde geharde blok als daily-check/night-forecast: -X theirs (het
+            # artefact wordt elke run integraal opnieuw gegenereerd, onze verse
+            # versie wint) en hard falen — een rode run telt niet als "handled",
+            # dus de volgende orchestrator-tick herkanst het slot vanzelf.
+            git rebase --abort 2>/dev/null || true
+            if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}"; then
+              git push
+            else
+              git rebase --abort 2>/dev/null || true
+              echo "::error::rebase failed, camping data not pushed"
+              exit 1
+            fi
+          fi

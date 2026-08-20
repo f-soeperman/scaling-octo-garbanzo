@@ -1,0 +1,45 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+.DS_Store
+
+# Gegenereerde ML-export (bouw lokaal met tools/export_ml_dataset.py; de bron —
+# data/twin2_history/*.json — staat wél in git). README blijft behouden.
+data/ml/ventilation_long.csv
+data/ml/ventilation_wide.csv
+data/ml/ventilation_long.parquet
+data/ml/ventilation_wide.parquet
+data/ml/schema.json
+
+# Campagne-uitvoer van het offline experimentharnas (tools/vent_experiment.py):
+# afgeleide rapporten, herproduceerbaar uit de shards — conclusies landen in de
+# assessment-docs/commitberichten, niet als JSON-dumps in git.
+tools/out/
+
+# Privé artefacten (aug 2026): deze gaan naar de artefact-gist (ARTEFACT_GIST_ID),
+# niet naar de publieke repo — ze dragen de gemelde raamstanden en de huisgeometrie.
+# Zonder secret schrijft artefact_io ze lokaal weg (bootstrap/tests); die lokale
+# kopie mag niet per ongeluk opnieuw gecommit worden.
+docs/vent_data.json
+docs/vent_forecast.json
+docs/vent_learned.json
+docs/data.json
+docs/mowing_data.json
+
+
+# Privacy-sweep aug 2026: window_data.json droeg 48u kamertemperatuur én
+# -vochtigheid per kwartier (incl. de badkamer — een douche-/aanwezigheidsspoor)
+# en mowing_state.json dateerde met `last_seen_mow_date` een handmatige actie.
+# Beide leven nu in de artefact-gist; de lokale terugval mag niet terug in git.
+docs/window_data.json
+mowing_state.json
+
+# Privacy-assessment aug 2026: de twin2-maand-shards dragen kamer-temp/-vocht
+# per kwartier (gedragsdata — een meerdaagse amplitude-inzakking leest als
+# afwezigheid) en leven nu als twin2_history_<YYYY-MM>.json in de privé Gist
+# (GIST_ID, zie vent_io.py); de lokale terugval (bootstrap/tests/ERA5-overlay
+# van twin-eval) mag niet terug in git. De nachtverificatie-uitkomst gaat om
+# dezelfde reden naar de artefact-gist i.p.v. onder docs/.
+data/twin2_history/*.json
+docs/night_verify.json

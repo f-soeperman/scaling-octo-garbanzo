@@ -1,0 +1,93 @@
+name: Weerstation-nauwkeurigheid
+
+# Diagnostiek: vergelijkt het WU-station met Open-Meteo ERA5 + KNMI De Bilt,
+# publiceert docs/accuracy_data.json en groeit het archief in data/station_history.
+#
+# MAANDELIJKSE CRON (aug 2026). Dit draaide op aanvraag, en dat was precies het
+# probleem: het archief groeide alleen als iemand eraan dácht, en de gekalibreerde
+# constante verouderde maandenlang stilletijgend. Elke openstaande vraag over de
+# correctie (schuift de helling met het seizoen? houdt een windterm stand op een
+# koude maand?) heeft een reeks nodig die zichzelf aanvult. De run is
+# uitzonderingsstil: hij meldt alleen als het evaluatieprotocol een herijking
+# draagt (zie station_accuracy.recalibration_signal).
+on:
+  schedule:
+    # 1e van de maand, 04:10 lokaal — buiten het spitsuur van de andere workflows,
+    # en ruim ná de ERA5-archieflag van ~5 dagen voor de vorige maand.
+    - cron: "10 4 1 * *"
+      timezone: "Europe/Amsterdam"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Aantal dagen historie"
+        type: string
+        default: "30"
+      notify:
+        description: "Stuur Telegram-samenvatting"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: station-accuracy
+  cancel-in-progress: false
+
+jobs:
+  analyse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # Branch-tip: sinds deze workflow een groeiend archief bijwerkt
+      # (data/station_history) mag een tweede dispatch niet vanaf een oudere
+      # momentopname committen — dan rebaset hij de uren van de eerste eruit.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run station accuracy analysis
+        env:
+          WU_STATION_ID:      ${{ secrets.WU_STATION_ID }}
+          WU_API_KEY:         ${{ secrets.WU_API_KEY }}
+          # Optioneel: zonder dit secret slaat de buur-coherentietoets zichzelf over.
+          WU_NEIGHBOUR_IDS:   ${{ secrets.WU_NEIGHBOUR_IDS }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Op de cron zijn er geen inputs: 40 dagen dekt de vorige maand ruim,
+          # en het archief is idempotent op het UTC-uur dus de overlap stapelt niet.
+          ACCURACY_DAYS:      ${{ inputs.days || '40' }}
+          SEND_TELEGRAM:      ${{ inputs.notify && '1' || '' }}
+        run: python station_accuracy.py
+
+      - name: Commit dashboard data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/accuracy_data.json data/station_history
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "data: station accuracy refresh $(date -u +%Y-%m-%dT%H:%M) [skip ci]"
+            # Zelfde geharde blok als daily-check.yml: `|| true` liet een
+            # conflict-rebase stil mislukken en de maandelijkse archief-commit
+            # wegvallen. accuracy_data.json wordt volledig gegenereerd en de
+            # shards zijn per UTC-uur idempotent → onze versie wint (-X theirs);
+            # falen blijft hard en zichtbaar.
+            git rebase --abort 2>/dev/null || true
+            if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}"; then
+              git push
+            else
+              git rebase --abort 2>/dev/null || true
+              echo "::error::rebase failed, accuracy data not pushed"
+              exit 1
+            fi
+          fi

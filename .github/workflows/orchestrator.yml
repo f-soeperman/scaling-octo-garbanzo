@@ -1,0 +1,278 @@
+name: Timing Orchestrator
+
+# Eén centrale "klok"-loop die de periodieke pijplijnen op hun precieze lokale
+# tijd afvuurt via workflow_dispatch. GitHub's scheduler is best-effort en laat
+# de meeste cron-ticks vallen of vertraagt ze (zie window-notify.yml), waardoor
+# de dagelijkse jobs (weerbriefing, bodem, maaien, zandbak, verwarming) zonder
+# betrouwbare timing draaiden. Deze workflow bezit ALLEEN de timing — niet de
+# logica: elke job houdt zijn eigen workflow, permissions, retries en run_guarded.
+#
+# Twee cadansen naast elkaar: de meeste doelen zijn dagelijks (dedup-venster =
+# de lokale dag), bodem + maaien draaien uurlijks (dedup-venster = het lopende
+# klokuur). Dat de bodem-check vaker draait maakt hem niet spraakzamer: het
+# meldmoment zit in het script (06:00 / 06:15), niet in deze klok.
+#
+# Zelfde beproefde patroon als window/vent: de cron is enkel een *restart-kick*.
+# Elke run is een zelf-sturende ~5u-loop die op elke :00/:15/:30/:45-mark wakker
+# wordt; de concurrency-guard hieronder houdt exact één klok levend en start de
+# volgende loop zodra de huidige eindigt → effectief 24/7 dekking.
+#
+# De per-project crons blijven bestaan als *fallback* (~40 min ná het doel): als
+# deze orchestrator zou uitvallen, vuren die crons de jobs alsnog af. Een
+# dedup-guard in elke dagelijkse workflow voorkomt dat de fallback-cron dubbel
+# notificeert wanneer de orchestrator de job al deed.
+on:
+  schedule:
+    # Offset t.o.v. window (:07/:27/:47) en vent (:09/:29/:49).
+    - cron: "3,23,43 * * * *"
+      timezone: "Europe/Amsterdam"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Log welke jobs afgevuurd zouden worden, zonder te dispatchen (één tick)"
+        type: boolean
+        default: false
+
+# De orchestrator dispatcht enkel andere workflows — geen app-secrets nodig.
+# actions:write mag workflow_dispatch triggeren (de gedocumenteerde uitzondering
+# op de "GITHUB_TOKEN-events starten geen runs"-anti-recursieregel) en impliceert
+# actions:read voor `gh run list`. contents:read voor de checkout is genoeg.
+permissions:
+  actions: write
+  contents: read
+
+# Exact één klok tegelijk; een kick die tijdens een loop binnenkomt wacht en
+# neemt over zodra de huidige loop eindigt (zoals window/vent).
+concurrency:
+  group: orchestrator
+  cancel-in-progress: false
+
+jobs:
+  orchestrate:
+    runs-on: ubuntu-latest
+    # ~20 iteraties op 15-min-spacing ≈ 5u wall time; onder de 6u hard limit zodat
+    # de job schoon eindigt en een pending restart-kick kan overnemen.
+    timeout-minutes: 350
+    steps:
+      - name: Drive the daily-job clock
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+        run: |
+          set -u
+
+          # --- Ledger-helpers: alle "al gedraaid?"-checks zijn stateless en lezen
+          # het GitHub Actions run-ledger, zodat ze een loop-herstart overleven én
+          # vanzelf deduppen tegen de fallback-cron (beide landen in datzelfde ledger).
+
+          # Bestaat er een NIET-mislukte run van workflow $1 aangemaakt >= epoch $2?
+          # Fail-safe: een mislukte gh/jq-query (transiënte API-hapering) mag NOOIT
+          # als "0 runs" doorschieten — dat zou een dubbele dispatch veroorzaken
+          # (gediagnosticeerd juli 2026: een dubbele weerbriefing om 16:30 doordat
+          # deze check faalde en "niet gedaan vandaag" concludeerde). Bij een
+          # queryfout dus juist het omgekeerde aannemen: "al gedaan, sla over" —
+          # de per-project fallback-cron vangt een echt gemiste dispatch alsnog op.
+          handled_since () {
+            local wf="$1" since="$2" count
+            if ! count=$(gh run list --workflow "$wf" -L 40 \
+              --json createdAt,conclusion \
+              --jq "[.[] | select((.createdAt|fromdateiso8601) >= $since
+                     and .conclusion != \"failure\"
+                     and .conclusion != \"cancelled\"
+                     and .conclusion != \"timed_out\"
+                     and .conclusion != \"startup_failure\")] | length" 2>&1); then
+              echo "::warning::handled_since($wf) query mislukte — fail-safe: behandel als al gedaan (${count})"
+              return 0
+            fi
+            [ "${count:-0}" -gt 0 ]
+          }
+
+          # Heeft de bodem-check (daily-check.yml) sinds epoch $1 een geslaagde,
+          # VOLTOOIDE run? Maaien leest daarvan de verse data.json → moet er ná
+          # draaien. Het venster is het lopende klokuur (zie de tick hieronder),
+          # niet de dag: bij uurlijkse cadans moet maaien de bodem-run van dít
+          # uur afwachten, niet die van vanochtend.
+          soil_success_since () {
+            local since="$1" count
+            count=$(gh run list --workflow daily-check.yml -L 40 \
+              --json createdAt,status,conclusion \
+              --jq "[.[] | select((.createdAt|fromdateiso8601) >= $since
+                     and .status == \"completed\" and .conclusion == \"success\")] | length" 2>/dev/null || echo 0)
+            [ "${count:-0}" -gt 0 ]
+          }
+
+          dispatch () {
+            local wf="$1"; shift
+            if [ "${DRY_RUN}" = "1" ]; then
+              echo "DRY_RUN: zou dispatchen → $wf $*"
+              return 0
+            fi
+            echo "→ dispatch $wf $*"
+            gh workflow run "$wf" "$@" \
+              || echo "::warning::dispatch van $wf mislukt — volgende wake probeert opnieuw"
+          }
+
+          # Alle doeltijden zijn Europe/Amsterdam lokaal (minuten sinds middernacht).
+          # De uurlijkse doelen (bodem/maaien) hebben geen doeltijd maar een
+          # venster: `hour_start`, het begin van het lopende klokuur.
+          tick () {
+            local h m nowm day_start evening_epoch hour_start now_epoch rem rem_min q2 q3 q4
+            h=$(TZ=Europe/Amsterdam date +%H)
+            m=$(TZ=Europe/Amsterdam date +%M)
+            nowm=$(( 10#$h * 60 + 10#$m ))
+            day_start=$(TZ=Europe/Amsterdam date -d "today 00:00" +%s)
+            evening_epoch=$(TZ=Europe/Amsterdam date -d "today 20:00" +%s)
+            # Begin van het lopende klokuur. Bewust epoch-afronding i.p.v.
+            # `date -d "today ${h}:00"`: dat laatste is dubbelzinnig op de
+            # DST-nacht (het uur bestaat twee keer, of helemaal niet), terwijl
+            # Europe/Amsterdam altijd een heel-uurs offset heeft en de deling
+            # dus sowieso op de lokale uurgrens valt.
+            now_epoch=$(date +%s)
+            hour_start=$(( now_epoch - now_epoch % 3600 ))
+            echo "tick — lokaal ${h}:${m} (${nowm} min), day_start=${day_start}, hour_start=${hour_start}"
+
+            # Weerbriefing — 05:00
+            if [ "$nowm" -ge 300 ] && ! handled_since weather-briefing.yml "$day_start"; then
+              dispatch weather-briefing.yml
+            fi
+
+            # --- Bodem + maaien: ELK UUR ---------------------------------------
+            # Deze twee draaien sinds aug 2026 uurlijks i.p.v. één keer 's ochtends,
+            # zodat het dashboard met de dag meebeweegt: de regen die al gevallen
+            # is, de ET0 die tot nu toe verdampte (`partial_factor`), een verse
+            # forecast en een zojuist gelogde beurt water of maaibeurt. De
+            # *berichten* schalen bewust niet mee — beide scripts beslissen hun
+            # dagadvies zelf op één moment (bodem 06:00, maaien 06:15) en zwijgen
+            # de rest van de dag. De orchestrator bepaalt dus alleen nog de
+            # cadans, niet het meldmoment.
+            #
+            # Het venster is het lopende klokuur: op de eerste tick van het uur
+            # (:00) staat er nog geen run in het ledger → dispatch. Faalt die run,
+            # dan telt hij niet als "handled" en probeert de tick van :15 het
+            # gewoon opnieuw — zelfherstel binnen hetzelfde uur.
+            if ! handled_since daily-check.yml "$hour_start"; then
+              dispatch daily-check.yml
+            fi
+
+            # Maaien — zodra de bodem-check van DIT uur geslaagd is. Maaien leest
+            # `docs/data.json` read-only, dus het moet erná draaien; de bodem-run
+            # duurt een paar minuten, dus dit landt in de praktijk op de tick van
+            # :15 — precies het kwartier verschil dat de twee ochtendberichten
+            # ook uit elkaar houdt.
+            if soil_success_since "$hour_start" \
+               && ! handled_since mowing-notify.yml "$hour_start"; then
+              dispatch mowing-notify.yml
+            fi
+
+            # Gardena-besturing — ELK UUR, onvoorwaardelijk. De cadans is
+            # bewust constant (het script beslist zelf en de logvorm is
+            # vormvast, zie gardena_control.py); vóór de secrets bestaan is
+            # elke run een nette groene no-op. Geen soil_success-poort: het
+            # script leest de branch-tip data.json van de vórige bodem-run en
+            # bewaakt zelf de versheid (MAX_DATA_AGE_H).
+            if ! handled_since gardena-control.yml "$hour_start"; then
+              dispatch gardena-control.yml
+            fi
+
+            # Zandbak ochtend — 08:00 (alleen vóór het avond-slot afvuren)
+            if [ "$nowm" -ge 480 ] && [ "$nowm" -lt 1200 ] \
+               && ! handled_since sandbox-notify.yml "$day_start"; then
+              dispatch sandbox-notify.yml -f mode=morning
+            fi
+
+            # Zandbak avond — 20:00 (dedup vanaf 20:00, zodat de ochtendrun niet meetelt)
+            if [ "$nowm" -ge 1200 ] \
+               && ! handled_since sandbox-notify.yml "$evening_epoch"; then
+              dispatch sandbox-notify.yml -f mode=evening
+            fi
+
+            # Verwarmingsexperiment — maandag 21:00 (arm van de week)
+            if [ "$(TZ=Europe/Amsterdam date +%u)" = "1" ] && [ "$nowm" -ge 1260 ] \
+               && ! handled_since heating-temp-notify.yml "$day_start"; then
+              dispatch heating-temp-notify.yml
+            fi
+
+            # Zonwering-plan — 08:15 (na de weerbriefing, vóór de eerste zonlast)
+            if [ "$nowm" -ge 495 ] && ! handled_since shade-notify.yml "$day_start"; then
+              dispatch shade-notify.yml -f mode=plan
+            fi
+
+            # Zonwering-reminder — zodra reminder_at (uit de door plan-mode
+            # gecommitte shade_state.json) bereikt is. De orchestrator leest hier
+            # alleen WANNEER — het script hervalideert alles zelf en is idempotent
+            # (reminder_sent in de state), dus herhaalde dispatches tot de
+            # state-commit landt zijn goedkope no-ops.
+            rem=$(gh api "repos/${GH_REPO}/contents/shade_state.json" --jq '.content' 2>/dev/null \
+                  | base64 -d 2>/dev/null \
+                  | jq -r --arg today "$(TZ=Europe/Amsterdam date +%F)" \
+                      'select(.date == $today and .plan_sent == true and .reminder_sent != true)
+                       | .reminder_at // empty' 2>/dev/null) || rem=""
+            if [ -n "${rem:-}" ]; then
+              rem_min=$(( 10#${rem%%:*} * 60 + 10#${rem##*:} ))
+              if [ "$nowm" -ge "$rem_min" ]; then
+                dispatch shade-notify.yml -f mode=reminder
+              fi
+            fi
+
+            # de kinderkamer-nachtvoorspelling — 18:45
+            if [ "$nowm" -ge 1125 ] && ! handled_since night-forecast.yml "$day_start"; then
+              dispatch night-forecast.yml
+            fi
+
+            # Koelplan — 21:15 (welke ramen/deuren open vannacht)
+            if [ "$nowm" -ge 1275 ] && ! handled_since cooldown-notify.yml "$day_start"; then
+              dispatch cooldown-notify.yml
+            fi
+
+            # Weekjournaal — zondag 20:00
+            if [ "$(TZ=Europe/Amsterdam date +%u)" = "7" ] && [ "$nowm" -ge 1200 ] \
+               && ! handled_since weekjournaal.yml "$day_start"; then
+              dispatch weekjournaal.yml
+            fi
+
+            # Kampeerkompas — 4 slots (00:00 / 06:00 / 12:00 / 18:00). Elk slot
+            # heeft een eigen dedup-anker, anders dedupt de run van slot 1 alle
+            # latere slots weg (zelfde reden als evening_epoch bij de zandbak);
+            # de bovengrens houdt een laat opgestarte klok in het juiste slot.
+            # Bewust geen modulo-21600-bucket op de epoch: die grens is
+            # UTC-gebonden en verschuift met DST t.o.v. de lokale klok
+            # (06/12/18 bestaan altijd — de DST-wissel valt om 02/03).
+            q2=$(TZ=Europe/Amsterdam date -d "today 06:00" +%s)
+            q3=$(TZ=Europe/Amsterdam date -d "today 12:00" +%s)
+            q4=$(TZ=Europe/Amsterdam date -d "today 18:00" +%s)
+            if [ "$nowm" -lt 360 ] && ! handled_since camping-forecast.yml "$day_start"; then
+              dispatch camping-forecast.yml -f slot=00
+            fi
+            if [ "$nowm" -ge 360 ] && [ "$nowm" -lt 720 ] \
+               && ! handled_since camping-forecast.yml "$q2"; then
+              dispatch camping-forecast.yml -f slot=06
+            fi
+            if [ "$nowm" -ge 720 ] && [ "$nowm" -lt 1080 ] \
+               && ! handled_since camping-forecast.yml "$q3"; then
+              dispatch camping-forecast.yml -f slot=12
+            fi
+            if [ "$nowm" -ge 1080 ] && ! handled_since camping-forecast.yml "$q4"; then
+              dispatch camping-forecast.yml -f slot=18
+            fi
+          }
+
+          # Dry run = één tick (log intenties), geen loop.
+          if [ "${DRY_RUN}" = "1" ]; then
+            tick
+            exit 0
+          fi
+
+          # Zelf-gestuurde cadans: nu draaien, dan telkens op de volgende
+          # :00/:15/:30/:45-mark, tot ITERS iteraties (~5u wall time). De
+          # concurrency-guard houdt dit de enige levende klok.
+          ITERS=20
+          for i in $(seq 1 "${ITERS}"); do
+            echo "=== iteration ${i}/${ITERS} at $(date -u +%H:%M:%SZ) ==="
+            tick
+            if [ "${i}" -lt "${ITERS}" ]; then
+              now=$(date -u +%s)
+              next=$(( (now / 900 + 1) * 900 ))   # volgende 15-min-mark UTC (900s)
+              sleep $(( next - now ))
+            fi
+          done

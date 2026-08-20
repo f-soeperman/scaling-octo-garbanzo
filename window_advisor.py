@@ -1,0 +1,1963 @@
+#!/usr/bin/env python3
+"""
+window_advisor.py — Tado raam-koeladvies via Telegram (Project 6).
+
+Doel: op warme zomerdagen het huis koelen door ramen te openen wanneer het
+buiten kouder is dan in een kamer, en te sluiten zodra het buiten warmer wordt
+(warmte-instroom). Staat er een warme dag aan te komen, dan begint dat koelen
+al bij het comfortabele minimum (`low`) i.p.v. te wachten tot de kamer al te
+warm is — zoveel mogelijk warmte "eruit tanken" vóórdat het heet wordt. De
+roosters regelen de continue luchtkwaliteit, maar binnen een actieve
+warme-dag-run heeft frisse lucht ook op zichzelf een kleine, thermisch-neutrale
+voorkeur (open i.p.v. dicht) als er verder niets — koeling, oververhitting, noch
+vocht — op het spel staat; op een koele/onderdrukte dag blijft dit puur thermisch.
+
+Bronnen:
+  - tado  → binnentemperatuur + luchtvochtigheid per zone (kamer)
+  - Weather Underground PWS → echte buitentemperatuur nú
+  - Open-Meteo hourly → vooruitblik (koele dag onderdrukken, "open weer rond HH:00")
+  - Telegram (privé-chat: raam-advies + operationele alerts) → bezorging
+
+Auth: tado gebruikt sinds maart 2025 de OAuth2 device-code flow. Refresh tokens
+roteren (elke refresh herroept de vorige). De roterende token leeft in een
+*secret* Gist (TADO_GIST_ID via GIST_TOKEN, bestand `tado_token.json`) en wordt
+elke run meteen teruggeschreven. De eenmalige autorisatie doe je met
+`tado_auth_bootstrap.py`.
+
+Cadans: per-kamer toestandsmachine (zoals sandbox_notify). Eén check per kwartier,
+maar alléén een bericht wanneer een kamer van advies wisselt (open ↔ dicht).
+
+DRY_RUN=1 → print het bericht i.p.v. te versturen (token + state worden nog wél
+weggeschreven; de token-rotatie mág niet overgeslagen worden).
+"""
+
+import json
+import math
+import os
+import statistics
+import sys
+import time
+from datetime import datetime, timedelta
+
+import artefact_io
+import gist_io
+import om_bias
+from http_util import get_json
+from notify import run_guarded, sanitize_error, send_telegram
+
+import requests
+
+import shared_const
+from shared_const import format_date_nl, utc_now_iso
+from wu_bias import correct_temp
+
+# ── Kamers in scope (tado-zonenamen, hoofdletterongevoelig gematcht) ───────────
+# ROOMS = de kamers waarvoor we koeladvies geven (raam open/dicht + Telegram).
+ROOMS = ["Living room", "Nursery", "bedroom", "office"]
+# SENSOR_ROOMS = álle tado-zones die we uitlezen en in window_data.json publiceren, óók de
+# raamloze badkamer ("Shower") die er enkel als sensor bij zit: geen koeladvies (geen raam om
+# te openen), maar wél gepubliceerd zodat de ventilatie-tweeling (Project 8) haar temp +
+# verwarmingsstatus kan gebruiken. Advies/Telegram blijft strikt op ROOMS.
+SENSOR_ROOMS = ROOMS + ["Shower"]
+
+# Optionele brug tussen de gepubliceerde kamernaam en de échte tado-zonenaam:
+# env TADO_ZONE_ALIASES = JSON {gepubliceerde naam: tado-zonenaam}, bv.
+# {"Nursery": "<naam in de tado-app>"}. Dit is een privacy-grens — de repo en
+# de artefacten zijn publiek, de tado-app niet, dus een persoonsnaam als
+# zonenaam hoort hooguit in dit secret. Leeg/afwezig/onparseerbaar → geen brug
+# (zonenamen moeten dan letterlijk aan ROOMS voldoen, zoals voorheen).
+def _zone_aliases() -> dict[str, str]:
+    raw = os.getenv("TADO_ZONE_ALIASES", "")
+    if not raw:
+        return {}
+    try:
+        aliases = json.loads(raw)
+        return {str(k): str(v) for k, v in aliases.items()}
+    except (json.JSONDecodeError, AttributeError):
+        print("[tado] TADO_ZONE_ALIASES onparseerbaar — genegeerd", file=sys.stderr)
+        return {}
+
+# ── Beslis-parameters (hysterese om flapping te voorkomen) ─────────────────────
+COMFORT_HIGH = 23.5   # °C — standaard-comfortgrens (fallback voor kamers buiten ROOM_COMFORT)
+OPEN_MARGIN  = 1.5    # °C — open als buiten ≥ deze marge kouder is dan binnen
+CLOSE_MARGIN = 0.5    # °C — sluit als buiten tot binnen ± deze marge stijgt
+WARM_DAY_MAX = 22.0   # °C — onder deze verwachte dag-max: geen koeladvies
+LOOKAHEAD_H  = 12     # uur — vooruitblik voor "open weer rond HH:00"
+SMOOTH_WINDOW_H = 0.75  # uur — mediaanvenster op de buitentemp vóór decide() (anti-flapping)
+MIN_CLOSE_H  = 1.0    # uur — sluit een open raam niet voor een warmte-instroom die binnen
+                      #       dit venster alweer voorbij is (kort momentje ≠ moeite waard)
+SOLAR_AVG_WINDOW_MIN = 45  # min — middelingsvenster op de WU-pyranometer vóór de
+                      #       stralingsbiascorrectie (zie fetch_wu_recent_solar)
+SOFT_OPEN_MARGIN = 1.0  # °C — minimale buitenmarge voor de níet-thermische open-redenen
+                      #       (ontvochtigen). Móét > CLOSE_MARGIN blijven: eisten die redenen
+                      #       enkel `buiten ≤ binnen`, dan overlapten de open- en de
+                      #       sluitconditie in een band van CLOSE_MARGIN breed en klapte het
+                      #       advies elke kwartiertick heen en weer (gediagnosticeerd
+                      #       augustus 2026: 7 flips tussen 08:00 en 13:15, telkens met
+                      #       binnen en buiten binnen ~0.4°C van elkaar).
+
+# ── Per-kamer comfortband (low, high) in °C ────────────────────────────────────
+# Bóven `high` is de kamer te warm → koelen (raam open als buiten kouder is). Ónder
+# `low` is de kamer koel genoeg → sluiten om niet door te koelen. Daartussen een dode
+# band: het advies blijft staan (geen flapping). Kamers die hier niet in staan vallen
+# terug op (COMFORT_HIGH, COMFORT_HIGH) → het oude gedrag met één drempel.
+ROOM_COMFORT = {
+    "Living room": (19.5, 22.0),
+    "Nursery":         (17.0, 18.0),
+    "bedroom":     (16.0, 18.0),
+    "office":      (20.0, 22.0),
+}
+
+# ── Vocht-comfort (ventilatie balanceert temperatuur én luchtvochtigheid) ─────────
+# Op een vochtig huis met een hekel aan warmte wringt puur thermisch koelen op muffe
+# zomerdagen: een raam open om te koelen haalt dan klamme lucht binnen. We projecteren
+# met `vent_rh` (convert_rh) wat de kamer-RH wórdt als je ventileert, en laten dat de
+# open-drempel verschuiven (muf = strenger, droog = soepeler), met een hard veto-plafond.
+RH_COMFORT       = 60.0   # % — streef geprojecteerde kamer-RH na ventileren
+RH_HARD_CAP      = 72.0   # % — daarboven nooit openen (te muf), forceert dicht
+RH_TEMP_K        = 0.15   # °C per %RH afwijking van RH_COMFORT (de straf spant zo bijna de
+                          #      hele 0–2°C op over de 60→72%-band, dus streef→veto)
+RH_PENALTY_MAX   = 2.0    # °C — max muf-straf: open-drempel omhoog
+RH_BONUS_MAX     = 0.5    # °C — max droog-bonus: open-drempel omlaag (asymmetrisch & klein,
+                          #      zodat het gedrag op gewone droge dagen vrijwel onveranderd blijft)
+RH_DRYOUT_MIN    = 65.0   # % — binnen-RH waarboven droge buitenlucht mag openen
+RH_DRYOUT_MARGIN = 8.0    # % — buitenlucht moet ≥ deze marge droger (vent_rh ≤ RH − marge)
+RH_FRESH_MAX     = 55.0   # % — frisse lucht (de tie-break zónder thermisch belang) alleen bij
+                          #     écht aangename lucht, strenger dan RH_COMFORT. Samen met de
+                          #     OPEN_MARGIN-eis en de duur-poort in de meldlaag maakt dit de
+                          #     frisse-lucht-reden zeldzaam in plaats van de meest voorkomende.
+
+# ── Meldlaag: hoeveel berichten mag dit project sturen? ───────────────────────────
+# Het advies zélf blijft elke kwartiertick herrekend (het dashboard toont de volledige
+# waarheid); deze constanten bepalen alleen wát daarvan een Telegram-bericht waard is.
+# Vóór augustus 2026 was er géén boekhouding: elke advieswijziging van elke kamer in elke
+# tick stuurde een bericht — een plafond van ~96 per kamer per dag.
+MIN_OPEN_H = 1.5          # uur — een korter vóórspeld open-venster is geen bericht waard.
+                          #       Het dashboard toonde letterlijk "Nu open tot ~13:15" om
+                          #       13:15: een raam van een kwartier, terwijl het echte
+                          #       koelvenster die dag pas om 18:45 begon.
+OPEN_MSG_COOLDOWN_H  = 6.0  # uur — minimale tijd tussen twee open-berichten per kamer
+CLOSE_MSG_COOLDOWN_H = 6.0  # uur — idem voor de sluitingen
+                          # Bewust een cooldown en géén kalenderdag-budget meer (aug 2026).
+                          # De koelcyclus loopt dwars door middernacht: een raam gaat 's avonds
+                          # open en de volgende ochtend dicht. Met een budget dat om 00:00
+                          # reset kon één onderdrukt open-bericht blijven hangen en precies op
+                          # de dagwissel alsnog vuren — waarmee het het budget van de kómende
+                          # avond opat, zodat die avond weer onderdrukt werd en het bericht
+                          # weer naar 00:00 schoof. Eenmaal over middernacht kwam het er nooit
+                          # meer vanaf: gemeten 11–12 aug 2026 kregen Nursery en bedroom hun
+                          # open-advies om 00:00 terwijl decide() al om 20:15/20:30 open zei —
+                          # bijna vier uur van de beste koelte per nacht kwijt, elke nacht
+                          # opnieuw. Een cooldown telt vanaf het vórige bericht en heeft dus
+                          # geen grens die gestolen kan worden. In het waargenomen ritme
+                          # (open 's avonds, dicht in de ochtend) levert hij exact hetzelfde
+                          # aantal berichten als het oude budget: één open + één dicht per dag.
+OPEN_MSG_MAX_AGE_H = 2.0  # uur — een open-kandidaat die al langer dan dit open-waardig is,
+                          # is geen nieuws meer maar een late herhaling. Zwijgen is dan beter
+                          # dan alsnog vuren: "zet de ramen open" om 00:00 over een situatie
+                          # die sinds 20:15 speelt, wekt de ontvanger voor koelte die al
+                          # grotendeels verdampt is. Vangt de gevallen die de cooldown niet
+                          # dekt (bijv. een open die bij de flip nog op de duur-poort strandde).
+PLAN_HOUR = 8             # de eerste niet-onderdrukte run op/ná dit lokale uur stuurt het
+                          # dagplan naar de groep. "Eerste run ná" en niet "om 08:00": de
+                          # workflow is een self-driven kwartierlus die elke ~5u herstart.
+MAX_PLAN_WINDOWS = 3      # hoeveel open-vensters het dagplan per kamer noemt. De vooruitblik
+                          # loopt PREDICT_HORIZON_H (18u) vooruit; alles daarbinnen opsommen
+                          # maakt van een overzicht een tabel. Drie dekt het realistische
+                          # patroon (nu open → dicht in de middaghitte → 's avonds weer open).
+URGENT_HEAT_C = 2.0       # °C — buiten ≥ zoveel wármer dan binnen terwijl wij gemeld hebben
+                          #      dat het raam openstaat → er stroomt echt hitte naar binnen
+URGENT_COOLDOWN_H = 3.0   # uur — minimale tijd tussen twee urgente berichten per kamer
+MAX_URGENT_MSGS_PER_DAY = 2  # harde bovengrens per kamer, zodat urgentie zelf niet flappert
+
+
+def comfort_band(room: str) -> tuple[float, float]:
+    """(low, high) comfortgrenzen voor een kamer; fallback op de globale COMFORT_HIGH."""
+    return ROOM_COMFORT.get(room, (COMFORT_HIGH, COMFORT_HIGH))
+
+
+# ── Vocht: buiten-RH omrekenen naar kamertemperatuur (ventilatie/schimmel) ────────
+
+def _es(temp_c: float) -> float:
+    """Saturatiedampdruk (kPa) via Magnus/Tetens (FAO-56 Eq. 11)."""
+    return 0.6108 * math.exp(17.27 * temp_c / (temp_c + 237.3))
+
+
+def convert_rh(rh_out: float | None, t_out: float | None,
+               t_in: float | None) -> float | None:
+    """Zet de buiten-RH (%) bij buitentemp `t_out` om naar de RH (%) die diezelfde
+    lucht zou hebben bij kamertemp `t_in` — de absolute dampdruk blijft behouden
+    (alleen het saturatiepunt schuift met de temperatuur). Dit is de RH die de kamer
+    benadert als je ventileert met buitenlucht: ligt 'm onder de huidige binnen-RH,
+    dan droogt ventileren de kamer (minder schimmelrisico). `rh_out`/`t_out` moeten
+    een consistent sensorpaar zijn (rauwe meting, niet de biascorrectie). None bij
+    ontbrekende invoer."""
+    if rh_out is None or t_out is None or t_in is None:
+        return None
+    e_actual = (rh_out / 100.0) * _es(t_out)   # werkelijke dampdruk buiten (kPa)
+    rh_in = e_actual / _es(t_in) * 100.0
+    return max(0.0, min(100.0, rh_in))
+
+# ── Dashboard-voorspelling (heuristiek, geen thermisch huismodel) ──────────────
+BIAS_DECAY_H    = 12    # uur — stationscorrectie dooft lineair uit over dit venster
+RH_REF_T        = 20.0  # °C — referentietemp voor de genormaliseerde vocht-lijn op het
+                        # dashboard ("RH bij 20°"): buiten-RH via convert_rh() omgerekend naar
+                        # één vaste kamertemp, zodat de lijn de échte vochtverandering toont en
+                        # niet de temperatuur-gedreven RH-schommeling. Wordt op dezelfde manier
+                        # als de temperatuur geijkt op het station (bias + BIAS_DECAY_H-uitdoving).
+TREND_WINDOW_H  = 2.0   # uur — historie-venster voor de binnentemp-trend (kort → volgt "nu")
+GAP_BREAK_MIN   = 40    # min — een gat groter dan dit breekt het trend-venster: de fit gebruikt
+                        # alleen de meest recente aaneengesloten reeks, zodat een gepauzeerde of
+                        # herstarte loop (stale samples vóór het gat) de helling niet vervuilt/omdraait
+TREND_MAX_SLOPE = 1.5   # °C/uur — clamp op de geschatte *binnen*trend. Een kamer zit achter
+                        # thermische massa en beweegt nooit echt sneller, dus deze clamp vangt
+                        # enkel een rare meting af.
+OUT_TREND_MAX   = 5.0   # °C/uur — aparte, ruimere clamp op de *buiten*trend. Buitenlucht heeft
+                        # geen thermische massa: heldere avondafkoeling na een hete dag of een
+                        # onweersuitstroom haalt makkelijk 2–4 °C/uur. Met de binnen-clamp (1.5)
+                        # toonde het dashboard structureel de clamp i.p.v. de werkelijkheid
+                        # (28 juli 2026: −1.5 getoond terwijl het station −2.6 °C/uur daalde).
+                        # 5 °C/uur vangt nog steeds een echt kapotte meting af.
+RH_TREND_MAX    = 15.0  # %RH/uur — clamp op de vochttrend (richtingvector op het scatterplot)
+TREND_CAP_H     = 4     # uur — trend wordt max. zoveel uur vooruit geprojecteerd, dan vlak
+PREDICT_HORIZON_H = 18  # uur — hoe ver vooruit we naar een open-moment zoeken (rest van de dag)
+PREDICT_STEP_MIN  = 15  # min — raster waarop open/dicht-momenten worden gevonden (interpoleert
+                        # tussen de uurlijkse forecast-punten, zodat tijden niet op het hele uur plakken)
+HISTORY_KEEP    = 192   # samples — rollend venster aan binnen/buiten-metingen (~2 dagen bij kwartiercadans)
+
+# ── Locatie (Utrecht) ──────────────────────────────────────────────────────────
+LATITUDE  = shared_const.LATITUDE
+LONGITUDE = shared_const.LONGITUDE
+TZ        = shared_const.TZ
+
+# ── tado endpoints ──────────────────────────────────────────────────────────────
+# Publieke device-flow client-id van de tado-app (algemeen bekend, geen geheim).
+TADO_CLIENT_ID = "1bb50063-6b0c-4d11-bd99-387f4a91cc46"
+TADO_TOKEN_URL = "https://login.tado.com/oauth2/token"
+TADO_API       = "https://my.tado.com/api/v2"
+
+# ── Gist-opslag ──────────────────────────────────────────────────────────────────
+TOKEN_FILE = "tado_token.json"     # {"refresh_token": "..."}
+STATE_FILE = "window_state.json"   # {"rooms": {...}, "last_updated": ..., "last_notification": ...}
+
+# ── Dashboard-artefact ───────────────────────────────────────────────────────────
+# Leeft sinds de privacy-sweep (aug 2026) in de privé artefact-gist
+# (ARTEFACT_GIST_ID), niet meer onder docs/. Reden: het artefact draagt per kamer
+# 48 uur temperatuur én luchtvochtigheid op kwartierresolutie — inclusief de
+# badkamer, waar de vochtpieken het douche-ritme van het huishouden tekenen en
+# dagen zónder pieken als afwezigheid lezen. Dat is hetzelfde soort spoor waarvoor
+# vent_data.json al geprivatiseerd was (daar de gemelde raamstanden), alleen dan
+# gemeten i.p.v. gemeld. Zonder het secret valt artefact_io terug op het lokale
+# pad (bootstrap/tests).
+DASHBOARD_FILE = os.path.join("docs", "window_data.json")
+
+
+# ── Gist I/O ─────────────────────────────────────────────────────────────────────
+
+def _gist_env():
+    gist_id = os.environ["TADO_GIST_ID"]
+    token   = os.environ["GIST_TOKEN"]
+    return gist_id, token
+
+
+def gist_read_file(filename: str) -> str | None:
+    # Raist bewust bij netwerk-/HTTP-fouten: zonder token-file geen run.
+    gist_id, token = _gist_env()
+    return gist_io.read_file(gist_id, filename, token=token, timeout=20)
+
+
+def gist_write_files(files: dict[str, str]) -> None:
+    gist_id, token = _gist_env()
+    payload = {"files": {fn: {"content": content} for fn, content in files.items()}}
+    r = requests.patch(
+        f"https://api.github.com/gists/{gist_id}",
+        headers={"Authorization": f"Bearer {token}",
+                 "Accept": "application/vnd.github+json"},
+        json=payload,
+        timeout=20,
+    )
+    r.raise_for_status()
+
+
+# ── tado auth (refresh-token flow, met rotatie-persistentie) ──────────────────────
+
+# Retry-schema voor het persisteren van de geroteerde refresh token. tado herroept
+# de oude token bij rotatie, dus één mislukte Gist-PATCH = keten gebroken =
+# handmatige re-bootstrap. De PATCH is idempotent → agressief retryen mag.
+TOKEN_PERSIST_DELAYS = (2, 4, 8, 16, 32)  # s — ~6 pogingen, ~62s worst case
+
+# Retry-schema voor de tado-requests zelf (token-refresh + per-zone calls). tado's
+# API heeft af en toe een kortstondige ReadTimeout/verbindingshikje (geobserveerd);
+# zonder retry doet dat de hele kwartier-iteratie stranden vóórdat het dashboard
+# ook maar geschreven is (main() faalt al vóór write_dashboard()). Kort en klein
+# (twee pogingen na de eerste) zodat een échte, langdurige tado-storing niet een
+# hele iteratie laat verzuipen in wachttijd — dat geval blijft gewoon een mislukte
+# iteratie (de volgende kwartier-tick probeert opnieuw). Alleen transiënte
+# netwerkfouten (timeout/verbinding) retryen; een HTTP-foutstatus (401 etc.) is
+# geen netwerkhikje en moet meteen zichtbaar falen.
+TADO_RETRY_DELAYS = (3, 8)  # s — ~3 pogingen, ~11s extra worst case per call
+
+
+def _tado_request(method, url: str, **kwargs):
+    """`method` (bv. `requests.get`/`requests.post`) met retry op transiënte
+    timeouts/verbindingsfouten — zie TADO_RETRY_DELAYS hierboven."""
+    last_err: Exception | None = None
+    for attempt, delay in enumerate((0, *TADO_RETRY_DELAYS), start=1):
+        if delay:
+            time.sleep(delay)
+        try:
+            return method(url, **kwargs)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            last_err = e
+            print(f"[tado] poging {attempt} mislukt ({sanitize_error(e)})"
+                  + (", retry" if attempt <= len(TADO_RETRY_DELAYS) else ""))
+    raise last_err
+
+
+def _persist_rotated_token(new_refresh: str) -> None:
+    """Schrijf de geroteerde refresh token naar de Gist, met retry/backoff.
+
+    Bij definitief falen: Telegram-alert (de keten is dan mogelijk gebroken) en
+    doorgaan — de access token van déze run is nog geldig, dus advies + dashboard
+    kloppen nog. NOOIT de token zelf printen of doorsturen (publieke logs)."""
+    last_err: Exception | None = None
+    for attempt, delay in enumerate((0, *TOKEN_PERSIST_DELAYS), start=1):
+        if delay:
+            time.sleep(delay)
+        try:
+            gist_write_files({TOKEN_FILE: json.dumps({"refresh_token": new_refresh}, indent=2)})
+            if attempt > 1:
+                print(f"[tado] token-persist gelukt op poging {attempt}")
+            return
+        except Exception as e:
+            last_err = e
+            print(f"[tado] token-persist poging {attempt} mislukt: {sanitize_error(e)}")
+    send_telegram(
+        "⚠️ *tado window advisor*: kon de geroteerde refresh token niet opslaan — "
+        "token-keten mogelijk gebroken. Re-run `tado_auth_bootstrap.py` als de "
+        "volgende runs op 401 stuklopen.\n"
+        f"Laatste fout: {sanitize_error(last_err)}",
+        parse_mode="Markdown",
+    )
+
+
+def get_access_token() -> str:
+    """Wissel de opgeslagen refresh token in voor een access token en schrijf de
+    (geroteerde) refresh token meteen terug naar de Gist."""
+    raw = gist_read_file(TOKEN_FILE)
+    if not raw:
+        print(
+            f"[tado] Geen `{TOKEN_FILE}` in de Gist. Draai eerst eenmalig "
+            "`python tado_auth_bootstrap.py` om te autoriseren.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    refresh_token = json.loads(raw).get("refresh_token")
+    if not refresh_token:
+        print(f"[tado] `{TOKEN_FILE}` bevat geen refresh_token.", file=sys.stderr)
+        sys.exit(1)
+
+    r = _tado_request(
+        requests.post,
+        TADO_TOKEN_URL,
+        data={
+            "client_id":     TADO_CLIENT_ID,
+            "grant_type":    "refresh_token",
+            "refresh_token": refresh_token,
+        },
+        timeout=20,
+    )
+    if r.status_code != 200:
+        # Geen token loggen; wel statuscode zodat een verbroken keten zichtbaar is.
+        print(
+            f"[tado] Refresh mislukt (HTTP {r.status_code}). Mogelijk is de "
+            "token-keten verbroken — draai `tado_auth_bootstrap.py` opnieuw.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    tok = r.json()
+
+    # Rotatie: bewaar de nieuwe refresh token onmiddellijk (de oude is herroepen).
+    new_refresh = tok.get("refresh_token", refresh_token)
+    _persist_rotated_token(new_refresh)
+
+    return tok["access_token"]
+
+
+def _tado_get(path: str, access_token: str) -> dict:
+    r = _tado_request(
+        requests.get,
+        f"{TADO_API}{path}",
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=20,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def parse_heating(state: dict) -> tuple[bool, float | None]:
+    """Lees de verwarmingsstatus uit een tado zone-`/state`-respons: (aan?, vermogen%).
+
+    Driver = het gemeten verwarmingsvermogen `activityDataPoints.heatingPower.percentage`
+    (0..100) — dat is de directe "wordt er nú actief verwarmd"-uitlezing. `aan` = vermogen > 0,
+    óf (bij een zone zonder heatingPower-datapunt) `setting.power == "ON"` mét een setpoint. Het
+    model heeft geen verwarmingsterm, dus deze vlag laat de tweeling die kamer uit de kalibratie
+    houden zolang er gestookt wordt. None-vermogen bij een zone die het datapunt niet levert."""
+    adp = state.get("activityDataPoints", {}) or {}
+    power_pct = (adp.get("heatingPower") or {}).get("percentage")
+    if power_pct is not None:
+        return power_pct > 0.0, power_pct
+    # Geen gemeten vermogen → val terug op de aan/uit-stand van de thermostaat.
+    setting = state.get("setting", {}) or {}
+    on = str(setting.get("power", "")).upper() == "ON" and setting.get("temperature") is not None
+    return on, None
+
+
+def fetch_room_temps(access_token: str) -> dict[str, dict]:
+    """Geeft per kamer in SENSOR_ROOMS: {"inside": °C, "humidity": %, "heating": bool,
+    "heating_power": %|None} — de badkamer ("Shower") zit er als sensor-only kamer bij."""
+    home_id = _tado_get("/me", access_token)["homes"][0]["id"]
+    zones   = _tado_get(f"/homes/{home_id}/zones", access_token)
+
+    wanted = {name.lower(): name for name in SENSOR_ROOMS}
+    # De alias-brug wint van de letterlijke naam: een tado-zone die volgens
+    # TADO_ZONE_ALIASES bij een gepubliceerde kamer hoort, matcht óók.
+    for canonical, tado_name in _zone_aliases().items():
+        if canonical in SENSOR_ROOMS:
+            wanted[tado_name.lower()] = canonical
+    out: dict[str, dict] = {}
+    for z in zones:
+        canonical = wanted.get((z.get("name") or "").lower())
+        if not canonical:
+            continue
+        state = _tado_get(f"/homes/{home_id}/zones/{z['id']}/state", access_token)
+        sdp   = state.get("sensorDataPoints", {}) or {}
+        inside = (sdp.get("insideTemperature") or {}).get("celsius")
+        humid  = (sdp.get("humidity") or {}).get("percentage")
+        heating, heat_pct = parse_heating(state)
+        out[canonical] = {"inside": inside, "humidity": humid,
+                          "heating": heating, "heating_power": heat_pct}
+
+    missing = [r for r in SENSOR_ROOMS if r not in out]
+    if missing:
+        print(f"[tado] Niet gevonden als zone: {missing}", file=sys.stderr)
+    return out
+
+
+# ── Buitentemperatuur: WU nú, Open-Meteo als fallback + vooruitblik ───────────────
+
+def fetch_wu_current_temp() -> tuple[float | None, float | None, float | None]:
+    """Huidige buitentemperatuur (metric.temp) + instraling (solarRadiation,
+    W/m², top-level) + relatieve luchtvochtigheid (humidity, %, top-level) van het
+    eigen WU-station. De instraling drijft de stralingsbiascorrectie (zie wu_bias.py);
+    de RH wordt (met de rauwe temp) gebruikt om de buiten-RH naar kamertemperatuur om
+    te rekenen. Returnt (temp, solar, humidity); elk None als onbeschikbaar."""
+    station_id = os.environ.get("WU_STATION_ID")
+    api_key    = os.environ.get("WU_API_KEY")
+    if not (station_id and api_key):
+        return None, None, None
+    url = (
+        "https://api.weather.com/v2/pws/observations/current"
+        f"?stationId={station_id}&format=json&units=m"
+        f"&numericPrecision=decimal&apiKey={api_key}"
+    )
+    try:
+        r = requests.get(url, timeout=10)
+        if r.status_code != 200:
+            return None, None, None
+        obs_list = r.json().get("observations", [])
+        if not obs_list:
+            return None, None, None
+        obs = obs_list[0]
+        return ((obs.get("metric", {}) or {}).get("temp"),
+                obs.get("solarRadiation"), obs.get("humidity"))
+    except Exception as e:
+        # sanitize_error: de WU-URL bevat apiKey — nooit rauw printen.
+        print(f"[WU] current call failed: {sanitize_error(e)}")
+        return None, None, None
+
+
+# De WU *history*-endpoints leveren per record een High/Low/Avg-samenvatting; alleen
+# het *current*-endpoint kent het kale `solarRadiation`. `solarRadiationHigh` staat
+# vooraan omdat Project 7 de SOLAR_BIAS_SLOPE op exact dát veld fit
+# (station_accuracy.fetch_wu_hourly) — zo blijft de driver op dezelfde as als de
+# kalibratie. De andere twee zijn vangnet voor stations/tiers die ze anders leveren.
+SOLAR_OBS_FIELDS = ("solarRadiationHigh", "solarRadiationAvg", "solarRadiation")
+
+
+def _obs_solar(obs: dict) -> float | None:
+    """Eerste aanwezige instralingsveld uit een WU-observatie-record."""
+    for key in SOLAR_OBS_FIELDS:
+        val = obs.get(key)
+        if val is not None:
+            return val
+    return None
+
+
+def fetch_wu_recent_solar(now: datetime, window_min: float = SOLAR_AVG_WINDOW_MIN) -> float | None:
+    """Mediaan van de WU-pyranometer over de laatste `window_min` minuten, via het
+    raw (~5-min) `history/all`-endpoint voor vandaag.
+
+    Instraling schommelt écht binnen seconden (passerende bewolking) — dat is geen
+    sensorruis maar een fysiek feit. Het stralingskap-opwarmeffect dat de bias
+    veroorzaakt heeft juist thermische traagheid over meerdere minuten, dus een
+    enkel instant-sample (de `current`-call, `fetch_wu_current_temp`) importeerde
+    zo'n voorbijgaande wolkenschaduw 1-op-1 in de stralingsbiascorrectie — de
+    piekige "gecorrigeerde" buitentemp tussen 12–15u op dagen met wisselende
+    bewolking (gediagnosticeerd juli 2026). Middelen over een venster benadert de
+    kap-traagheid i.p.v. het instant-moment. None bij falen/geen recente data —
+    de aanroeper valt dan terug op de instant-waarde.
+
+    HISTORIE (aug 2026): deze functie leverde vanaf de deploy structureel None,
+    genoteerd als "history/all geeft non-200, vermoedelijk een product-tier-gap".
+    Dat klopte niet — het endpoint antwoordt gewoon, maar hier werd de veldnaam van
+    het *current*-endpoint (`solarRadiation`) gelezen terwijl history-records
+    `solarRadiationHigh` dragen (zoals station_accuracy.py en soil_model.py al
+    deden). `vals` bleef dus leeg en de lege-tak returnde None **zonder te printen**,
+    waardoor een maand lang alleen de terugval zichtbaar was en nooit de oorzaak.
+    Vandaar dat élke onbruikbare uitkomst hieronder een diagnose print."""
+    station_id = os.environ.get("WU_STATION_ID")
+    api_key    = os.environ.get("WU_API_KEY")
+    if not (station_id and api_key):
+        return None
+    url = (
+        "https://api.weather.com/v2/pws/history/all"
+        f"?stationId={station_id}&format=json&units=m"
+        f"&date={now.strftime('%Y%m%d')}&numericPrecision=decimal&apiKey={api_key}"
+    )
+    try:
+        r = requests.get(url, timeout=15)
+        if r.status_code != 200:
+            # Diagnostisch: history/all vereist mogelijk een ander entitlement dan
+            # de current/hourly/daily-endpoints die elders al werken — de status hier
+            # onderscheidt dat van "geen data vandaag" (leeg maar 200).
+            print(f"[WU] history/all status {r.status_code} — val terug op lokale mediaan")
+            return None
+        obs_list = r.json().get("observations", [])
+    except Exception as e:
+        # sanitize_error: de WU-URL bevat apiKey — nooit rauw printen.
+        print(f"[WU] history/all call failed: {sanitize_error(e)}")
+        return None
+    cutoff = now - timedelta(minutes=window_min)
+    vals, with_solar = [], 0
+    for obs in obs_list:
+        ts = obs.get("obsTimeUtc")
+        solar = _obs_solar(obs)
+        if not ts or solar is None:
+            continue
+        with_solar += 1
+        try:
+            t = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if cutoff <= t <= now:
+            vals.append(solar)
+    if not vals:
+        # Nooit stil terugvallen: dit onderscheidt "endpoint leeg", "records zonder
+        # instralingsveld" (de bug hierboven) en "wel data, maar niets recents".
+        print(f"[WU] history/all: {len(obs_list)} records, {with_solar} met instraling, "
+              f"0 binnen de laatste {window_min:.0f} min — val terug op lokale mediaan")
+        return None
+    return statistics.median(vals)
+
+
+def _parse_local(t: str) -> datetime:
+    """Open-Meteo geeft met timezone=Europe/Amsterdam naïeve lokale tijden terug; maak
+    ze tijdzone-bewust zodat ze veilig met `datetime.now(TZ)` te vergelijken zijn."""
+    dt = datetime.fromisoformat(t)
+    return dt.replace(tzinfo=TZ) if dt.tzinfo is None else dt
+
+
+def fetch_open_meteo() -> dict:
+    """Huidige temp + uurlijkse forecast (vandaag + morgen).
+
+    Drie pogingen met korte backoff: Open-Meteo's free tier heeft incidentele
+    5xx-hiccups (geobserveerd: ~17% kans op een 502 binnen een ~5u-venster). Open-Meteo
+    is een harde dependency — zonder forecast geen dashboard, geen warm-day-gate, geen
+    open-tijd-voorspelling — dus één tikkie mag niet de hele iteratie laten sneuvelen.
+    """
+    params = {
+        "latitude":     LATITUDE,
+        "longitude":    LONGITUDE,
+        "current":      "temperature_2m,shortwave_radiation,relative_humidity_2m",
+        "hourly":       "temperature_2m,relative_humidity_2m",
+        "timezone":     "Europe/Amsterdam",
+        "forecast_days": 2,
+    }
+    data = get_json("https://api.open-meteo.com/v1/forecast", params,
+                    timeout=20, label="open-meteo")
+    cur = data.get("current") or {}
+    current = cur.get("temperature_2m")
+    h = data.get("hourly", {})
+    # `rh` (uurlijkse model-RH) voedt de genormaliseerde vocht-voorspelling op het dashboard.
+    # Los indexeren i.p.v. mee-zippen: ontbreekt het RH-veld, dan blijven de temp-rijen intact.
+    hums = h.get("relative_humidity_2m", [])
+    rows = [
+        {"dt": _parse_local(t), "temp": temp,
+         "rh": hums[i] if i < len(hums) else None}
+        for i, (t, temp) in enumerate(zip(h.get("time", []), h.get("temperature_2m", [])))
+    ]
+    # `current_solar` = fallback-driver voor de biascorrectie als de WU-pyranometer ontbreekt.
+    # `current_humidity` = fallback voor de RH-omrekening als het WU-station geen RH geeft.
+    return {"current": current, "current_solar": cur.get("shortwave_radiation"),
+            "current_humidity": cur.get("relative_humidity_2m"), "hourly": rows}
+
+
+def day_max_temp(hourly: list[dict], today) -> float | None:
+    temps = [r["temp"] for r in hourly if r["dt"].date() == today and r["temp"] is not None]
+    return max(temps) if temps else None
+
+
+def upcoming_max_temp(hourly: list[dict], now: datetime, horizon_h: int = 24) -> float | None:
+    """Hoogste verwachte temperatuur in de komende `horizon_h` uur. Vooruitkijkend (niet
+    op kalenderdag) zodat 'staat er een warme dag aan?' ook diep in de nacht klopt — de
+    warme piek kan dan later vandaag óf morgen liggen."""
+    cutoff = horizon_h * 3600
+    temps = [
+        r["temp"] for r in hourly
+        if r["temp"] is not None and 0.0 <= (r["dt"] - now).total_seconds() <= cutoff
+    ]
+    return max(temps) if temps else None
+
+
+def next_reopen(hourly: list[dict], inside: float, now: datetime) -> datetime | None:
+    """Eerste forecast-uur binnen LOOKAHEAD_H waarop buiten weer onder
+    (binnen - OPEN_MARGIN) zakt → datetime, anders None."""
+    for r in hourly:
+        if r["dt"] <= now or r["temp"] is None:
+            continue
+        if (r["dt"] - now).total_seconds() > LOOKAHEAD_H * 3600:
+            break
+        if r["temp"] <= inside - OPEN_MARGIN:
+            return r["dt"]
+    return None
+
+
+def reopen_hour(hourly: list[dict], inside: float, now: datetime) -> str | None:
+    """Idem als next_reopen, maar als 'HH:MM'-string (voor de Telegram-hint)."""
+    rt = next_reopen(hourly, inside, now)
+    return rt.strftime("%H:%M") if rt else None
+
+
+def reopen_is_brief(hourly: list[dict], inside: float | None, now: datetime) -> bool:
+    """True als buiten binnen MIN_CLOSE_H alweer onder de open-drempel zakt — een kort,
+    voorbijgaand warmte-instroommomentje dat een open raam sluiten niet de moeite waard
+    maakt. Voorwaarde voor de 'laat-maar-openstaan'-onderdrukking in decide()."""
+    if inside is None:
+        return False
+    rt = next_reopen(hourly, inside, now)
+    if rt is None:
+        return False
+    return (rt - now).total_seconds() <= MIN_CLOSE_H * 3600
+
+
+# ── Slimme combinatie: forecast geijkt op het eigen station + binnentrend ─────────
+
+def station_bias(outside_source: str, outside: float | None,
+                 om_now: float | None) -> float:
+    """De actuele stationsoffset (WU_nu − model_nu). 0 zonder WU-meting: dan is er niets
+    om op te ijken en zou het "verschil" het model met zichzelf vergelijken."""
+    if outside_source == "wu" and outside is not None and om_now is not None:
+        return round(outside - om_now, 2)
+    return 0.0
+
+
+def correct_forecast(hourly: list[dict], bias: float, now: datetime,
+                     learned: dict | None = None) -> list[dict]:
+    """Ijk de Open-Meteo forecast op het WU-station. Twee lagen, bewust gescheiden:
+
+    1. **Blijvende modelbias** — Open-Meteo leest op onze locatie structureel te warm,
+       's nachts het sterkst (zie `om_bias.py`). Die correctie geldt op *elke*
+       vooruitblik, want ze verdwijnt niet met de tijd.
+    2. **Transiënte stationsoffset** — wat er op dít moment nog bovenop komt
+       (`bias` = WU_nu − model_nu, ná aftrek van laag 1). Die dooft lineair uit over
+       BIAS_DECAY_H, want het anker blijkt maar ~6u informatief (r=0,66 op 0–3u,
+       ~0 voorbij 6u).
+
+    Vóór deze splitsing doofde de héle correctie uit naar **nul**, alsof het ruwe model
+    op termijn zuiver was. Dat is het niet: het nachtvenster ligt vanaf een ochtendrun
+    12–18u vooruit en draaide dus op de volle warme bias — precies waar het raamadvies
+    op leunt. Zonder geleerde bias (`learned` leeg, te weinig samples) is `clim` 0 en is
+    dit bit-voor-bit het oude gedrag.
+
+    Geeft per uur {"dt", "out_raw", "out_corr"}."""
+    out = []
+    for r in hourly:
+        raw = r["temp"]
+        # `rh` reist additief mee: de vocht-vooruitblik (vent_rh_ahead) heeft een
+        # consistent temp+RH-paar nodig, en de geijkte reeks hoort de enige bron voor
+        # álle consumenten te blijven.
+        if raw is None:
+            out.append({"dt": r["dt"], "out_raw": None, "out_corr": None,
+                        "rh": r.get("rh")})
+            continue
+        h_ahead = max(0.0, (r["dt"] - now).total_seconds() / 3600.0)
+        decay = max(0.0, 1.0 - h_ahead / BIAS_DECAY_H)
+        clim = om_bias.correction_for(r["dt"], learned)
+        # decay=1 (nu) → precies het stationsanker; decay=0 (ver) → precies de
+        # climatologie. Daartussen schuift het lineair over.
+        out.append({"dt": r["dt"], "out_raw": raw,
+                    "out_corr": raw + clim + (bias - clim) * decay,
+                    "rh": r.get("rh")})
+    return out
+
+
+def corrected_hourly(fc: list[dict]) -> list[dict]:
+    """De geijkte forecast in de vorm die `day_max_temp`/`upcoming_max_temp`/
+    `next_reopen` verwachten ({"dt", "temp"}). Die drie vergeleken tot nu toe de *ruwe*
+    modelwaarde met gemeten binnentemperaturen — twee verschillende schalen, met de
+    modelbias er ongefilterd in. Nu zien ze dezelfde geijkte reeks als de
+    open-tijd-voorspelling en het dashboard."""
+    return [{"dt": r["dt"], "temp": r["out_corr"]} for r in fc]
+
+
+def room_trend(history: list[dict], now: datetime,
+               key: str = "temp", clamp: float = TREND_MAX_SLOPE) -> float | None:
+    """Helling (per uur) van een serie over de laatste TREND_WINDOW_H uur, via
+    kleinste-kwadraten over de samples. None bij te weinig historie. Geclamped op
+    ±`clamp` zodat één rare meting de projectie niet laat ontsporen. `key` kiest de
+    grootheid: "temp" (°C/uur, default) of "hum" (%RH/uur, gebruik clamp=RH_TREND_MAX)."""
+    pts = []  # (uren_geleden_negatief, waarde)
+    for s in history:
+        try:
+            t = datetime.fromisoformat(s["t"])
+        except (ValueError, TypeError, KeyError):
+            continue
+        val = s.get(key)
+        if val is None:
+            continue
+        dt_h = (t - now).total_seconds() / 3600.0  # ≤ 0 voor verleden
+        if dt_h < -TREND_WINDOW_H or dt_h > 0.01:
+            continue
+        pts.append((dt_h, val))
+    # Houd alleen de meest recente aaneengesloten reeks: loop vanaf het nieuwste sample
+    # terug en stop zodra het gat naar het volgende oudere sample > GAP_BREAK_MIN is.
+    # Zo vervuilt een gepauzeerde/herstarte loop (stale samples vóór het gat) de fit niet.
+    if pts:
+        pts.sort(key=lambda p: p[0])  # oplopend dt_h: oudste → nieuwste
+        gap_h = GAP_BREAK_MIN / 60.0
+        contiguous = [pts[-1]]
+        for prev_dt, prev_val in reversed(pts[:-1]):
+            if contiguous[-1][0] - prev_dt > gap_h:
+                break
+            contiguous.append((prev_dt, prev_val))
+        pts = contiguous
+    if len(pts) < 2:
+        return None
+    n = len(pts)
+    sx = sum(x for x, _ in pts)
+    sy = sum(y for _, y in pts)
+    sxx = sum(x * x for x, _ in pts)
+    sxy = sum(x * y for x, y in pts)
+    denom = n * sxx - sx * sx
+    if abs(denom) < 1e-9:
+        return None
+    slope = (n * sxy - sx * sy) / denom
+    return max(-clamp, min(clamp, slope))
+
+
+def project_inside(inside_now: float, slope: float | None, hours_ahead: float) -> float:
+    """Projecteer de binnentemperatuur vooruit. De huidige trend houdt hooguit
+    TREND_CAP_H uur aan en vlakt dan af (heuristiek, geen thermisch model)."""
+    if slope is None:
+        return inside_now
+    return inside_now + slope * min(hours_ahead, TREND_CAP_H)
+
+
+def _interp_out_corr(pts: list[tuple[datetime, float]], t: datetime) -> float:
+    """Lineair geïnterpoleerde geijkte buitentemp op tijdstip `t` uit de uurlijkse
+    (dt, out_corr)-punten (oplopend gesorteerd). Buiten het bereik → dichtstbijzijnde
+    eindpunt (geen extrapolatie)."""
+    if t <= pts[0][0]:
+        return pts[0][1]
+    if t >= pts[-1][0]:
+        return pts[-1][1]
+    for (t0, v0), (t1, v1) in zip(pts, pts[1:]):
+        if t0 <= t <= t1:
+            span = (t1 - t0).total_seconds()
+            if span <= 0:
+                return v0
+            f = (t - t0).total_seconds() / span
+            return v0 + f * (v1 - v0)
+    return pts[-1][1]
+
+
+def predict_open_intervals(forecast_corr: list[dict], inside_now: float | None,
+                            slope: float | None, now: datetime,
+                            high: float, currently_open: bool = False) -> tuple[list[dict], list]:
+    """Vind de momenten waarop raam-open zinvol is: geprojecteerde binnentemp > `high`
+    (kamer-comfortgrens) én buiten-geijkt ≤ binnen − OPEN_MARGIN.
+
+    De open/dicht-momenten worden gezocht op een fijn PREDICT_STEP_MIN-raster (met
+    lineaire interpolatie van de geijkte buitentemp tussen de uurlijkse forecast-punten),
+    zodat de tijden niet op het hele uur plakken maar op kwartieren vallen. Geeft
+    (open_intervals, proj) terug; `proj` blijft de geprojecteerde binnentemp *per
+    forecast-uur* (uitgelijnd op forecast_corr, voor de dashboard-grafiek), maar alleen
+    binnen `TREND_CAP_H` — voorbij dat punt vlakt `project_inside()` toch af (de trend
+    wordt niet oneindig doorgetrokken), en een urenlange horizontale staart tot het einde
+    van `PREDICT_HORIZON_H` oogt als een voorspelling terwijl het puur de laatst bekende
+    waarde herhaalt. De grafieklijn stopt dus na `TREND_CAP_H` in plaats van nutteloos
+    plat door te lopen tot diep de volgende ochtend.
+
+    `currently_open`: het raam staat ook nú al open (dode band, koelte tanken, ontvochtigen
+    of frisse lucht kunnen dat laten gelden zónder dat de strikte `is_open`-drempel hierboven
+    op dit moment geldt — die kent alleen de "cool"-conditie). Zonder deze correctie begon het
+    eerste segment pas bij de eerstvolgende toekomstige drempeloverschrijding, en toonde de
+    tijdlijn een gat vóór dat moment terwijl de kamer al open stond. `currently_open` forceert
+    het allereerste (in-bereik) rasterpunt open, zodat het segment bij "nu" begint."""
+    proj: list = []
+    for r in forecast_corr:
+        h_ahead = (r["dt"] - now).total_seconds() / 3600.0
+        if inside_now is None or h_ahead < -0.5 or h_ahead > TREND_CAP_H:
+            proj.append(None)
+        else:
+            proj.append(round(project_inside(inside_now, slope, max(0.0, h_ahead)), 1))
+
+    # intervals: op fijn raster tussen de uurpunten.
+    pts = [(r["dt"], r["out_corr"]) for r in forecast_corr if r["out_corr"] is not None]
+    if inside_now is None or len(pts) < 2:
+        return [], proj
+
+    intervals: list[dict] = []
+    cur_start: datetime | None = None
+    prev_t: datetime | None = None
+
+    def _close(end_dt: datetime) -> None:
+        intervals.append({
+            "start":   cur_start.strftime("%H:%M"),
+            "end":     end_dt.strftime("%H:%M"),
+            "start_h": round((cur_start - now).total_seconds() / 3600.0, 2),
+            "end_h":   round((end_dt - now).total_seconds() / 3600.0, 2),
+        })
+
+    step = timedelta(minutes=PREDICT_STEP_MIN)
+    t = pts[0][0]  # forecast-uur → raster valt op :00/:15/:30/:45
+    force_open_now = currently_open
+    is_open = False
+    while t <= pts[-1][0]:
+        h_ahead = (t - now).total_seconds() / 3600.0
+        if h_ahead < -0.5 or h_ahead > PREDICT_HORIZON_H:
+            if cur_start is not None and prev_t is not None:
+                _close(prev_t)
+                cur_start = None
+                is_open = False
+            t += step
+            continue
+        oc = _interp_out_corr(pts, t)
+        ip = project_inside(inside_now, slope, max(0.0, h_ahead))
+        # Open-trigger (nieuw opent) en blijf-open-trigger (warmte-instroom sluit) zijn
+        # asymmetrisch, net als bij decide(): OPEN_MARGIN > CLOSE_MARGIN. Zonder dat
+        # onderscheid sloot een geforceerd-open segment vrijwel meteen weer zodra de
+        # binnentemp terugzakte in de dode band (open_trigger werd dan symmetrisch ook
+        # als sluit-signaal gebruikt) — precies het geval waarin `currently_open` net
+        # bedoeld is om het segment te láten staan.
+        open_trigger = ip > high and oc <= ip - OPEN_MARGIN
+        close_trigger = oc >= ip - CLOSE_MARGIN  # warmte-instroom
+        if force_open_now:
+            is_open = True  # kamer staat al open — laat het segment bij "nu" beginnen
+            force_open_now = False
+        elif is_open:
+            is_open = not close_trigger
+        else:
+            is_open = open_trigger
+        if is_open and cur_start is None:
+            cur_start = t
+        elif not is_open and cur_start is not None:
+            _close(t)
+            cur_start = None
+        prev_t = t
+        t += step
+    if cur_start is not None and prev_t is not None:
+        _close(prev_t)
+    return intervals, proj
+
+
+def open_end_is_horizon(interval: dict | None) -> bool:
+    """Eindigt dit segment doordat de fórecast ophoudt, niet doordat er warmte instroomt?
+
+    `predict_open_intervals` sluit het lopende segment af zodra het raster voorbij
+    `PREDICT_HORIZON_H` loopt, en `_close` legt die rand vast in exact hetzelfde veld als
+    een echte warmte-instroom. Zonder dit onderscheid presenteert het dashboard de rand
+    van ons kijkvenster als een precieze sluittijd: op 1 augustus 2026 rapporteerden om
+    13:15 álle vijf de kamers `end: "07:15"` — precies nu + 18u. Dat is geen voorspelling,
+    dat is "verder kijken we niet"."""
+    if not interval:
+        return False
+    end_h = interval.get("end_h")
+    return end_h is not None and end_h >= PREDICT_HORIZON_H - 0.01
+
+
+def open_end_text(intervals: list[dict]) -> str:
+    """Hoe lang moet het raam open blijven? '' zonder segmenten, 'de hele nacht door' als
+    de forecast-horizon het einde bepaalt (zie open_end_is_horizon), anders 'tot ~HH:MM'."""
+    if not intervals:
+        return ""
+    if open_end_is_horizon(intervals[0]):
+        return "de hele nacht door"
+    return f"tot ~{intervals[0]['end']}"
+
+
+def sustained_open_h(intervals: list[dict]) -> float | None:
+    """Duur (uren) van het lopende open-segment, of None als er nu geen segment loopt.
+
+    `predict_open_intervals` levert het lopende segment als `intervals[0]` met
+    `start_h <= 0`. De duur telt vanaf nú (niet vanaf `start_h`), want dat is wat er nog
+    te winnen valt met een raam dat je nu opent."""
+    if not intervals:
+        return None
+    first = intervals[0]
+    start_h, end_h = first.get("start_h"), first.get("end_h")
+    if start_h is None or end_h is None or start_h > 0:
+        return None
+    return max(0.0, end_h)
+
+
+def vent_rh_ahead(fc: list[dict], inside: float | None, now: datetime,
+                  hours: float) -> float | None:
+    """Hoogste kamer-RH die ventileren de komende `hours` zou opleveren, of None als de
+    forecast geen bruikbaar vochtpaar heeft.
+
+    `vent_rh` op het dashboard is een moment-opname: het zegt wat de kamer nú zou worden
+    als je ventileert. Voor de vraag "is dit een goed moment om het raam open te zetten"
+    is dat te kort — een raam gaat uren open. Deze functie kijkt vooruit over het
+    kandidaat-venster en geeft de ongunstigste (hoogste) waarde terug, zodat we niet
+    adviseren te openen in lucht die over een uur klam wordt.
+
+    Rekent bewust met `out_raw` + `rh` en níet met `out_corr`: `convert_rh` behoudt de
+    dampinhoud, dus temperatuur en RH moeten van hetzelfde consistente paar komen. Zelfde
+    argument als waarom `vent_rh` de rauwe WU-temp gebruikt en niet de biasgecorrigeerde.
+    """
+    if inside is None or not fc:
+        return None
+    worst: float | None = None
+    for r in fc:
+        h_ahead = (r["dt"] - now).total_seconds() / 3600.0
+        if h_ahead < 0 or h_ahead > hours:
+            continue
+        vr = convert_rh(r.get("rh"), r.get("out_raw"), inside)
+        if vr is not None and (worst is None or vr > worst):
+            worst = vr
+    return worst
+
+
+def open_status_tail(intervals: list[dict]) -> str:
+    """' tot ~HH:MM[, weer open rond HH:MM]' uit de eerste twee voorspelde segmenten van
+    `predict_open_intervals`, of '' zonder segmenten. Wordt gebruikt om elke "kamer is nu
+    open"-statustekst (Nu open/Blijft open, met of zonder reden-suffix) dezelfde sluit-/
+    heropentijd te laten tonen als de tijdlijn eronder — anders belooft de tekst "blijft
+    open" terwijl dezelfde `intervals` een tussentijdse sluiting laten zien.
+
+    Loopt het segment tot de forecast-horizon, dan staat er "de hele nacht door" in plaats
+    van een verzonnen kloktijd (zie open_end_is_horizon)."""
+    if not intervals:
+        return ""
+    reopen = intervals[1]["start"] if len(intervals) > 1 else None
+    tail = f" {open_end_text(intervals)}"
+    return f"{tail}, weer open rond {reopen}" if reopen else tail
+
+
+# ── Buitentemp gladstrijken vóór de beslissing (anti-flapping) ────────────────────
+
+def smoothed_outside(history: list[dict], now: datetime,
+                     current: float | None) -> float | None:
+    """Mediaan van de buitentemp over de laatste SMOOTH_WINDOW_H uur, inclusief de
+    huidige meting. Een mediaan negeert losse uitschieters — bv. een korte, hevige
+    regenbui die de buitentemp door verdampingskoeling even scherp laat duiken en
+    daarna weer herstelt — zodat één voorbijgaande meting het advies niet over de
+    hysterese-band trekt en laat flippen (je wilt sowieso geen raam open tijdens een
+    bui). `current` None → None; te weinig historie → gewoon de huidige meting."""
+    if current is None:
+        return None
+    vals = [current]
+    cutoff = SMOOTH_WINDOW_H * 3600
+    for s in (history or []):
+        try:
+            t = datetime.fromisoformat(s["t"])
+        except (ValueError, TypeError, KeyError):
+            continue
+        temp = s.get("temp")
+        if temp is None:
+            continue
+        age = (now - t).total_seconds()
+        if 0.0 <= age <= cutoff:
+            vals.append(temp)
+    vals.sort()
+    n = len(vals)
+    mid = n // 2
+    return vals[mid] if n % 2 else (vals[mid - 1] + vals[mid]) / 2.0
+
+
+def smoothed_solar(history: list[dict], now: datetime,
+                   current: float | None,
+                   window_min: float = SOLAR_AVG_WINDOW_MIN) -> float | None:
+    """Mediaan van de eigen (per-run gepersisteerde) `solar`-samples in `history` over
+    de laatste `window_min` minuten, inclusief de huidige meting — de lokale fallback
+    voor `fetch_wu_recent_solar()` wanneer het `history/all`-endpoint niets bruikbaars
+    geeft. Werkt met wat we al elke 15 min ophalen en
+    bewaren, dus geen extra API-call nodig; bouwt vanzelf op na de deploy die `solar`
+    additief aan `outside_history` toevoegt (oudere samples zonder dat veld tellen
+    simpelweg niet mee). `current` None → None."""
+    if current is None:
+        return None
+    vals = [current]
+    cutoff = window_min * 60.0
+    for s in (history or []):
+        try:
+            t = datetime.fromisoformat(s["t"])
+        except (ValueError, TypeError, KeyError):
+            continue
+        solar = s.get("solar")
+        if solar is None:
+            continue
+        age = (now - t).total_seconds()
+        if 0.0 <= age <= cutoff:
+            vals.append(solar)
+    vals.sort()
+    n = len(vals)
+    mid = n // 2
+    return vals[mid] if n % 2 else (vals[mid - 1] + vals[mid]) / 2.0
+
+
+# ── Beslislogica per kamer (met dode band voor hysterese) ─────────────────────────
+
+def humidity_offset(vent_rh: float | None) -> float:
+    """°C-correctie op de open-drempel op basis van de geprojecteerde kamer-RH na
+    ventileren (`vent_rh`): + = muf (strenger openen), − = droog (soepeler openen),
+    begrensd. Asymmetrisch geclamped — de muf-straf mag groter zijn dan de droog-bonus,
+    zodat het gedrag op gewone droge dagen vrijwel onveranderd blijft."""
+    if vent_rh is None:
+        return 0.0
+    raw = RH_TEMP_K * (vent_rh - RH_COMFORT)
+    return max(-RH_BONUS_MAX, min(RH_PENALTY_MAX, raw))
+
+
+def open_reason(inside: float | None, outside: float | None, low: float, high: float,
+                vent_rh: float | None = None, humidity: float | None = None,
+                bank_cooling: bool = False, fresh_air_ok: bool = False) -> str | None:
+    """Wil de kamer nú open, vóór hysterese — en waaróm? Eén bron van waarheid voor
+    zowel decide() als het dashboard-`open_now`/`open_reason`/Telegram-bericht, zodat
+    advies, dashboard en bericht niet uit elkaar lopen. Retourneert de reden
+    ("cool" | "bank" | "dryout" | "fresh_air") of None (geen open-wens)."""
+    if inside is None or outside is None:
+        return None
+    if vent_rh is not None and vent_rh >= RH_HARD_CAP:
+        return None  # veto: nooit ventileren naar te muffe lucht
+    off = humidity_offset(vent_rh)
+    if inside > high + off and outside <= inside - OPEN_MARGIN:
+        return "cool"  # koelen — vocht schuift de open-drempel (muf hoger, droog lager)
+    # Koelte tanken: staat er een warme dag aan te komen, dan wachten we niet tot de kamer
+    # al te warm ís (`high`) — we beginnen al te koelen zodra ze op haar comfortabele
+    # minimum zit (`low`) en buiten kouder is, om zoveel mogelijk warmte "eruit te halen"
+    # vóórdat het heet wordt. Eenmaal open houdt de dode band/koelte-tank-logica in decide()
+    # het raam ook onder `low` open, zolang buiten kouder blijft.
+    if bank_cooling and inside > low + off and outside <= inside - OPEN_MARGIN:
+        return "bank"
+    # Ontvochtig-trigger: een muffe (niet per se warme) kamer mag open als de buitenlucht
+    # duidelijk droger is en er geen warmte instroomt — drogen zonder het huis op te warmen.
+    # De temperatuureis is `SOFT_OPEN_MARGIN` en niet enkel `outside <= inside`: die laatste
+    # overlapt met de sluitconditie van decide() (`outside >= inside - CLOSE_MARGIN`) en gaf
+    # een gegarandeerde flapper-band — zie de toelichting bij SOFT_OPEN_MARGIN.
+    if (humidity is not None and vent_rh is not None
+            and humidity >= RH_DRYOUT_MIN
+            and vent_rh <= humidity - RH_DRYOUT_MARGIN
+            and inside > low and outside <= inside - SOFT_OPEN_MARGIN):
+        return "dryout"
+    # Frisse-lucht-trigger: niets thermisch op het spel (buiten warmt niet op, kamer niet
+    # onder haar comfortabele minimum) én de lucht is niet muf → dan heeft frisse lucht op
+    # zichzelf waarde, ook al is er geen koel- of ontvochtig-noodzaak. Alleen binnen een
+    # actieve (niet-onderdrukte) warme-dag-run — `fresh_air_ok` is de aanroeper's gate,
+    # zodat een koele/onderdrukte dag hier niet alsnog open van wordt geadviseerd.
+    # Bewust nét zo streng als koelen (`OPEN_MARGIN`) en strenger op vocht (`RH_FRESH_MAX`):
+    # dit was de reden achter vrijwel elk flapper-bericht, terwijl het per definitie de
+    # reden is die er thermisch het mínst toe doet. Een tie-break mag geen hoofdrol spelen.
+    if (fresh_air_ok and inside > low
+            and vent_rh is not None and vent_rh <= RH_FRESH_MAX
+            and outside <= inside - OPEN_MARGIN):
+        return "fresh_air"
+    return None
+
+
+def open_desire(inside: float | None, outside: float | None, low: float, high: float,
+                vent_rh: float | None = None, humidity: float | None = None,
+                bank_cooling: bool = False, fresh_air_ok: bool = False) -> bool:
+    """Bool-vorm van open_reason() — het echte beslispunt voor decide()."""
+    return open_reason(inside, outside, low, high, vent_rh, humidity,
+                       bank_cooling, fresh_air_ok) is not None
+
+
+def decide(inside: float | None, outside: float | None, prev: str,
+           low: float, high: float, bank_cooling: bool = False,
+           vent_rh: float | None = None, humidity: float | None = None,
+           reopen_soon: bool = False, fresh_air_ok: bool = False) -> str:
+    if inside is None or outside is None:
+        return prev  # geen meting → advies niet wijzigen
+    if vent_rh is not None and vent_rh >= RH_HARD_CAP:
+        return "dicht"  # te muf → dicht, ook een open raam (klam/schimmel weegt zwaarder)
+    if open_desire(inside, outside, low, high, vent_rh, humidity, bank_cooling, fresh_air_ok):
+        return "open"
+    if outside >= inside - CLOSE_MARGIN:
+        # Warmte-instroom: buiten heeft de kamer ingehaald → normaal sluiten. Maar staat
+        # het raam nú open en zakt buiten binnen MIN_CLOSE_H alweer onder de open-drempel,
+        # dan is even sluiten de moeite niet — laat het raam staan (geen geflapper voor
+        # een kort warmte-momentje). Een muf-veto hierboven gaat hier wél vóór.
+        if reopen_soon and prev == "open":
+            return prev
+        return "dicht"
+    # Kamer is koel genoeg (≤ `low`, de onderkant van de comfortband). Normaal sluiten we
+    # dan om niet door te koelen, maar staat er een warme dag aan te komen, dan blijven we
+    # 's nachts koelte "tanken" zolang het buiten kouder blijft.
+    if inside <= low and not bank_cooling:
+        return "dicht"
+    return prev  # dode band (low < binnen ≤ high) of koelte tanken → huidig advies vasthouden
+
+
+# ── State I/O (in dezelfde secret Gist) ────────────────────────────────────────────
+
+def load_state() -> dict:
+    raw = gist_read_file(STATE_FILE)
+    # `notified` + `day` zijn additief: oudere state-bestanden missen ze en beginnen
+    # gewoon met een leeg meldgeheugen (eerste run stuurt dan hooguit één bericht).
+    defaults = {"rooms": {}, "notified": {}, "day": {}, "msg_at": {}, "open_since": {},
+                "last_updated": None, "last_notification": None}
+    if not raw:
+        return defaults
+    try:
+        return {**defaults, **json.loads(raw)}
+    except json.JSONDecodeError:
+        return defaults
+
+
+def save_state(state: dict) -> None:
+    state["last_updated"] = datetime.now(TZ).isoformat()
+    gist_write_files({STATE_FILE: json.dumps(state, indent=2, ensure_ascii=False)})
+
+
+# ── Meldlaag: wat is een bericht waard? ────────────────────────────────────────────
+# Het advies (state["rooms"]) is het hysterese-geheugen van decide() en wijzigt elke
+# kwartiertick vrij. Wát daarvan verstuurd wordt, is een aparte beslissing met een eigen
+# geheugen (state["notified"]) — anders krijg je de spiegelversie van de flapper-bug: een
+# onderdrukt open-bericht gevolgd door een keurig verstuurd "Sluit", voor een raam dat de
+# ontvanger nooit heeft opengezet.
+#
+# Het dagblok (state["day"]) draagt sinds aug 2026 alleen nog `plan_sent` + de urgentie-
+# teller; het rate-limiten van de gewone berichten gebeurt op tijdstempels buiten dat blok
+# (state["msg_at"]). Reden: het dagblok reset om middernacht en de koelcyclus doet dat niet.
+
+def roll_day(state: dict, today: str) -> dict:
+    """Het dagblok van `state`, vers gereset zodra de lokale datum wisselt."""
+    day = state.get("day") or {}
+    if day.get("date") != today:
+        day = {"date": today, "plan_sent": False, "rooms": {}}
+    day.setdefault("plan_sent", False)
+    day.setdefault("rooms", {})
+    state["day"] = day
+    return day
+
+
+def room_day_counts(state: dict, room: str, today: str) -> dict:
+    """Het per-kamer dagblok. Alleen `urgent`/`last_urgent` worden nog gelezen: de gewone
+    open/dicht-berichten lopen sinds aug 2026 op een cooldown i.p.v. een dagbudget (zie
+    OPEN_MSG_COOLDOWN_H). De sleutels blijven staan zodat oudere state-bestanden laden."""
+    rooms = roll_day(state, today)["rooms"]
+    return rooms.setdefault(room, {"open": 0, "close": 0, "urgent": 0, "last_urgent": None})
+
+
+def notified_advice(state: dict, room: str) -> str:
+    """De laatste stand die we de ontvanger daadwerkelijk gemeld hebben."""
+    return ((state.get("notified") or {}).get(room) or {}).get("state", "dicht")
+
+
+def _parse_iso(raw: str | None) -> datetime | None:
+    """ISO-tijdstempel uit de state, of None als hij ontbreekt/onleesbaar is."""
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def msg_cooldown_ok(state: dict, room: str, kind: str, now: datetime) -> bool:
+    """Is de cooldown sinds het vorige bericht van dit soort verstreken?
+
+    `state["msg_at"]` staat bewust búíten het dagblok: het dagblok reset om middernacht en
+    dát was precies de grens waarop het oude budget gestolen kon worden (zie de toelichting
+    bij OPEN_MSG_COOLDOWN_H). Een tijdstempel kent geen dagwissel."""
+    prev = _parse_iso(((state.get("msg_at") or {}).get(room) or {}).get(kind))
+    if prev is None:
+        return True
+    uren = OPEN_MSG_COOLDOWN_H if kind == "open" else CLOSE_MSG_COOLDOWN_H
+    return (now - prev).total_seconds() >= uren * 3600
+
+
+def track_open_since(state: dict, room: str, advice: str, now: datetime) -> None:
+    """Houd bij sinds wanneer een kamer open-wáárdig is — los van wat we gemeld hebben.
+
+    Nodig omdat `advice` een enkele string is: zonder tijdstempel kan de meldlaag niet zien
+    of een open-advies van dit kwartier is of van vier uur geleden. Wordt gewist zodra de
+    kamer weer dicht wil, zodat de volgende open opnieuw vers begint."""
+    since = state.setdefault("open_since", {})
+    if advice == "open":
+        since.setdefault(room, now.isoformat())
+    else:
+        since.pop(room, None)
+
+
+def open_candidate_age_h(state: dict, room: str, now: datetime) -> float | None:
+    """Hoe lang staat dit open-advies al, in uren? None als we het niet weten."""
+    since = _parse_iso((state.get("open_since") or {}).get(room))
+    if since is None:
+        return None
+    return max(0.0, (now - since).total_seconds() / 3600.0)
+
+
+def urgent_reason(inside: float | None, outside: float | None, vent_rh: float | None,
+                  told: str, rh_veto: bool | None = None) -> str | None:
+    """Is er iets aan de hand dat door de cooldown heen mag breken?
+
+    Alleen wanneer wij gemeld hebben dat het raam openstaat — anders valt er niets te
+    redden en is een "urgent" bericht enkel lawaai. Twee gevallen, allebei smal:
+    "muf" (ventileren zou de kamer boven RH_HARD_CAP duwen, schimmelrisico) en "hitte"
+    (er stroomt echt warme lucht naar binnen, uren vóór de voorspelling dat zei).
+
+    `rh_veto` is de vlag die `decide()` zelf op de ónafgeronde `vent_rh` berekende; het
+    dashboard publiceert `vent_rh` afgerond, dus zonder deze doorgifte kan de meldlaag op
+    de grens net anders oordelen dan de beslissing die ze beschrijft."""
+    if told != "open" or inside is None or outside is None:
+        return None
+    veto = rh_veto if rh_veto is not None else (vent_rh is not None
+                                                and vent_rh >= RH_HARD_CAP)
+    if veto:
+        return "muf"
+    if outside >= inside + URGENT_HEAT_C:
+        return "hitte"
+    return None
+
+
+def _urgent_allowed(counts: dict, now: datetime) -> bool:
+    """Dagmaximum + cooldown, zodat urgentie zelf niet kan gaan flapperen."""
+    if counts.get("urgent", 0) >= MAX_URGENT_MSGS_PER_DAY:
+        return False
+    last = counts.get("last_urgent")
+    if last:
+        try:
+            prev = datetime.fromisoformat(last)
+        except (TypeError, ValueError):
+            return True
+        if (now - prev).total_seconds() < URGENT_COOLDOWN_H * 3600:
+            return False
+    return True
+
+
+def notify_decision(state: dict, room: str, advice: str, intervals: list[dict],
+                    reason: str | None, inside: float | None, outside: float | None,
+                    vent_rh: float | None, now: datetime,
+                    rh_veto: bool | None = None) -> dict | None:
+    """Mag deze kamer nú een bericht sturen, en zo ja welk?
+
+    Geeft None (zwijgen) of {"kind": "open"|"dicht", "urgent": bool, "reason": ...,
+    "urgent_reason": ...}. Alle poorten zitten hier, zodat ze in één keer te testen zijn:
+    de cooldown per berichtsoort, de "heb ik dit al gemeld"-vraag, de duur-poort op de
+    voorspelling, de versheid van de open-kandidaat, en de urgente uitzondering."""
+    today = now.date().isoformat()
+    counts = room_day_counts(state, room, today)
+    told = notified_advice(state, room)
+    urg = urgent_reason(inside, outside, vent_rh, told, rh_veto)
+
+    if advice == "open" and told != "open":
+        # Alleen melden als het voorspelde open-venster ook wat voorstelt. Een raam van
+        # een kwartier is geen bericht waard — en was in de praktijk de hoofdmoot.
+        dur = sustained_open_h(intervals)
+        if dur is None or dur < MIN_OPEN_H:
+            return None
+        # Late herhaling i.p.v. nieuws → zwijgen (zie OPEN_MSG_MAX_AGE_H). Bewust vóór de
+        # cooldown: een verlopen kandidaat mag ook niet de cooldown opnieuw starten en zo
+        # het échte bericht van de volgende avond wegdrukken.
+        age = open_candidate_age_h(state, room, now)
+        if age is not None and age > OPEN_MSG_MAX_AGE_H:
+            return None
+        if not msg_cooldown_ok(state, room, "open", now):
+            return None
+        return {"kind": "open", "urgent": False, "reason": reason, "urgent_reason": None}
+
+    if told == "open" and (advice == "dicht" or urg is not None):
+        # Normaal dicht-bericht zodra de cooldown het toelaat; daarbinnen mag alleen een
+        # échte urgentie er nog doorheen. Urgent budget wordt dus pas aangesproken als de
+        # gewone weg dicht zit.
+        if advice == "dicht" and msg_cooldown_ok(state, room, "dicht", now):
+            return {"kind": "dicht", "urgent": False, "reason": reason,
+                    "urgent_reason": urg}
+        if urg is not None and _urgent_allowed(counts, now):
+            return {"kind": "dicht", "urgent": True, "reason": reason,
+                    "urgent_reason": urg}
+    return None
+
+
+def record_notification(state: dict, room: str, decision: dict, now: datetime) -> None:
+    """Boek een daadwerkelijk verstuurd bericht af op het budget + het meldgeheugen."""
+    today = now.date().isoformat()
+    counts = room_day_counts(state, room, today)
+    if decision["urgent"]:
+        counts["urgent"] = counts.get("urgent", 0) + 1
+        counts["last_urgent"] = now.isoformat()
+    else:
+        # De cooldown-stempel staat buiten het dagblok, zodat een dagwissel hem niet wist.
+        state.setdefault("msg_at", {}).setdefault(room, {})[decision["kind"]] = \
+            now.isoformat()
+    state.setdefault("notified", {})[room] = {"state": decision["kind"],
+                                              "at": now.isoformat()}
+
+
+# ── Berichtteksten ─────────────────────────────────────────────────────────────────
+# Het oude bericht noemde alleen de kamer + twee temperaturen ("🔴 Sluit: office (binnen
+# 22.4°, buiten 22.5°)"). Wat ontbrak was juist het handelbare deel: waaróm, en hoe lang.
+
+REASON_TEXT = {
+    "cool":      "buiten is koeler",
+    "bank":      "koelte tanken voor de warme dag",
+    "dryout":    "ontvochtigen — buiten is droger",
+    "fresh_air": "frisse lucht",
+}
+URGENT_TEXT = {
+    "hitte": "er stroomt warme lucht naar binnen",
+    "muf":   "buiten is te muf — schimmelrisico",
+}
+
+
+def _temps(inside: float | None, outside: float | None) -> str:
+    ins = f"{inside:.1f}" if inside is not None else "?"
+    out = f"{outside:.1f}" if outside is not None else "?"
+    return f"binnen {ins}°, buiten {out}°"
+
+
+def room_message_line(room: str, decision: dict, inside: float | None,
+                      outside: float | None, intervals: list[dict],
+                      vent_rh: float | None = None,
+                      reopen: str | None = None) -> str:
+    """Eén regel per kamer: wat te doen, met welke temperaturen, waarom, en hoe lang."""
+    detail: list[str] = []
+    if decision["kind"] == "open":
+        bullet = "🟢"
+        reden = REASON_TEXT.get(decision.get("reason") or "")
+        if reden:
+            detail.append(reden)
+        duur = open_end_text(intervals)
+        if duur:
+            detail.append(f"open laten {duur}")
+    else:
+        bullet = "🔴"
+        urg = decision.get("urgent_reason")
+        if urg == "muf":
+            vr = f" (RH ~{vent_rh:.0f}%)" if vent_rh is not None else ""
+            detail.append(f"{URGENT_TEXT['muf']}{vr}")
+        elif urg:
+            detail.append(URGENT_TEXT.get(urg, urg))
+        else:
+            detail.append("buiten wordt warmer dan binnen")
+        if reopen:
+            detail.append(f"weer open rond {reopen}")
+    line = f"{bullet} *{room}* — {_temps(inside, outside)}"
+    return f"{line}\n    {' · '.join(detail)}" if detail else line
+
+
+def advice_message(now: datetime, entries: list[tuple[str, dict]], lines: list[str]) -> str:
+    """Kopregel + de per-kamer-regels. De kop volgt de inhoud, zodat je aan de eerste
+    regel al ziet of er iets open of juist dicht moet."""
+    kinds = {d["kind"] for _room, d in entries}
+    urgent = any(d["urgent"] for _room, d in entries)
+    if urgent:
+        kop = "⚠️ *Raam dicht — nu*"
+    elif kinds == {"open"}:
+        kop = "🪟 *Ramen open*"
+    elif kinds == {"dicht"}:
+        kop = "🪟 *Ramen dicht*"
+    else:
+        kop = "🪟 *Raam-advies*"
+    return "\n".join([f"{kop} ({now.strftime('%H:%M')})", *lines])
+
+
+def build_day_plan(dash_rooms: dict, now: datetime) -> list[dict]:
+    """Per advies-kamer álle open-vensters van de komende horizon die lang genoeg zijn om
+    te melden — de vooruitblik die het dashboard toch al berekent, nu ook bruikbaar als plan.
+
+    Twee bewuste keuzes, allebei omdat dit een *dagoverzicht* is en geen losse melding:
+
+    * **Elke kamer staat erin**, ook als er vandaag geen enkel venster voor is (lege
+      `windows`-lijst). Het plan noemde alleen de kamers die toevallig een venster hadden,
+      en over de rest zei het niets — dan weet je niet of die kamer dicht blijft of dat de
+      voorspelling 'm gewoon niet haalde.
+    * **Alle vensters van een kamer** (tot `MAX_PLAN_WINDOWS`), niet alleen het eerste. Een
+      venster heeft een begin én een eind, en juist het eind — wanneer moet dat raam weer
+      dicht — is de actie die je 's ochtends wilt kunnen plannen. Het eerste venster alleen
+      verzweeg zowel de sluittijd als een tweede opening later op de dag.
+    """
+    plan: list[dict] = []
+    for room in ROOMS:
+        d = dash_rooms.get(room) or {}
+        vensters: list[dict] = []
+        for iv in d.get("open_intervals") or []:
+            start_h, end_h = iv.get("start_h"), iv.get("end_h")
+            if start_h is None or end_h is None:
+                continue
+            # Een segment dat in het verleden begon en nog niet voorbij is lóópt: dat raam
+            # staat nu open. Dat als "open vanaf 08:45" opschrijven leest als een actie die
+            # nog moet komen, terwijl er niets te doen valt. `end_h > 0` hoort erbij — een
+            # segment dat al voorbij is (start_h ≤ end_h ≤ 0) loopt niet meer.
+            running = start_h <= 0 < end_h
+            # De duur-poort weegt of een *voorspeld* venster het openzetten waard is: hij
+            # rekent vanaf nú, want dat is wat een raam dat je nu opendoet nog oplevert.
+            # Op een lópend venster is dat de verkeerde vraag — dat raam stáát open, er
+            # valt niets meer te wegen, en het enige dat er nog te plannen valt is juist de
+            # sluittijd. Toch poorten leverde het omgekeerde van een plan op: op 3 augustus
+            # 2026 stonden alle vier de kamers open met sluittijden rond 09:15–09:30, maar
+            # Living room en Nursery hadden er nog 1.25u te gaan → onder MIN_OPEN_H → uit het
+            # plan → en dan drukt day_plan_message ze af als "blijft vandaag dicht", precies
+            # het tegendeel van wat er aan de hand was (en van de OPEN-chip op het
+            # dashboard). Op een voorspeld venster blijft de poort staan: dáár is een blip
+            # van een kwartier inderdaad niets om je dag op in te richten.
+            if not running and end_h - max(0.0, start_h) < MIN_OPEN_H:
+                continue
+            vensters.append({"start": iv["start"], "start_h": start_h,
+                             "end": iv["end"], "end_h": end_h,
+                             "horizon": open_end_is_horizon(iv),
+                             "running": running})
+            if len(vensters) >= MAX_PLAN_WINDOWS:
+                break
+        plan.append({"room": room, "windows": vensters,
+                     # Sorteersleutel: kamers met een venster op volgorde van openen,
+                     # kamers zonder venster achteraan (daar valt niets te plannen).
+                     "start_h": vensters[0]["start_h"] if vensters else float("inf")})
+    plan.sort(key=lambda p: p["start_h"])
+    return plan
+
+
+def plan_window_text(w: dict) -> str:
+    """Eén open-venster in woorden, altijd mét het moment waarop het raam weer dicht moet.
+
+    Loopt het venster tot de forecast-horizon, dan is die 'sluittijd' de rand van ons
+    kijkvenster en geen voorspelling (zie open_end_is_horizon) — dan staat er "de hele
+    nacht door" in plaats van een verzonnen kloktijd."""
+    if w["running"]:
+        return ("staat al open, de hele nacht door" if w["horizon"]
+                else f"staat al open, dicht rond {w['end']}")
+    return (f"open vanaf {w['start']}, de hele nacht door" if w["horizon"]
+            else f"open {w['start']}–{w['end']}")
+
+
+def day_plan_message(plan: list[dict], dmax: float | None, now: datetime) -> str:
+    """Het dagplan-bericht (naar de groep): per kamer wanneer het raam open kan én wanneer
+    het weer dicht moet, inclusief de kamers waarvoor vandaag niets te openen valt."""
+    kop = f"🪟 *Raamplan* — {format_date_nl(now.date())}"
+    if dmax is not None:
+        kop += f"\nWarme dag: buiten max {dmax:.1f}°."
+    if not any(p["windows"] for p in plan):
+        return f"{kop}\n\nVandaag blijven de ramen dicht — buiten koelt niet genoeg af."
+
+    regels: list[str] = []
+    for p in plan:
+        if p["windows"]:
+            tekst = "; daarna ".join(plan_window_text(w) for w in p["windows"])
+            regels.append(f"🟢 *{p['room']}* — {tekst}")
+        else:
+            regels.append(f"⚪ *{p['room']}* — blijft vandaag dicht")
+    staart = "Je krijgt per kamer een seintje op het moment zelf."
+    return "\n".join([kop, "", *regels, "", staart])
+
+
+# ── Dashboard-artefact (docs/window_data.json) ─────────────────────────────────────
+
+def read_prev_dashboard() -> dict:
+    """Lees het vorige dashboard-artefact (voor historie-continuïteit).
+
+    Uit de artefact-gist zodra ARTEFACT_GIST_ID gezet is, anders het lokale pad.
+    Dit is óók de read-back die `outside_history` en het om_bias-leerboek van run
+    naar run laat doorlopen — zonder zou elke run met een lege historie starten."""
+    return artefact_io.read_json("window_data.json", DASHBOARD_FILE, default={}) or {}
+
+
+def _append_trim(history: list, sample: dict) -> list:
+    """Voeg een sample toe en houd de laatste HISTORY_KEEP over (chronologisch)."""
+    hist = [h for h in (history or []) if h.get("temp") is not None]
+    hist.append(sample)
+    return hist[-HISTORY_KEEP:]
+
+
+def write_dashboard(payload: dict) -> None:
+    body = json.dumps(payload, indent=2, ensure_ascii=False)
+    dest = artefact_io.write_json_str("window_data.json", DASHBOARD_FILE, body)
+    print(f"[dashboard] Geschreven → {dest}")
+
+
+def _room_dashboard_row(room: str, rooms_data: dict, prev_room_dash: dict,
+                        now: datetime, ctx: dict) -> dict:
+    """Bouw één kamer-rij voor het dashboard-artefact.
+
+    `ctx` bundelt de run-brede context die elke kamer deelt: `od` (beslis-temp),
+    `prev_rooms` (vorige adviezen), `warm_ahead`, `gated`, het buiten-RH-sensorpaar, en de
+    forecast (`fc` + ruwe `hourly`)."""
+    d = rooms_data.get(room) or {}
+    inside   = d.get("inside")
+    humidity = d.get("humidity")
+    heating  = bool(d.get("heating"))
+    od = ctx["od"]
+
+    prev_hist = (prev_room_dash.get(room) or {}).get("history", [])
+    hist = prev_hist
+    if inside is not None:
+        sample = {"t": now.isoformat(), "temp": round(inside, 1)}
+        if humidity is not None:
+            sample["hum"] = round(humidity)  # binnen-RH → vochttrend op het scatterplot
+        # Verwarmingsvlag per sample (additief; afwezig = niet stoken). De ventilatie-tweeling
+        # laat de samples waarin gestookt werd uit haar kalibratie vallen — het thermische model
+        # heeft geen verwarmingsterm, dus een gestookte kamer leest warmer dan de fysica verklaart.
+        if heating:
+            sample["heat"] = 1
+        hist = _append_trim(prev_hist, sample)
+
+    low, high = comfort_band(room)
+    slope  = room_trend(hist, now)
+    hum_slope = room_trend(hist, now, "hum", RH_TREND_MAX)
+    vent_rh = convert_rh(ctx["outside_rh"], ctx["outside_rh_temp"], inside)
+    rh_off = humidity_offset(vent_rh)
+    reopen_soon = reopen_is_brief(ctx["hourly"], inside, now)
+    # Frisse lucht mag alleen meewegen binnen een actieve (niet-onderdrukte) warme-dag-run —
+    # op een gated (koele) dag blijft dit puur thermisch, zoals de gate zelf al belooft.
+    fresh_air_ok = not ctx["gated"]
+    advice = decide(inside, od, ctx["prev_rooms"].get(room, "dicht"),
+                    low, high, bank_cooling=ctx["warm_ahead"],
+                    vent_rh=vent_rh, humidity=humidity, reopen_soon=reopen_soon,
+                    fresh_air_ok=fresh_air_ok)
+    # De vooruit-voorspeller verschuift mee met de huidige vochtstraf (per-uur RH-forecast
+    # valt buiten scope → huidige offset als statische benadering) én met koelte-tanken
+    # (drempel `low` i.p.v. `high` zodra warm_ahead) — dezelfde drempel als open_reason()
+    # hieronder ziet, anders lopen de voorspelde tijden en de nu-status uit elkaar.
+    open_threshold = (low if ctx["warm_ahead"] else high) + rh_off
+    intervals, proj = predict_open_intervals(ctx["fc"], inside, slope, now, open_threshold,
+                                             currently_open=(advice == "open"))
+
+    reason = open_reason(inside, od, low, high, vent_rh, humidity,
+                         bank_cooling=ctx["warm_ahead"], fresh_air_ok=fresh_air_ok)
+    open_now = reason is not None
+    predicted_open = intervals[0]["start"] if intervals else None
+
+    rh_veto = vent_rh is not None and vent_rh >= RH_HARD_CAP
+    dryout = reason == "dryout"
+
+    # Zolang advice=="open" is currently_open=True hierboven meegegeven, dus intervals[0]
+    # is altíjd het lopende open-segment (begint bij "nu") — elke "kamer is nu open"-tekst
+    # hieronder moet dus dezelfde sluit-/heropentijd tonen als de tijdlijn eronder.
+    tail = open_status_tail(intervals)
+
+    if inside is None:
+        status_text = "Geen meting"
+    elif reason == "bank":
+        status_text = f"Nu open{tail} — koelte tanken"
+    elif reason == "fresh_air":
+        status_text = f"Nu open{tail} — frisse lucht"
+    elif open_now:
+        status_text = f"Nu open{tail}"
+    elif advice == "open":
+        # Hysterese (dode band of koelte tanken) houdt het raam open, ook al zou een
+        # verse herberekening nú niet meer actief openen — laat dat niet tegenspreken.
+        status_text = f"Blijft open{tail}" if tail else "Blijft open"
+    elif predicted_open:
+        status_text = f"Open rond {predicted_open}"
+    else:
+        status_text = "Vandaag dicht houden"
+
+    return {
+        "inside":         round(inside, 1) if inside is not None else None,
+        "humidity":       round(humidity) if humidity is not None else None,
+        # Verwarmingsstatus nu (additief): vlag + gemeten vermogen%. Voedt de tweeling-uitsluiting
+        # en kan op het dashboard getoond worden. Afwezig in oudere JSON → geen verwarming.
+        "heating":        heating,
+        "heating_power":  round(d.get("heating_power")) if d.get("heating_power") is not None else None,
+        "vent_rh":        round(vent_rh) if vent_rh is not None else None,
+        "rh_offset":      round(rh_off, 2),
+        "rh_veto":        rh_veto,
+        "dryout":         dryout,
+        "open_reason":    reason,
+        "advice":         advice,
+        "comfort_low":    low,
+        "comfort_high":   high,
+        "trend":          round(slope, 2) if slope is not None else None,
+        "hum_trend":      round(hum_slope, 2) if hum_slope is not None else None,
+        "open_now":       open_now,
+        "predicted_open": predicted_open,
+        "open_intervals": intervals,
+        "status_text":    status_text,
+        "history":        hist,
+        "proj":           proj,
+    }
+
+
+def build_dashboard(now: datetime, rooms_data: dict, om: dict, outside: float | None,
+                    outside_source: str, dmax: float | None, prev_rooms: dict,
+                    gated: bool, gate_reason: str, warm_ahead: bool = False,
+                    outside_rh: float | None = None,
+                    outside_rh_temp: float | None = None,
+                    outside_decide: float | None = None,
+                    wu_solar: float | None = None,
+                    bias: float | None = None, fc: list[dict] | None = None,
+                    om_log: dict | None = None,
+                    om_learned: dict | None = None) -> dict:
+    """Stel het publieke dashboard-artefact samen: stationsgeijkte forecast, per-kamer
+    binnentrend + voorspelde open-momenten, en rollende historie voor de grafieken.
+
+    `outside_rh`/`outside_rh_temp` zijn een consistent buiten-sensorpaar (rauwe temp +
+    RH); per kamer rekenen we daaruit de RH om naar de kamertemperatuur (`vent_rh`).
+
+    `outside`= de actuele (gecorrigeerde) buitenmeting — voor bias, historie en de
+    `outside_now`-uitlezing. `outside_decide`= diezelfde temp ná het mediaanfilter
+    (anti-flapping); daarmee beslissen we (`decide`/`open_now`). None → val terug op
+    `outside`."""
+    prev = read_prev_dashboard()
+    prev_room_dash = prev.get("rooms", {})
+    om_now = om.get("current")
+    od = outside_decide if outside_decide is not None else outside  # beslis-temp (gladgestreken)
+
+    # Stationscorrectie: alleen ijken als de WU-meting beschikbaar is. `main()` rekent
+    # 'm normaal al uit (dezelfde waarde moet de gate én het dashboard voeden); de
+    # fallback houdt deze functie los aanroepbaar.
+    if bias is None:
+        bias = station_bias(outside_source, outside, om_now)
+
+    # Genormaliseerde vocht ("RH bij 20°"): meet-nu en model-nu naar RH_REF_T omgerekend,
+    # het verschil is de stationsbias in RH@20-ruimte — zelfde ijk-mechaniek als de temp.
+    meas_rh20  = convert_rh(outside_rh, outside_rh_temp, RH_REF_T)
+    model_rh20 = convert_rh(om.get("current_humidity"), om_now, RH_REF_T)
+    rh_bias = 0.0
+    if outside_source == "wu" and meas_rh20 is not None and model_rh20 is not None:
+        rh_bias = round(meas_rh20 - model_rh20, 2)
+
+    if fc is None:
+        fc = correct_forecast(om["hourly"], bias, now, om_learned)
+    forecast = []
+    for r, f in zip(om["hourly"], fc):
+        # RH@20 per forecast-uur uit het consistente model-paar (temp + RH van datzelfde uur),
+        # daarna dezelfde lineair uitdovende stationscorrectie als de temperatuur.
+        rh20_raw = convert_rh(r.get("rh"), r["temp"], RH_REF_T)
+        decay = max(0.0, 1.0 - max(0.0, (r["dt"] - now).total_seconds() / 3600.0) / BIAS_DECAY_H)
+        forecast.append({
+            "dt": r["dt"].isoformat(),
+            "out_raw":  round(f["out_raw"], 1)  if f["out_raw"]  is not None else None,
+            "out_corr": round(f["out_corr"], 1) if f["out_corr"] is not None else None,
+            "rh20_raw":  round(rh20_raw, 1) if rh20_raw is not None else None,
+            # Bias mag de al-geklemde ruwe waarde niet boven 100% / onder 0% duwen.
+            "rh20_corr": (round(max(0.0, min(100.0, rh20_raw + rh_bias * decay)), 1)
+                          if rh20_raw is not None else None),
+            "is_future": r["dt"] >= now,
+        })
+
+    out_hist = prev.get("outside_history", [])
+    if outside is not None:
+        # `temp` = de gebruikte buitentemp (WU-station, of Open-Meteo als fallback). We
+        # bewaren óók de ruwe Open-Meteo-waarde van datzelfde uur (`om`), zodat het
+        # dashboard station vs. model kan terugkijken en de divergentie zichtbaar maakt
+        # (bijv. een zonnige avond waarop het station te warm meet).
+        sample = {"t": now.isoformat(), "temp": round(outside, 1)}
+        # Bron van deze meting (additief). om_bias verifieert alléén tegen station-
+        # samples: op een Open-Meteo-terugval is de "meting" ditzelfde model, en dan
+        # zou de gemeten modelfout per definitie ~0 zijn en de geleerde bias verwateren.
+        sample["src"] = outside_source
+        if om_now is not None:
+            sample["om"] = round(om_now, 1)
+        if outside_rh is not None:
+            sample["hum"] = round(outside_rh)  # gemeten buiten-RH → vochttrend op het scatterplot
+        if meas_rh20 is not None:
+            # Gemeten buiten-RH omgerekend naar RH_REF_T — de "gemeten"-vochtlijn op de
+            # temperatuurgrafiek (additief; oudere samples zonder rh20 laten simpelweg een gat).
+            sample["rh20"] = round(meas_rh20, 1)
+        if wu_solar is not None:
+            # Rauwe WU-pyranometerstand (vóór de biascorrectie) — additief, voedt de
+            # lokale mediaan-fallback (smoothed_solar) voor als history/all faalt.
+            sample["solar"] = round(wu_solar, 1)
+        out_hist = _append_trim(out_hist, sample)
+    outside_slope = room_trend(out_hist, now, clamp=OUT_TREND_MAX)
+    outside_hum_slope = room_trend(out_hist, now, "hum", RH_TREND_MAX)
+
+    warm_day = dmax is not None and dmax >= WARM_DAY_MAX
+
+    ctx = {
+        "od": od, "prev_rooms": prev_rooms, "warm_ahead": warm_ahead, "gated": gated,
+        "outside_rh": outside_rh, "outside_rh_temp": outside_rh_temp,
+        "fc": fc, "hourly": om["hourly"],
+    }
+    rooms_out = {room: _room_dashboard_row(room, rooms_data, prev_room_dash, now, ctx)
+                 for room in SENSOR_ROOMS}
+
+    return {
+        "generated_at":   utc_now_iso(),
+        "as_of_local":    now.isoformat(),
+        "source":         "window_advisor",
+        "gated":          gated,
+        "gate_reason":    gate_reason,
+        "outside_now":    round(outside, 1) if outside is not None else None,
+        "outside_smoothed": round(od, 1) if od is not None else None,
+        "outside_source": outside_source,
+        "outside_humidity": round(outside_rh) if outside_rh is not None else None,
+        "outside_rh20":   round(meas_rh20, 1) if meas_rh20 is not None else None,
+        "om_now":         round(om_now, 1) if om_now is not None else None,
+        "outside_trend":  round(outside_slope, 2) if outside_slope is not None else None,
+        "outside_hum_trend": round(outside_hum_slope, 2) if outside_hum_slope is not None else None,
+        "bias":           bias,
+        # Geleerde Open-Meteo-modelbias + het verificatielogboek waaruit hij komt
+        # (additief, zie om_bias.py). `night`/`day` = mediane modelfout in °C,
+        # + = model leest te warm; 0 zolang er te weinig geverifieerde punten zijn.
+        "om_bias":        {**(om_learned or {}), "updated_at": now.isoformat(),
+                           "window_d": om_bias.LEARN_WINDOW_D,
+                           "pending": (om_log or {}).get("pending", []),
+                           "errors":  (om_log or {}).get("errors", [])},
+        "day_max":        round(dmax, 1) if dmax is not None else None,
+        "warm_day":       warm_day,
+        "warm_ahead":     warm_ahead,
+        "params": {
+            "COMFORT_HIGH": COMFORT_HIGH, "OPEN_MARGIN": OPEN_MARGIN,
+            "CLOSE_MARGIN": CLOSE_MARGIN, "WARM_DAY_MAX": WARM_DAY_MAX,
+            "LOOKAHEAD_H": LOOKAHEAD_H,
+            "RH_COMFORT": RH_COMFORT, "RH_HARD_CAP": RH_HARD_CAP, "RH_REF_T": RH_REF_T,
+            "ROOM_COMFORT": {r: {"low": lo, "high": hi}
+                             for r, (lo, hi) in ROOM_COMFORT.items()},
+        },
+        "outside_history": out_hist,
+        "forecast":        forecast,
+        "rooms":           rooms_out,
+    }
+
+
+# ── Entrypoint ──────────────────────────────────────────────────────────────────
+
+def main():
+    now = datetime.now(TZ)
+    print(f"[window_advisor] Start — {now.isoformat()}")
+
+    access_token = get_access_token()
+    rooms_data   = fetch_room_temps(access_token)
+
+    om              = fetch_open_meteo()
+    outside, wu_solar, wu_humid = fetch_wu_current_temp()
+    # Consistent buiten-sensorpaar voor de RH→kamer-omrekening: rauwe temp + bijbehorende
+    # RH (géén biascorrectie — RH en temp moeten van dezelfde meting komen). WU-paar bij
+    # voorkeur; valt terug op het Open-Meteo-paar als het station geen RH levert.
+    if outside is not None and wu_humid is not None:
+        outside_rh, outside_rh_temp = wu_humid, outside
+    else:
+        outside_rh, outside_rh_temp = om.get("current_humidity"), om.get("current")
+    # Vooraf ophalen (i.p.v. pas ná de correctie) zodat de lokale solar-mediaan hieronder
+    # 'm ook kan gebruiken — dezelfde gepersisteerde historie als de anti-flapping-mediaan
+    # verderop.
+    prev_dash = read_prev_dashboard()
+    prev_hist = prev_dash.get("outside_history", [])
+
+    if outside is None:
+        outside = om["current"]
+        outside_source = "open-meteo"
+        print(f"[buiten] WU niet beschikbaar → Open-Meteo: {outside}°C")
+    else:
+        outside_source = "wu"
+        # Stralingsbiascorrectie (zie wu_bias.py): het WU-station leest in de zon
+        # te warm. Driver bij voorkeur de mediaan van de eigen pyranometer over de
+        # laatste SOLAR_AVG_WINDOW_MIN, via het `history/all`-endpoint
+        # (fetch_wu_recent_solar) — een enkel instant-sample importeerde voorbijgaande
+        # wolkenschaduw 1-op-1 in de correctie (piekige gecorrigeerde temp rond 12-15u
+        # op wisselend bewolkte dagen). Dat endpoint gaf tot aug 2026 nooit iets terug
+        # — geen product-tier-gap zoals eerst genoteerd, maar een verkeerde veldnaam,
+        # zie fetch_wu_recent_solar. De lokale mediaan (smoothed_solar) over onze eigen
+        # 15-minuten-historie blijft eronder staan: geen extra endpoint-afhankelijkheid,
+        # wel dezelfde demping, en hij dekt de eerste runs na een lege checkout.
+        # Laatste redmiddel: de instant-WU-waarde, dan Open-Meteo. Dit schoont meteen
+        # de microklimaat-bias-blend, decide() en outside_history op.
+        raw = outside
+        solar_recent = fetch_wu_recent_solar(now)
+        solar_local  = smoothed_solar(prev_hist, now, wu_solar)
+        if solar_recent is not None:
+            solar_now, src = solar_recent, "wu_hist_api"
+        elif solar_local is not None:
+            solar_now, src = solar_local, "wu_hist_local"
+        elif wu_solar is not None:
+            solar_now, src = wu_solar, "wu_now"
+        else:
+            solar_now, src = om.get("current_solar"), "om"
+        outside = round(correct_temp(outside, solar_now), 1)
+        print(f"[buiten] WU: {raw}°C → gecorrigeerd {outside}°C "
+              f"(zon {solar_now} W/m², bron {src})")
+
+    # Anti-flapping: streek de actuele buitentemp glad met de mediaan over de laatste
+    # SMOOTH_WINDOW_H aan metingen vóórdat we erop beslissen. Korte, hevige regenbuien
+    # laten de buitentemp door verdampingskoeling soms >2°C duiken tussen kwartiermetingen
+    # — meer dan de hysterese-band — om daarna weer te herstellen, wat het advies liet
+    # flippen (en je wilt sowieso geen raam open in een bui). De mediaan negeert zo'n losse
+    # dip. De ruwe `outside` blijft de uitlezing/historie/bias voeden; `outside_decide` is
+    # wat decide() ziet. `prev_hist` is hierboven al opgehaald (ook gebruikt voor de
+    # solar-mediaan).
+    outside_decide = smoothed_outside(prev_hist, now, outside)
+    if outside_decide is not None and outside is not None and abs(outside_decide - outside) >= 0.1:
+        print(f"[buiten] beslis-temp (mediaan {SMOOTH_WINDOW_H}u): {outside_decide:.1f}°C")
+
+    # Open-Meteo-modelbias (zie om_bias.py): reken de forecasts af die we eerder
+    # vastlegden en werk de geleerde nacht/dag-bias bij. Verificatie leunt op `prev_hist`
+    # (het uur dat afgerekend wordt ligt in het verleden, dus staat er al in) — het
+    # sample van nú wordt pas in build_dashboard toegevoegd en is hier niet nodig.
+    om_log = om_bias.verify_pending(prev_dash.get("om_bias", {}), prev_hist, now)
+    om_log = om_bias.record_forecast(om_log, om["hourly"], now)
+    om_learned = om_bias.learn(om_log)
+    print(f"[om-bias] geleerd: nacht {om_learned['night']:+.2f}°C "
+          f"(n={om_learned['n_night']}), dag {om_learned['day']:+.2f}°C "
+          f"(n={om_learned['n_day']}), openstaand {len(om_log.get('pending') or [])}")
+
+    # Eén geijkte reeks voor álle consumenten: stationsanker dat uitdooft naar de
+    # geleerde modelbias. Tot nu toe vergeleken de gate en next_reopen de *ruwe*
+    # modelwaarde met gemeten binnentemperaturen — twee schalen, met de warme bias erin.
+    bias = station_bias(outside_source, outside, om.get("current"))
+    fc = correct_forecast(om["hourly"], bias, now, om_learned)
+    hourly_corr = corrected_hourly(fc)
+
+    today  = now.date()
+    dmax   = day_max_temp(hourly_corr, today)
+    # Komt er een warme dag aan (komende 24u)? Zo ja, dan tanken we 's nachts koelte:
+    # ramen blijven open ook als de kamer onder comfort zakt, zolang het buiten kouder is.
+    upcoming_max = upcoming_max_temp(hourly_corr, now)
+    warm_ahead   = upcoming_max is not None and upcoming_max >= WARM_DAY_MAX
+    state  = load_state()
+    prev_rooms = state.get("rooms", {})
+
+    # Koeladvies is alleen zinvol op warme dagen. Onder de drempel én geen warme
+    # kamer → niets doen (change-only voorkomt verder ruis).
+    # Alleen de advies-kamers (ROOMS) mogen de gate opheffen — de sensor-only badkamer telt niet
+    # mee (geen raam om te openen; een warme douche mag geen koeladvies-run forceren).
+    warm_room = any(
+        ((rooms_data.get(room) or {}).get("inside") is not None
+         and rooms_data[room]["inside"] > comfort_band(room)[1])
+        for room in ROOMS
+    )
+    gated = (dmax is None or dmax < WARM_DAY_MAX) and not warm_room
+    gate_reason = "koele dag — advies onderdrukt" if gated else "warme dag"
+
+    # Dashboard altijd verversen (ook op onderdrukte dagen, zodat de historie en de
+    # "vandaag dicht houden"-status zichtbaar blijven). Telegram blijft ongewijzigd.
+    # Het resultaat wordt vastgehouden: de meldlaag hieronder leest er het advies, de
+    # open-reden én de voorspelde open-vensters uit. Vóór augustus 2026 gooide main() dit
+    # dict weg en berekende het decide() daarna een tweede keer — dubbel werk dat uit
+    # elkaar kón lopen, en dat de meldlaag zonder vooruitblik liet zitten.
+    dash = build_dashboard(
+        now, rooms_data, om, outside, outside_source, dmax, prev_rooms, gated, gate_reason,
+        warm_ahead, outside_rh=outside_rh, outside_rh_temp=outside_rh_temp,
+        outside_decide=outside_decide, wu_solar=wu_solar,
+        bias=bias, fc=fc, om_log=om_log, om_learned=om_learned)
+    write_dashboard(dash)
+
+    if gated:
+        print(f"[gate] Koele dag (max {dmax}°C) en geen warme kamer → geen advies.")
+        # State niet wijzigen; ramen blijven op hun laatste advies staan.
+        return
+
+    dry = os.environ.get("DRY_RUN") == "1"
+    dash_rooms = dash.get("rooms") or {}
+
+    # Het advies zélf komt onveranderd uit build_dashboard/decide(); hier bepalen we
+    # alleen nog wát daarvan een bericht waard is.
+    new_rooms = dict(prev_rooms)
+    entries: list[tuple[str, dict]] = []
+    lines: list[str] = []
+    for room in ROOMS:
+        d = dash_rooms.get(room) or {}
+        advice  = d.get("advice") or prev_rooms.get(room, "dicht")
+        inside  = d.get("inside")
+        vent_rh = d.get("vent_rh")
+        intervals = d.get("open_intervals") or []
+        new_rooms[room] = advice
+
+        # Vóór notify_decision: die poort wil weten hóé lang dit advies al open zegt.
+        track_open_since(state, room, advice, now)
+        # Bewust géén per-kamer-logregel meer: die printte binnentemperaturen én het
+        # meldgeheugen uit de secret-Gist (notified/open_since) naar het publieke
+        # Actions-log. Debuggen kan via een handmatige DRY_RUN-dispatch (berichttekst)
+        # of het dashboard-artefact.
+        decision = notify_decision(state, room, advice, intervals, d.get("open_reason"),
+                                   inside, outside_decide, vent_rh, now,
+                                   rh_veto=d.get("rh_veto"))
+        if decision is None:
+            continue
+        # Frisse lucht is de reden zónder thermisch belang; die mag alleen een bericht
+        # opleveren als de lucht ook de kómende uren aangenaam blijft. Zonder deze poort
+        # adviseert het model te ventileren in lucht die over een uur klam is.
+        if decision["kind"] == "open" and decision.get("reason") == "fresh_air":
+            # De duur-poort in notify_decision is hierboven al gehaald, dus dit is nooit
+            # None; expliciet i.p.v. `or` — 0.0 is falsy en zou stil MIN_OPEN_H worden.
+            dur = sustained_open_h(intervals)
+            duur = MIN_OPEN_H if dur is None else max(dur, MIN_OPEN_H)
+            vooruit = vent_rh_ahead(fc, inside, now, duur)
+            if vooruit is not None and vooruit > RH_COMFORT:
+                print(f"[bericht] {room}: frisse lucht overgeslagen — buiten wordt muffer "
+                      f"(vent_rh tot {vooruit:.0f}% binnen {duur:.1f}u)")
+                continue
+
+        reopen = None
+        if decision["kind"] == "dicht":
+            # De "buiten zakt rond HH weer onder binnen"-hint slaat alleen ergens op als
+            # buiten nú boven de heropen-drempel zit (warmte-instroom). Zit het al onder
+            # die drempel, dan is er niets om op te wachten en zou de hint misleiden.
+            if (inside is not None and outside_decide is not None
+                    and outside_decide > inside - OPEN_MARGIN):
+                reopen = reopen_hour(hourly_corr, inside, now)
+        lines.append(room_message_line(room, decision, inside, outside_decide,
+                                       intervals, vent_rh, reopen))
+        entries.append((room, decision))
+
+    state["rooms"] = new_rooms
+
+    # Dagplan (naar de groep): één keer per dag, op de eerste niet-onderdrukte run op of
+    # ná PLAN_HOUR. Idempotent via day.plan_sent, want de kwartierlus herstart elke ~5u.
+    day = roll_day(state, now.date().isoformat())
+    if not day["plan_sent"] and now.hour >= PLAN_HOUR:
+        plan = build_day_plan(dash_rooms, now)
+        plan_msg = day_plan_message(plan, dmax, now)
+        groep = os.getenv("TELEGRAM_CHAT_GROUP_ID")
+        if dry:
+            # Berichttekst alleen onder DRY_RUN printen — kamer-voor-kamer plannen horen
+            # niet in het publieke Actions-log.
+            print(plan_msg)
+            print("DRY_RUN=1, dagplan niet verzonden.")
+        elif not groep:
+            # Zónder expliciete groep-id zou send_telegram terugvallen op de privé-chat
+            # (notify.py: `chat_id or os.getenv("TELEGRAM_CHAT_ID")`). Het dagplan hoort
+            # juist naar de groep, dus liever overslaan dan stilletjes misleveren.
+            print("[dagplan] TELEGRAM_CHAT_GROUP_ID ontbreekt → dagplan overgeslagen.")
+        else:
+            send_telegram(plan_msg, chat_id=groep, parse_mode="Markdown",
+                          muted_in_quiet=True)
+            day["plan_sent"] = True
+            print("[dagplan] Verzonden naar de groep.")
+
+    if not entries:
+        print("[bericht] Niets te melden.")
+        save_state(state)
+        return
+
+    message = advice_message(now, entries, lines)
+    if dry:
+        # Bewust géén cooldown starten onder DRY_RUN: één handmatige testrun mag de échte
+        # berichten van die dag niet stilleggen. De tokenrotatie en het advies-geheugen
+        # (state["rooms"], state["open_since"]) worden wél gewoon bewaard, zoals altijd.
+        # De berichttekst (binnentemps per kamer) print alleen hier — publiek log.
+        print(message)
+        print("DRY_RUN=1, niet verzonden (cooldown niet gestart).")
+    else:
+        # Het per-kamer-advies gaat naar de privé-chat (TELEGRAM_CHAT_ID, de
+        # send_telegram default), net als de operationele alerts. Alleen het dagplan
+        # hierboven gaat naar de groep.
+        send_telegram(message, parse_mode="Markdown", muted_in_quiet=True)
+        state["last_notification"] = now.isoformat()
+        for room, decision in entries:
+            record_notification(state, room, decision, now)
+        print("Verzonden naar Telegram.")
+
+    save_state(state)
+    print("[window_advisor] Klaar")
+
+
+if __name__ == "__main__":
+    # fail_threshold=6: kwartierloop — pas alerten bij ~1,5 uur aanhoudende
+    # storing. Een gemiste iteratie is onschuldig (de volgende haalt bij);
+    # alleen een echte outage is een bericht waard.
+    run_guarded(main, "window-advisor", fail_threshold=6)

@@ -1,0 +1,348 @@
+#!/usr/bin/env python3
+"""
+sandbox_notify.py — Zandbak notificaties via Telegram
+Losse module naast het bestaande Pineapple Under The Sea systeem.
+
+Status-waarden:
+  "open"      — zandbak is gelucht/open
+  "dicht"     — zandbak is dicht (tegen katten), droog verwacht, morgen weer open
+  "afgedekt"  — zandbak is afgedekt met dekzeil (regen verwacht)
+
+Avondlogica:
+  - Regen verwacht (morgen of later) → altijd AFDEKKEN
+  - Alleen droog verwacht → SLUITEN (dicht), morgen ochtend bericht om te luchten
+  - Afgedekt + regen → geen bericht
+
+Ochtendlogica:
+  - Droog + warm → bericht om te luchten (zowel vanuit "dicht" als "afgedekt")
+  - Al open + droog → geen bericht
+  - Open + regen vandaag → waarschuw
+
+State wordt automatisch bijgewerkt na elk advies.
+"""
+
+import contextlib
+import io
+import json
+import os
+import sys
+
+import shared_const
+from shared_const import format_date_nl, parse_date, utc_now_iso
+from http_util import get_json
+from notify import run_guarded, sanitize_error, send_telegram
+
+# ── Configuratie ──────────────────────────────────────────────────────────────
+STATE_FILE         = os.environ.get("SANDBOX_STATE_FILE", "sandbox_state.json")
+
+LATITUDE  = shared_const.LATITUDE
+LONGITUDE = shared_const.LONGITUDE
+
+RAIN_PROB_THRESHOLD = 30   # % kans → "regen verwacht"
+RAIN_MM_THRESHOLD   = 1.0  # mm → ook "regen verwacht"
+MIN_TEMP_LUCHTEN    = 7    # °C tmax minimaal nodig om luchten zinvol te achten
+
+
+def _dbg(msg: str) -> None:
+    """Detail alleen onder DRY_RUN=1 (handmatige dispatch). De scheduled
+    Actions-log is publiek en hoort vormvast te zijn: geen status, beslissing
+    of berichtinhoud — het gardena_control-patroon (zie de privacy-grondregel
+    "afwezigheid mag nergens publiek af te lezen zijn")."""
+    if os.environ.get("DRY_RUN") == "1":
+        print(msg)
+
+
+def _send(text: str) -> bool:
+    """Verstuur met de stdout van notify.py onderdrukt — de
+    "[telegram] ✓ verzonden"-regel zou in de publieke Actions-log verraden
+    dát er iets te melden viel; de logvorm moet constant blijven (zelfde
+    patroon als gardena_control.send_private)."""
+    with contextlib.redirect_stdout(io.StringIO()):
+        return send_telegram(text, muted_in_quiet=True)
+
+
+# ── State I/O ────────────────────────────────────────────────────────────────
+
+def load_state() -> dict:
+    defaults = {"status": "dicht", "last_updated": None}
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE) as f:
+                data = json.load(f)
+            # last_notification dateerde een verstuurd bericht in een publiek
+            # gecommit bestand en werd nergens gelezen — sinds de privacy-
+            # assessment (aug 2026) wordt het veld niet meer geschreven en
+            # hier weggemigreerd uit bestaande state.
+            data.pop("last_notification", None)
+            return {**defaults, **data}
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"[state] {STATE_FILE} onleesbaar ({sanitize_error(e)}), terug naar defaults")
+    return defaults
+
+
+def save_state(state: dict) -> None:
+    state["last_updated"] = utc_now_iso()
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f, indent=2, ensure_ascii=False)
+    print("[state] opgeslagen")
+    _dbg(f"[state] status={state['status']}")
+
+
+# ── Weersdata (Open-Meteo) ────────────────────────────────────────────────────
+
+def fetch_forecast() -> list[dict]:
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude":      LATITUDE,
+        "longitude":     LONGITUDE,
+        "daily": [
+            "precipitation_sum",
+            "precipitation_probability_max",
+            "temperature_2m_min",
+            "temperature_2m_max",
+        ],
+        "forecast_days": 4,
+        "timezone":      "Europe/Amsterdam",
+    }
+    data = get_json(url, params, timeout=10, label="open-meteo")["daily"]
+
+    days = []
+    for i, d in enumerate(data["time"]):
+        days.append({
+            "date":            d,
+            "precip_mm":       data["precipitation_sum"][i] or 0.0,
+            "precip_prob_max": data["precipitation_probability_max"][i] or 0,
+            "tmin":            data["temperature_2m_min"][i] or 0.0,
+            "tmax":            data["temperature_2m_max"][i] or 0.0,
+        })
+    return days
+
+
+def is_rain_expected(day: dict) -> bool:
+    return (
+        day["precip_prob_max"] >= RAIN_PROB_THRESHOLD
+        or day["precip_mm"] >= RAIN_MM_THRESHOLD
+    )
+
+
+def first_dry_day(forecast: list[dict], from_index: int = 1) -> str | None:
+    for day in forecast[from_index:]:
+        if not is_rain_expected(day):
+            return day["date"]
+    return None
+
+
+# ── Ochtendlogica (07:00) ─────────────────────────────────────────────────────
+
+def morning_check(state: dict, forecast: list[dict]) -> tuple[str | None, dict]:
+    today  = forecast[0]
+    status = state["status"]
+    regen_vandaag = is_rain_expected(today)
+    warm_genoeg   = today["tmax"] >= MIN_TEMP_LUCHTEN
+
+    _dbg(f"[ochtend] status={status} regen_vandaag={regen_vandaag} "
+         f"precip_kans={today['precip_prob_max']}% precip_mm={today['precip_mm']:.1f} "
+         f"tmax={today['tmax']}°C")
+
+    # Al open + droog → niks te doen
+    if status == "open" and not regen_vandaag:
+        _dbg("[ochtend] Al open en droog → geen bericht")
+        return None, state
+
+    # Afgedekt + regen vandaag → alles klopt, geen actie
+    if status == "afgedekt" and regen_vandaag:
+        _dbg("[ochtend] Afgedekt + regen → geen bericht")
+        return None, state
+
+    # Droog + warm genoeg → luchten (vanuit dicht of afgedekt)
+    if not regen_vandaag and warm_genoeg:
+        if status == "afgedekt":
+            msg = (
+                "🏖️ <b>Zandbak kan vandaag gelucht worden!</b>\n"
+                f"Droog ({today['precip_prob_max']}% kans, {today['precip_mm']:.0f}mm) "
+                f"en {today['tmax']:.0f}°C. Dekzeil eraf!\n"
+                "→ Vergeet vanavond niet te checken of hij dicht moet."
+            )
+        else:  # dicht
+            msg = (
+                "☀️ <b>Zandbak kan gelucht worden vandaag!</b>\n"
+                f"Geen regen verwacht ({today['precip_prob_max']}% kans) "
+                f"en {today['tmax']:.0f}°C.\n"
+                "→ Deksel eraf, laat hem lekker luchten."
+            )
+        return msg, {**state, "status": "open"}
+
+    # Open of dicht + regen vandaag → waarschuw (deksel alleen is niet genoeg)
+    if status in ("open", "dicht") and regen_vandaag:
+        intro = (
+            "🌧️ <b>Regen verwacht vandaag — zandbak staat open!</b>"
+            if status == "open"
+            else "🌧️ <b>Regen verwacht vandaag — zandbak alleen dicht, niet afgedekt!</b>"
+        )
+        msg = (
+            f"{intro}\n"
+            f"{today['precip_prob_max']}% kans, {today['precip_mm']:.0f}mm verwacht.\n"
+            "→ Afdekken!"
+        )
+        return msg, state
+
+    # Afgedekt + droog maar te koud → geen bericht
+    if status == "afgedekt" and not regen_vandaag and not warm_genoeg:
+        _dbg(f"[ochtend] Afgedekt + droog maar te koud ({today['tmax']}°C) → geen bericht")
+        return None, state
+
+    _dbg("[ochtend] Geen actie nodig")
+    return None, state
+
+
+# ── Avondlogica (20:00) ───────────────────────────────────────────────────────
+
+def evening_check(state: dict, forecast: list[dict]) -> tuple[str | None, dict]:
+    today      = forecast[0]
+    raw_morgen = forecast[1] if len(forecast) > 1 else None
+    overmorgen = forecast[2] if len(forecast) > 2 else None
+    status     = state["status"]
+
+    # Forecast soms < 2 dagen (API-hiccup, late run): val terug op vandaag voor
+    # tmax/regen-velden zodat downstream-formatters geen '?' tonen, en zet een
+    # waarschuwing bovenaan het bericht.
+    limited_forecast = raw_morgen is None
+    morgen = raw_morgen if raw_morgen is not None else today
+
+    regen_morgen     = is_rain_expected(raw_morgen) if raw_morgen else False
+    regen_overmorgen = is_rain_expected(overmorgen) if overmorgen else False
+    regen_nabij      = regen_morgen or regen_overmorgen  # enige regen → afdekken
+
+    _dbg(f"[avond] status={status} regen_morgen={regen_morgen} "
+         f"({morgen['precip_prob_max']}%) "
+         f"regen_overmorgen={regen_overmorgen} regen_nabij={regen_nabij} "
+         f"limited_forecast={limited_forecast}")
+
+    def _wrap(msg: str | None) -> str | None:
+        if msg is None or not limited_forecast:
+            return msg
+        return "⚠️ <i>Beperkte forecast (alleen vandaag beschikbaar)</i>\n" + msg
+
+    # ── Open ──
+    if status == "open":
+        if regen_morgen:
+            droge_dag = first_dry_day(forecast, from_index=1)
+            droge_str = f"Eerste droge dag: {_format_date(droge_dag)}" if droge_dag else "Geen droge dag in zicht"
+            regen_desc = (
+                f"Morgen {morgen['precip_prob_max']}% regen ({morgen['precip_mm']:.0f}mm)"
+                + (", en ook overmorgen." if regen_overmorgen else ".")
+            )
+            msg = (
+                f"🌧️ <b>Zandbak afdekken vanavond!</b>\n"
+                f"{regen_desc}\n"
+                f"{droge_str}.\n"
+                "→ Dekzeil erop."
+            )
+            return _wrap(msg), {**state, "status": "afgedekt"}
+        else:
+            # Droog morgen → sluiten tegen katten; morgenochtend krijg je bericht om te openen
+            msg = (
+                "🐱 <b>Zandbak sluiten tegen de katten</b>\n"
+                "Morgen droog, je krijgt morgenochtend een berichtje om hem te openen.\n"
+                "→ Deksel erop voor de nacht."
+            )
+            return _wrap(msg), {**state, "status": "dicht"}
+
+    # ── Dicht ──
+    if status == "dicht":
+        if regen_morgen:
+            droge_dag = first_dry_day(forecast, from_index=1)
+            droge_str = f"Eerste droge dag: {_format_date(droge_dag)}" if droge_dag else "Geen droge dag in zicht"
+            regen_desc = (
+                f"Morgen {morgen['precip_prob_max']}% regen ({morgen['precip_mm']:.0f}mm)"
+                + (", en ook overmorgen." if regen_overmorgen else ".")
+            )
+            msg = (
+                f"⚠️ <b>Zandbak afdekken!</b>\n"
+                f"{regen_desc} Deksel alleen is niet genoeg.\n"
+                f"{droge_str}.\n"
+                "→ Dekzeil erop."
+            )
+            return _wrap(msg), {**state, "status": "afgedekt"}
+        else:
+            # Droog morgen → geen actie (morgen ochtend triggert luchten)
+            _dbg("[avond] Dicht + droog morgen → geen bericht, ochtend triggert luchten")
+            return None, state
+
+    # ── Afgedekt ──
+    if status == "afgedekt":
+        if regen_nabij:
+            # Alles klopt
+            _dbg("[avond] Afgedekt + regen → geen bericht")
+            return None, state
+        else:
+            # Droog morgen → aankondiging, ochtendrun stuurt het echte bericht
+            msg = (
+                "🌤️ <b>Morgen kan de zandbak gelucht worden!</b>\n"
+                f"Morgen droog ({morgen['precip_prob_max']}% kans) "
+                f"en {morgen['tmax']}°C.\n"
+                "→ Je krijgt morgenochtend een berichtje."
+            )
+            # State blijft "afgedekt" — ochtendrun zet hem op open na het bericht
+            return _wrap(msg), state
+
+    _dbg(f"[avond] Onbekende status '{status}', geen actie")
+    return None, state
+
+
+# ── Hulpfuncties ──────────────────────────────────────────────────────────────
+
+def _format_date(d: str | None) -> str:
+    if not d:
+        return "onbekend"
+    return format_date_nl(parse_date(d))
+
+
+# ── Entrypoint ────────────────────────────────────────────────────────────────
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] not in ("morning", "evening"):
+        print("Gebruik: python sandbox_notify.py [morning|evening]", file=sys.stderr)
+        sys.exit(1)
+
+    mode = sys.argv[1]
+    print(f"[sandbox_notify] Start — mode={mode} tijd={utc_now_iso()}")
+
+    state    = load_state()
+    forecast = fetch_forecast()
+    if not forecast:
+        # API-hiccup met lege daily-array: zonder vandaag-rij valt er niets te
+        # beslissen — state ongemoeid laten en de volgende run het laten proberen.
+        print("[forecast] leeg antwoord van Open-Meteo → geen advies, state ongewijzigd")
+        return
+
+    _dbg(f"[forecast] Vandaag: {forecast[0]}")
+    if len(forecast) > 1:
+        _dbg(f"[forecast] Morgen:  {forecast[1]}")
+
+    if mode == "morning":
+        bericht, nieuwe_state = morning_check(state, forecast)
+    else:
+        bericht, nieuwe_state = evening_check(state, forecast)
+
+    if os.environ.get("DRY_RUN") == "1":
+        # Handmatige testdispatch: toon alles, verstuur niets en laat de
+        # state-machine (het gecommitte sandbox_state.json) met rust — een
+        # test mag de echte cyclus niet verzetten.
+        if bericht:
+            print(bericht)
+        print("DRY_RUN=1 — niet verzonden, state niet weggeschreven.")
+        return
+
+    if bericht:
+        _send(bericht)
+
+    save_state(nieuwe_state)
+    print("[sandbox_notify] Klaar")
+
+
+if __name__ == "__main__":
+    # fail_threshold=2: de workflow doet bij falen één herkansing na 10 min
+    # (zelfde job, dus zelfde RUNNER_TEMP-teller) — alleen een aanhoudende
+    # storing alert.
+    run_guarded(main, "zandbak", fail_threshold=2)

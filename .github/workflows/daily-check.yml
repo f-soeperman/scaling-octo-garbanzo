@@ -1,0 +1,150 @@
+name: Daily Soil Check
+
+on:
+  schedule:
+    # Fallback ~40 min ná het meldmoment (06:00 Amsterdam). Normaal heeft de
+    # Timing Orchestrator deze workflow dan al gedraaid — die dispatcht 'm sinds
+    # aug 2026 ELK UUR, zodat het dashboard met de dag meebeweegt. Deze cron
+    # vuurt alleen als de orchestrator uitviel; hij is er om het *advies* van
+    # 06:00 te redden, niet om een uurtje verversing in te halen. De guard-job
+    # hieronder voorkomt dubbel.
+    - cron: '40 6 * * *'
+      timezone: 'Europe/Amsterdam'
+  workflow_dispatch:
+    inputs:
+      force_notify:
+        description: 'Force notification even if not needed'
+        required: false
+        default: 'false'
+
+# Eén run tegelijk: een handmatige dispatch tijdens de cron zou anders
+# tegelijk met die run docs/data.json committen.
+concurrency:
+  group: daily-check
+  cancel-in-progress: false
+
+jobs:
+  # Dedup t.o.v. de orchestrator: skip de fallback-cron als er sinds het
+  # meldmoment al een (niet-mislukte) run was. Alleen op `schedule` — handmatige
+  # en orchestrator-dispatches (beide workflow_dispatch) draaien altijd door.
+  #
+  # `since` is bewust 06:00 en niet middernacht. Met de uurlijkse cadans hebben
+  # de runs van 00:00–05:00 er altijd al gestaan, dus een middernacht-venster
+  # zou de fallback-cron áltijd laten skippen — precies in het scenario waar hij
+  # voor bestaat (orchestrator valt 's nachts om, advies van 06:00 blijft uit).
+  # Het venster loopt daarom vanaf het moment waarop het advies had moeten
+  # vallen: alleen een run ná 06:00 bewijst dat het meldslot behandeld is.
+  guard:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      handled: ${{ steps.check.outputs.handled }}
+    steps:
+      - name: Skip if the advice slot was already handled
+        id: check
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          since=$(TZ=Europe/Amsterdam date -d "today 06:00" +%s)
+          others=$(gh run list --workflow daily-check.yml -L 40 \
+            --json databaseId,createdAt,conclusion \
+            --jq "[.[] | select(.databaseId != ${{ github.run_id }}
+                   and (.createdAt|fromdateiso8601) >= $since
+                   and .conclusion != \"failure\" and .conclusion != \"cancelled\"
+                   and .conclusion != \"timed_out\" and .conclusion != \"startup_failure\")] | length")
+          if [ "${others:-0}" -gt 0 ]; then
+            echo "handled=1" >> "$GITHUB_OUTPUT"
+            echo "Al gedraaid sinds 06:00 (${others} run(s)) — orchestrator deed dit al, sla over."
+          fi
+
+  check:
+    needs: guard
+    if: needs.guard.outputs.handled != '1'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # API-calls + commit duren normaal <5 min; zonder cap houdt een hangende
+    # HTTP-call de runner 6 uur (GitHub-default) vast. De cap dekt ook de
+    # in-job herkansing (10 min slaap + tweede poging) bij een API-storing.
+    timeout-minutes: 35
+    steps:
+      # Op de branch-tip, niet op `github.sha` (= de stand bij het dispatchen).
+      # Deze job leest zijn eigen gecommitte stand terug — `docs/data.json` voor
+      # de θ-seed én `soil_state.json` voor het meldslot — terwijl de window/vent-
+      # loops de hele dag door naar main committen. Met de uurlijkse cadans zou
+      # een oudere momentopname het meldslot van 06:00 kunnen missen en het
+      # bericht een tweede keer versturen; zelfde pin en zelfde reden als
+      # shade-notify.yml (zie de dubbele "nu dichtdoen"-berichten, aug 2026).
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run daily check
+        env:
+          WU_STATION_ID: ${{ secrets.WU_STATION_ID }}
+          WU_API_KEY: ${{ secrets.WU_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GIST_ID: ${{ secrets.GIST_ID }}
+          GH_TOKEN: ${{ secrets.GIST_TOKEN }}
+          # Privé artefact-gist voor data.json (privatisering aug 2026); afwezig
+          # secret → het oude lokale-bestand-pad (zelf-activerende migratie).
+          ARTEFACT_GIST_ID: ${{ secrets.ARTEFACT_GIST_ID }}
+          DASHBOARD_URL: ${{ vars.DASHBOARD_URL }}
+          FORCE_NOTIFY: ${{ github.event.inputs.force_notify }}
+        # Eén herkansing na 10 min: een transiente Open-Meteo-hapering op het
+        # meldmoment kost dan geen advies. Blijft ook bij de uurlijkse cadans
+        # staan — de volgende run is pas over een uur, en `fail_threshold=2`
+        # telt in RUNNER_TEMP (per runner, dus per job): zonder de tweede
+        # poging in dezelfde job zou een storing nooit meer alerten.
+        run: |
+          python check_and_notify.py || {
+            echo "::warning::eerste poging mislukt — herkansing over 10 min"
+            sleep 600
+            python check_and_notify.py
+          }
+
+      - name: Commit updated data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # docs/data.json bestaat alleen nog in de bootstrap-terugval (zonder
+          # ARTEFACT_GIST_ID); in gist-modus is er niets lokaals om te stagen en
+          # zou een kale pathspec de stap laten falen.
+          git add soil_state.json
+          [ ! -f docs/data.json ] || git add docs/data.json
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            # [skip ci]: dit is een data-commit en draait sinds de uurlijkse
+            # cadans 24× per dag — zonder de marker zou elke verversing de
+            # hele pytest-suite starten. Zelfde patroon als window/vent/mowing.
+            git commit -m "data: soil refresh $(date -u +%Y-%m-%dT%H:%M) [skip ci]"
+            # De window/vent-loops committen de hele dag door naar main —
+            # zonder rebase kan deze push racen en faalt de update stilletjes.
+            # data.json wordt elke run volledig opnieuw gegenereerd, dus bij
+            # conflict wint onze verse versie (-X theirs, zie de uitleg in
+            # window-notify.yml). Falen blijft hard en zichtbaar (exit 1): een
+            # rode run houdt `handled_since` in de orchestrator op "niet
+            # gedaan", zodat de volgende tick het gewoon opnieuw probeert —
+            # en `soil_state.json` niet stilletjes achterblijft bij een
+            # verstuurd bericht.
+            git rebase --abort 2>/dev/null || true
+            if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}"; then
+              git push
+            else
+              git rebase --abort 2>/dev/null || true
+              echo "::error::rebase failed, daily data not pushed"
+              exit 1
+            fi
+          fi

@@ -1,0 +1,201 @@
+name: Zandbak Notificaties
+
+on:
+  schedule:
+    # Fallbacks ~40 min ná de orchestrator-doelen (08:00 + 20:00 Amsterdam).
+    # Normaal heeft de Timing Orchestrator het slot al gedispatcht; deze crons
+    # vuren alleen als de orchestrator uitviel. De guard-job hieronder is
+    # slot-bewust (ochtend vs avond) zodat de avond-run niet door de ochtend-run
+    # wordt weggededupt.
+    - cron: "40 8 * * *"
+      timezone: "Europe/Amsterdam"
+    - cron: "40 20 * * *"
+      timezone: "Europe/Amsterdam"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "morning of evening"
+        required: true
+        default: "morning"
+        type: choice
+        options:
+          - morning
+          - evening
+      override_status:
+        description: "Overschrijf zandbak-status (optioneel)"
+        required: false
+        type: choice
+        options:
+          - ""
+          - open
+          - dicht
+          - afgedekt
+      dry_run:
+        description: "Alleen printen, niets sturen en state niet schrijven"
+        required: false
+        type: boolean
+        default: false
+
+# Eén run tegelijk: een handmatige dispatch (override) tijdens een cron-run
+# zou anders tegelijk sandbox_state.json committen.
+concurrency:
+  group: sandbox-notify
+  cancel-in-progress: false
+
+jobs:
+  # Dedup t.o.v. de orchestrator, per slot. Bepaalt aan de lokale tijd of deze
+  # fallback-cron het ochtend- of avond-slot is, en skipt als er sinds het begin
+  # van dat slot al een (niet-mislukte) run was. Alleen op `schedule` — handmatige
+  # en orchestrator-dispatches (beide workflow_dispatch) draaien altijd door.
+  guard:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      handled: ${{ steps.check.outputs.handled }}
+    steps:
+      - name: Skip if this slot already handled today
+        id: check
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          nowm=$(( 10#$(TZ=Europe/Amsterdam date +%H) * 60 + 10#$(TZ=Europe/Amsterdam date +%M) ))
+          if [ "$nowm" -lt 720 ]; then
+            since=$(TZ=Europe/Amsterdam date -d "today 00:00" +%s)   # ochtend-slot
+          else
+            since=$(TZ=Europe/Amsterdam date -d "today 20:00" +%s)   # avond-slot
+          fi
+          others=$(gh run list --workflow sandbox-notify.yml -L 40 \
+            --json databaseId,createdAt,conclusion \
+            --jq "[.[] | select(.databaseId != ${{ github.run_id }}
+                   and (.createdAt|fromdateiso8601) >= $since
+                   and .conclusion != \"failure\" and .conclusion != \"cancelled\"
+                   and .conclusion != \"timed_out\" and .conclusion != \"startup_failure\")] | length")
+          if [ "${others:-0}" -gt 0 ]; then
+            echo "handled=1" >> "$GITHUB_OUTPUT"
+            echo "Zandbak-slot al gedraaid vandaag (${others} run(s)) — orchestrator deed dit al, sla over."
+          fi
+
+  notify:
+    needs: guard
+    if: needs.guard.outputs.handled != '1'
+    runs-on: ubuntu-latest
+    # Cap dekt ook de in-job herkansing (10 min slaap + tweede poging).
+    timeout-minutes: 30
+    permissions:
+      contents: write
+
+    steps:
+      # Branch-tip-pin: de dedup hangt aan het gecommitte sandbox_state.json;
+      # zonder pin leest een tweede dispatch een momentopname van vóór de
+      # commit van de eerste en stuurt hetzelfde bericht nóg een keer
+      # (dezelfde les als shade-notify.yml, 2 aug 2026).
+      - name: Checkout repo
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Python setup
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Installeer dependencies
+        run: pip install -r requirements.txt
+
+      - name: Bepaal mode
+        id: mode
+        run: |
+          python3 << 'EOF'
+          import os
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+
+          hour = datetime.now(ZoneInfo("Europe/Amsterdam")).hour
+          event = os.environ.get("GITHUB_EVENT_NAME", "")
+
+          if event == "workflow_dispatch":
+              mode = os.environ.get("INPUT_MODE", "morning")
+          else:
+              mode = "morning" if hour < 12 else "evening"
+
+          print(f"Lokaal uur Amsterdam: {hour}, event: {event} -> mode={mode}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"mode={mode}\n")
+          EOF
+        env:
+          INPUT_MODE: ${{ github.event.inputs.mode }}
+
+      - name: Overschrijf status (optioneel, alleen bij workflow_dispatch)
+        if: >
+          github.event_name == 'workflow_dispatch' &&
+          github.event.inputs.override_status != ''
+        env:
+          OVERRIDE_STATUS: ${{ github.event.inputs.override_status }}
+        run: |
+          python3 << 'EOF'
+          import json, os
+          from datetime import datetime, timezone
+          status = os.environ["OVERRIDE_STATUS"]
+          if status not in ("open", "dicht", "afgedekt"):
+              raise SystemExit(f"Onbekende status: {status!r}")
+          f = "sandbox_state.json"
+          state = json.load(open(f)) if os.path.exists(f) else {}
+          state["status"] = status
+          state["last_updated"] = datetime.now(timezone.utc).isoformat()
+          json.dump(state, open(f, "w"), indent=2)
+          # Bewust geen state/status in de publieke run-log — de dispatch-input
+          # is al zichtbaar in het run-record; de log hoeft dat niet te dubbelen.
+          print("state overschreven")
+          EOF
+
+      - name: Voer zandbak check uit
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          SANDBOX_STATE_FILE: sandbox_state.json
+          MODE: ${{ steps.mode.outputs.mode }}
+          # Detail-stdout (beslissing, berichttekst) alleen bij een handmatige
+          # dry-run — de scheduled log is publiek en blijft vormvast.
+          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+          # Voor de stille-modus-poort in notify.py (notify_prefs.json, read-only).
+          GIST_ID:    ${{ secrets.GIST_ID }}
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+        # Eén herkansing na 10 min: een transiente Open-Meteo-hapering kost dan
+        # geen run. run_guarded telt mee in RUNNER_TEMP (zelfde job) en alert
+        # pas bij de 2e mislukking (fail_threshold=2).
+        run: |
+          python3 sandbox_notify.py "$MODE" || {
+            echo "::warning::eerste poging mislukt — herkansing over 10 min"
+            sleep 600
+            python3 sandbox_notify.py "$MODE"
+          }
+
+      - name: Commit zandbak state
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # De docs/-kopie bestond alleen voor het iPad-dashboard; die pagina is
+          # verwijderd bij de privacy-sweep (aug 2026), dus publiceren we niets meer.
+          git add sandbox_state.json
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update sandbox_state.json [skip ci]"
+            # De window/vent-loops committen elk kwartier naar main — zonder
+            # rebase raced deze push en faalt hij. De state wordt elke run
+            # volledig opnieuw geschreven, dus bij conflict wint onze verse
+            # versie (-X theirs). Falen moet hard en zichtbaar zijn (exit 1).
+            git rebase --abort 2>/dev/null || true
+            if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}"; then
+              git push
+            else
+              git rebase --abort 2>/dev/null || true
+              echo "::error::rebase failed, sandbox state not pushed"
+              exit 1
+            fi
+          fi

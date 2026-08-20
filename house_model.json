@@ -1,0 +1,678 @@
+{
+  "_README": [
+    "Project 8 — geometrie van het huis (NIET-GEHEIM, publiek). Gebouwd uit een",
+    "mondelinge rondleiding door de bewoner. Het model leert de fysica zelf bij;",
+    "deze JSON levert de geometrie die het niet kan raden.",
+    "",
+    "ORIENTATIE: de voorgevel (straatzijde) kijkt op ~309° (WNW). Afgeleide gevels:",
+    "  straat/voor = 309° · tuin/achter = 129° (ZO, krijgt de meeste zon) · zijgevel = 219° (ZW).",
+    "  facade_azimuth_deg = richting waar het raam NAAR kijkt. tilt_deg = helling vanaf",
+    "  horizontaal (90 = verticaal raam, ~0 = plat dakraam/skylight).",
+    "center_height_m = ABSOLUTE hoogte boven de begane grond (zo werkt het schoorsteen-",
+    "  effect tussen verdiepingen): bg ~1–2.5m, 1e ~4–5m, 2e ~7m, skylight ~8.7m.",
+    "",
+    "SCHATTINGEN (corrigeer gerust): kamervolumes, het tilt-raampje boven de keukendeur,",
+    "  en de exacte rooster-doorsneden zijn ingeschat. Sensorplaatsing staat per kamer als",
+    "  notitie (beïnvloedt hoe representatief de meting is).",
+    "",
+    "De woonkamer en keuken zijn één open L-vormige ruimte met één tado-sensor → één zone",
+    "('living') met álle openingen van beide. Trap is een eigen zone met de skylight (vangt",
+    "zon, drijft de stack). Gang en badkamer zijn junctie-zones zonder sensor.",
+    "",
+    "PLATTEGROND (dashboard): plan_side ('top|bottom|left|right') + plan_pos (0..1 langs die",
+    "  zijde) plaatsen een raam/rooster op de plattegrond-tekening — schematische zijde van de",
+    "  rastercel, niet geografisch. Optioneel: zonder deze velden kiest de frontend zelf een",
+    "  buitenzijde per gevel-azimut en verdeelt hij gelijkmatig. Deuren: alleen plan_pos",
+    "  (0..1 langs de gedeelde rand; de zijde volgt uit de buurcel)."
+  ],
+  "location": {
+    "_privacy": "bewust ~1 km grof (2 decimalen) — publieke repo, zie shared_const.py",
+    "lat": 52.09,
+    "lon": 5.12,
+    "elevation_m": 5
+  },
+  "terrain": "urban",
+  "rooms": {
+    "living": {
+      "from_window_data": "Living room",
+      "volume_m3": 150,
+      "exterior_wall_m2": 46,
+      "party_wall_m2": 54,
+      "mass_floor_m2": 110,
+      "ground_m2": 55,
+      "floor": 0,
+      "plan_xy": [
+        0,
+        2
+      ],
+      "plan_h": 2,
+      "label": "Woonkamer + keuken",
+      "_sensor": "midden in de kamer → goede proxy voor kamergemiddelde",
+      "_param_bounds": "c_mass-vloer 0.595: living railde op de globale vloer (0.372, de LAAGSTE van alle kamers) terwijl het veruit de grootste kamer is — 150 m3, 55 m2 vloer. Te lage traagheid gaf een te grote voorspelde dagcyclus (-0.91 gradC om 06:00 vs +0.54 om 16:00, ~1.45 gradC piek-tot-piek). Een GLOBALE vloer is getest en verworpen (bedroom-amplitude 0.883 -> 1.468); living-only geeft living 0.663 -> 0.576 op 401 oorsprongen met <2% beweging elders. Rechtvaardiging is geometrisch, dus de grens staat hier naast de geometrie i.p.v. in vent_physics.BOUNDS.",
+      "param_bounds": {
+        "c_mass": {
+          "min": 0.595
+        }
+      }
+    },
+    "nursery": {
+      "from_window_data": "Nursery",
+      "volume_m3": 32,
+      "exterior_wall_m2": 12,
+      "party_wall_m2": 10,
+      "mass_floor_m2": 24,
+      "ground_m2": 12,
+      "floor": 0,
+      "plan_xy": [
+        3,
+        2
+      ],
+      "label": "Kinderkamer (slaapkamer bg)",
+      "_sensor": "binnenrand, niet bij de buitenmuur → redelijk representatief"
+    },
+    "bedroom": {
+      "from_window_data": "bedroom",
+      "volume_m3": 32,
+      "exterior_wall_m2": 12,
+      "party_wall_m2": 10,
+      "mass_floor_m2": 24,
+      "floor": 1,
+      "plan_xy": [
+        3,
+        1
+      ],
+      "label": "Slaapkamer (1e)",
+      "_sensor": "op de buitenmuur → leest richting buitentemp (let op bias)",
+      "sensor_outdoor_frac": 0.15
+    },
+    "office": {
+      "from_window_data": "office",
+      "volume_m3": 32,
+      "exterior_wall_m2": 12,
+      "party_wall_m2": 10,
+      "mass_floor_m2": 12,
+      "floor": 2,
+      "roof_m2": 14,
+      "roof_u": 0.25,
+      "_roof": "bovenste verdieping onder het dak → groot dakvlak met middag-zonlast + nachtelijke hemelkoeling (sol-air-term, ua_roof leert de grootte). roof_u 0.25 = geïsoleerd dak (bewonersopgave juli 2026); de fit had dit zélf al ontdekt door ua_roof naar ~0.098 te duwen tegen de kale-dak-default ROOF_U 1.5 — dat is precies dezelfde effectieve U, maar dan verstopt in een geleerde schaal i.p.v. in de geometrie.",
+      "plan_xy": [
+        3,
+        0
+      ],
+      "label": "Kantoor (2e)",
+      "_sensor": "op de buitenmuur → leest richting buitentemp (let op bias)",
+      "sensor_outdoor_frac": 0.15
+    },
+    "stair": {
+      "volume_m3": 26,
+      "exterior_wall_m2": 6,
+      "party_wall_m2": 8,
+      "ground_m2": 3,
+      "floor": 0,
+      "roof_m2": 10,
+      "roof_u": 0.25,
+      "_roof": "reikt tot het dak (skylight) → krijgt ook de dak-sol-air-term. roof_u 0.25 = geïsoleerd dak (bewonersopgave juli 2026). Dít was een fantoom-verwarming: de koker heeft géén sensor, dus zijn params bleven eeuwig op de priors staan, inclusief de kale-dak-default ROOF_U 1.5 op 10 m². Dat gaf op een zonnige middag ~325 W in de schacht (sol-air ~47°C) — meer dan zes keer de ~52 W die er via het échte, geïsoleerde dak binnenkomt — en die warmte liep via de open deuren rechtstreeks de bovenliggende kamers in. Ter vergelijking: de skylight zelf (60×60 cm) levert ~134 W, wat klopt met de waarneming dat de koepel meer inbrengt dan het dak van office.",
+      "plan_xy": [
+        2,
+        0
+      ],
+      "label": "Trappenhuis (bg→2e)",
+      "hide_in_charts": true,
+      "_hide_in_charts": "de koker heeft geen sensor, dus haar lijn is een puur hypothetische reeks zonder meting ernaast — op de temperatuurgrafiek voegt ze ruis toe i.p.v. informatie. Ze blijft wél volledig meedraaien in de fysica (druknetwerk + stratificatie), in de plattegrond, op haar kamerkaart en in de meldmodal.",
+      "stratify": true,
+      "subzones": [
+        {
+          "id": "bg",
+          "z_lo": 0.0,
+          "z_hi": 2.8,
+          "volume_frac": 0.34
+        },
+        {
+          "id": "1e",
+          "z_lo": 2.8,
+          "z_hi": 5.6,
+          "volume_frac": 0.33
+        },
+        {
+          "id": "2e",
+          "z_lo": 5.6,
+          "z_hi": 8.7,
+          "volume_frac": 0.33
+        }
+      ],
+      "_subzones": "Alleen gebruikt door Project 12 (airflow2_model): per-verdieping thermische sub-knopen van de koker (één drukknoop blijft; de tweeling-1 'stratify'-gradiënt geldt daar nog steeds). Elke verdiepingsdeur draagt een 'subzone'-sleutel die zegt op welke sub-knoop hij uitkomt. Project 8 negeert deze velden volledig.",
+      "_note": "geen tado-sensor → niet gekalibreerd, wél gesimuleerd. Vangt de skylight-zon en drijft het schoorsteeneffect tussen de verdiepingen. Één gemengde knoop voor de kalibratie/airflow, maar met 'stratify': true legt het model een begrensde, niet-leerbare verticale gradiënt op (warme lucht bovenin): de gerapporteerde predicted_temp blijft het koker-gemiddelde, maar boven/onder worden apart getoond (predicted_temp_top/bottom) en elke verdiepingsdeur mengt tegen de lucht op zíjn hoogte i.p.v. het vlakke gemiddelde. Een volledige verdieping-per-verdieping-zone-split blijft afgewezen (geen sensor in de koker om sub-zone-temps op te ijken).",
+      "plan_h": 3
+    },
+    "bath": {
+      "from_window_data": "Shower",
+      "volume_m3": 18,
+      "exterior_wall_m2": 6,
+      "party_wall_m2": 8,
+      "mass_floor_m2": 14,
+      "ground_m2": 7,
+      "floor": 0,
+      "plan_xy": [
+        1,
+        3
+      ],
+      "label": "Badkamer (douche)",
+      "exclude_from_fit": true,
+      "hide_in_charts": true,
+      "exclude_from_shards": true,
+      "_privacy": "exclude_from_shards (privacy-sweep aug 2026): deze kamer gaat niet meer de gecommitte maand-shards in. Badkamervocht op kwartierresolutie is een douche-spoor: de pieken tekenen het dagritme van het huishouden, en dagen zónder pieken lezen als afwezigheid — blijvend, in publieke git. De kamer draait onverkort mee in de fysica, de plattegrond en haar eigen kamerkaart; ze leverde toch al geen kalibratiedata (exclude_from_fit), dus de evaluatie-/seed-set verliest niets wat het model gebruikte.",
+      "_sensor": "tado-sensor 'Shower' → wordt gesimuleerd en getoond, maar NIET meer gekalibreerd (zie exclude_from_fit). Raamloos: geen zonwinst, deur meestal dicht + mechanische afzuiging. De douche + de handbediende afzuiging geven warmte-/vochtpieken die geen enkele gemelde raamstand verklaart; die samples trokken de gedeelde globalen scheef en lieten de anomaliepoort op een douche afgaan. De heat-vlag-filter ving daar maar een deel van (douchen ≠ stoken)."
+    }
+  },
+  "junctions": {
+    "hall": {
+      "floor": 0,
+      "volume_m3": 14,
+      "ground_m2": 5,
+      "plan_xy": [
+        1,
+        2
+      ],
+      "label": "Gang/hal"
+    }
+  },
+  "_interzone": "Geleidende koppeling tussen zones: vloeren/plafonds tussen gestapelde kamers en binnenwanden. Dit ontbrak volledig — de énige kamer↔kamer-weg was luchtadvectie door open deuren, terwijl nursery → bedroom → office fysiek op elkaar staan en hun warmte omlaag zakt (en via nursery's vloer de kruipruimte in). Zonder die afvoer heeft de bovenste kamer geen uitweg en stapelt de fout zich op mét de hoogte: gemeten op een zonnige 27,5°C-middag nursery +0,71, bedroom +1,32, office +2,19 °C te warm. 'u' is lucht-tot-lucht (oppervlakte-overgangsweerstanden inbegrepen), daarom koppelt dit lucht↔lucht, parallel aan de deuren; de massa van de vloer zelf zit in mass_floor_m2 van beide kamers. De globale geleerde 'ua_inter' schaalt het geheel — per vlak leren zou onderling degenereren.",
+  "interzone": [
+    {
+      "a": "office",
+      "b": "bedroom",
+      "area_m2": 12,
+      "u": 0.7,
+      "type": "floor",
+      "label": "Vloer kantoor (2e) ↔ plafond bedroom (1e)",
+      "_u": "houten balklaag met stro als vulling (bewonersopgave juli 2026) ≈ R 1,3–1,4 incl. films → U ≈ 0,7 W/m²K"
+    },
+    {
+      "a": "bedroom",
+      "b": "nursery",
+      "area_m2": 12,
+      "u": 0.7,
+      "type": "floor",
+      "label": "Vloer bedroom (1e) ↔ plafond kinderkamer (bg)"
+    },
+    {
+      "a": "bath",
+      "b": "hall",
+      "area_m2": 9,
+      "u": 1.4,
+      "type": "wall",
+      "label": "Binnenwand badkamer ↔ gang",
+      "_u": "lichte binnenwand (steens/gipsblok) — de badkamerdeur staat meestal dicht, dus zonder deze term koppelt bath alleen via lekdebiet aan de rest van het huis"
+    }
+  ],
+  "windows": {
+    "living_french": {
+      "room": "living",
+      "facade_azimuth_deg": 129,
+      "area_m2": 3.0,
+      "glass_m2": 3.0,
+      "max_open_area_m2": 1.5,
+      "open_type": "casement",
+      "tilt_frac": 0.2,
+      "center_height_m": 1.0,
+      "shading": "none",
+      "label": "Tuindeuren (ZO)",
+      "plan_side": "left",
+      "plan_pos": 0.56,
+      "advice": {
+        "naam": "tuindeuren",
+        "night_ok": false,
+        "rain_ok": false,
+        "_waarom": "bg-tuindeuren vol open 's nachts = inbraakrisico; kiep mag"
+      }
+    },
+    "living_skylight": {
+      "room": "living",
+      "facade_azimuth_deg": 129,
+      "tilt_deg": 15,
+      "area_m2": 3.0,
+      "glass_m2": 3.0,
+      "max_open_area_m2": 0.0,
+      "center_height_m": 2.6,
+      "shading": "none",
+      "label": "Serre-dakraam (bijna plat, ZO) — buitenscherm mogelijk",
+      "shade": {
+        "factor": 0.15,
+        "label": "Buitenscherm"
+      },
+      "plan_side": "left",
+      "plan_pos": 0.68
+    },
+    "living_garden_fix1": {
+      "room": "living",
+      "facade_azimuth_deg": 129,
+      "area_m2": 1.0,
+      "glass_m2": 1.0,
+      "max_open_area_m2": 0.0,
+      "center_height_m": 1.4,
+      "shading": "none",
+      "label": "Tuinraam 1 (ZO, vast)",
+      "plan_side": "left",
+      "plan_pos": 0.8
+    },
+    "living_garden_fix2": {
+      "room": "living",
+      "facade_azimuth_deg": 129,
+      "area_m2": 1.0,
+      "glass_m2": 1.0,
+      "max_open_area_m2": 0.0,
+      "center_height_m": 1.4,
+      "shading": "none",
+      "label": "Tuinraam 2 (ZO, vast)",
+      "plan_side": "left",
+      "plan_pos": 0.9
+    },
+    "living_side_fix": {
+      "room": "living",
+      "facade_azimuth_deg": 219,
+      "area_m2": 1.4,
+      "glass_m2": 1.4,
+      "max_open_area_m2": 0.0,
+      "center_height_m": 1.2,
+      "shading": "none",
+      "diffuse_only": true,
+      "label": "Serre zijraam (ZW, vast) — huis ervóór + zonwering: alleen indirecte/diffuse zon, geen directe instraling",
+      "plan_side": "top",
+      "plan_pos": 0.5
+    },
+    "kitchen_door": {
+      "room": "living",
+      "facade_azimuth_deg": 129,
+      "area_m2": 1.8,
+      "glass_m2": 0.66,
+      "max_open_area_m2": 1.4,
+      "open_type": "door",
+      "tilt_frac": 0.0,
+      "center_height_m": 1.0,
+      "shading": "deep",
+      "label": "Keukendeur (ZO, onder terras)",
+      "plan_side": "left",
+      "plan_pos": 0.12,
+      "advice": {
+        "naam": "keukendeur",
+        "night_ok": false,
+        "rain_ok": true,
+        "_waarom": "bg-buitendeur 's nachts dicht; onder het terras dus regenvast"
+      }
+    },
+    "kitchen_top_tilt": {
+      "room": "living",
+      "facade_azimuth_deg": 129,
+      "area_m2": 0.4,
+      "glass_m2": 0.4,
+      "max_open_area_m2": 0.08,
+      "open_type": "tilt",
+      "tilt_frac": 1.0,
+      "center_height_m": 2.3,
+      "shading": "deep",
+      "label": "Keuken kiepraam boven deur (80×50)",
+      "plan_side": "left",
+      "plan_pos": 0.22,
+      "advice": {
+        "naam": "keuken-kiepraam",
+        "rain_ok": true,
+        "_waarom": "klein kiepraam boven de keukendeur, onder het terras"
+      }
+    },
+    "kitchen_fix1": {
+      "room": "living",
+      "facade_azimuth_deg": 129,
+      "area_m2": 0.585,
+      "glass_m2": 0.585,
+      "max_open_area_m2": 0.0,
+      "center_height_m": 1.3,
+      "shading": "deep",
+      "label": "Keukenraam 1 (ZO, vast)",
+      "plan_side": "left",
+      "plan_pos": 0.32
+    },
+    "kitchen_fix2": {
+      "room": "living",
+      "facade_azimuth_deg": 129,
+      "area_m2": 0.585,
+      "glass_m2": 0.585,
+      "max_open_area_m2": 0.0,
+      "center_height_m": 1.3,
+      "shading": "deep",
+      "label": "Keukenraam 2 (ZO, vast)",
+      "plan_side": "left",
+      "plan_pos": 0.42
+    },
+    "living_street_big": {
+      "room": "living",
+      "facade_azimuth_deg": 309,
+      "horizon_elevation_deg": 32,
+      "_horizon": "gelijk-hoge overburen NW; bg-raam → directe avondzon geblokkeerd onder ~32°",
+      "area_m2": 6.0,
+      "glass_m2": 6.0,
+      "max_open_area_m2": 0.0,
+      "center_height_m": 1.4,
+      "shading": "none",
+      "label": "Woonkamer straatraam 3×2 (NW, vast glas; paper-lamella, regelbare dekking)",
+      "shade": {
+        "coverage": {
+          "open": 0.3,
+          "half": 0.5,
+          "dicht": 1.0
+        },
+        "paper": 0.7,
+        "default": "open",
+        "label": "Paper-lamella (dekking 30/50/100%)"
+      },
+      "plan_side": "right",
+      "plan_pos": 0.72
+    },
+    "nursery_window": {
+      "room": "nursery",
+      "facade_azimuth_deg": 309,
+      "horizon_elevation_deg": 42,
+      "_horizon": "overburen (~32°) + een boom tot ~plafond-bedroom die de kinderkamer (bg) goed schaduwt → ~42°; grove seizoens-/azimut-benadering, verfijn op de echte straat",
+      "area_m2": 4.5,
+      "glass_m2": 4.5,
+      "max_open_area_m2": 0.0,
+      "center_height_m": 1.4,
+      "shading": "lamella",
+      "label": "Kinderkamer straatraam 3×1.5 (NW, vast glas; vaste paper-lamella ~1/3 + bedienbaar verduisteringsgordijn)",
+      "shade": {
+        "factor": 0.7,
+        "label": "Verduisteringsgordijn",
+        "_factor": "Zonwarmte-transmissie van het GESLOTEN gordijn, geen verduisterings-fractie. Dit is een bínnengordijn: de geabsorbeerde zonne-energie zit aan de kamerzijde van het glas en komt er grotendeels alsnog in. De oude 0.12 (het lichtdoorlatings-getal) liet P9 een 5-uurs sluiting adviseren op een ~8× overschatte winst. Buitenschermen (living_skylight, 0.15) houden de zon wél vóór het glas tegen en blijven laag."
+      },
+      "plan_side": "right",
+      "plan_pos": 0.55
+    },
+    "nursery_small_window": {
+      "room": "nursery",
+      "facade_azimuth_deg": 309,
+      "horizon_elevation_deg": 42,
+      "_horizon": "zelfde straatgevel als nursery_window: overburen + boom schaduwen de bg → ~42°",
+      "area_m2": 0.16,
+      "glass_m2": 0.16,
+      "max_open_area_m2": 0.16,
+      "open_type": "casement",
+      "tilt_frac": 0.25,
+      "center_height_m": 1.6,
+      "shading": "none",
+      "label": "Kinderkamer klein raampje 40×40 (NW; open/kiep)",
+      "plan_side": "right",
+      "plan_pos": 0.38,
+      "advice": {
+        "naam": "het kinderkamerraampje",
+        "rain_ok": false
+      }
+    },
+    "bedroom_window": {
+      "room": "bedroom",
+      "facade_azimuth_deg": 309,
+      "horizon_elevation_deg": 28,
+      "_horizon": "overburen (~24°, 1e verdieping); de boom reikt tot ~deze hoogte en schaduwt maar licht → ~28°",
+      "area_m2": 4.5,
+      "glass_m2": 4.5,
+      "max_open_area_m2": 1.4,
+      "open_type": "casement",
+      "tilt_frac": 0.25,
+      "center_height_m": 4.3,
+      "shading": "none",
+      "label": "Slaapkamer straatraam (NW; 2 openende delen 1.1×1.4; verduisteringsgordijn 's nachts)",
+      "shade": {
+        "factor": 0.7,
+        "label": "Verduisteringsgordijn",
+        "_factor": "Zonwarmte-transmissie van het GESLOTEN gordijn, geen verduisterings-fractie. Dit is een bínnengordijn: de geabsorbeerde zonne-energie zit aan de kamerzijde van het glas en komt er grotendeels alsnog in. De oude 0.12 (het lichtdoorlatings-getal) liet P9 een 5-uurs sluiting adviseren op een ~8× overschatte winst. Buitenschermen (living_skylight, 0.15) houden de zon wél vóór het glas tegen en blijven laag."
+      },
+      "plan_side": "right",
+      "plan_pos": 0.58,
+      "advice": {
+        "naam": "bedroom-raam",
+        "rain_ok": false
+      }
+    },
+    "office_window": {
+      "room": "office",
+      "facade_azimuth_deg": 309,
+      "horizon_elevation_deg": 14,
+      "_horizon": "overburen (~14°, 2e verdieping kijkt over de daklijst); boom zit eronder → geen bijdrage",
+      "area_m2": 1.65,
+      "glass_m2": 1.65,
+      "max_open_area_m2": 0.8,
+      "open_type": "casement",
+      "tilt_frac": 0.25,
+      "center_height_m": 7.1,
+      "shading": "none",
+      "label": "Kantoor straatraam 1.5×1.1 (NW; 2 openende delen; verduisteringsgordijn 's nachts)",
+      "shade": {
+        "factor": 0.7,
+        "label": "Verduisteringsgordijn",
+        "_factor": "Zonwarmte-transmissie van het GESLOTEN gordijn, geen verduisterings-fractie. Dit is een bínnengordijn: de geabsorbeerde zonne-energie zit aan de kamerzijde van het glas en komt er grotendeels alsnog in. De oude 0.12 (het lichtdoorlatings-getal) liet P9 een 5-uurs sluiting adviseren op een ~8× overschatte winst. Buitenschermen (living_skylight, 0.15) houden de zon wél vóór het glas tegen en blijven laag."
+      },
+      "plan_side": "right",
+      "plan_pos": 0.58,
+      "advice": {
+        "naam": "kantoorraam",
+        "rain_ok": false
+      }
+    },
+    "stair_skylight": {
+      "room": "stair",
+      "facade_azimuth_deg": 309,
+      "tilt_deg": 0,
+      "area_m2": 0.25,
+      "glass_m2": 0.25,
+      "max_open_area_m2": 0.025,
+      "open_type": "tilt",
+      "tilt_frac": 1.0,
+      "center_height_m": 8.7,
+      "shading": "none",
+      "_opening": "scharnier aan de tuinzijde (ZO), straatrand (NW) gaat omhoog → de opening 'kijkt' naar de straat (NW 309°), net als de andere straatramen. facade_azimuth bepaalt het wind-Cp-teken (tilt_deg telt alleen voor zon); plat raam → azimut raakt de zonneterm niet.",
+      "label": "Trap-skylight 50×50 (plat; kan op kierstand ~5cm — top-afvoer voor de stack; opening naar NW/straat)",
+      "plan_side": "top",
+      "plan_pos": 0.5,
+      "advice": {
+        "naam": "daklicht",
+        "rain_ok": false,
+        "tilt_ok": false,
+        "_waarom": "plat daklicht: kier vangt regen, dus bij regen dicht"
+      }
+    }
+  },
+  "vents": {
+    "living_vent1": {
+      "room": "living",
+      "facade_azimuth_deg": 309,
+      "area_m2": 0.014,
+      "max_open_area_m2": 0.014,
+      "center_height_m": 2.4,
+      "default_state": "open",
+      "label": "Woonkamer rooster 1 (35×4cm)",
+      "plan_side": "right",
+      "plan_pos": 0.58
+    },
+    "living_vent2": {
+      "room": "living",
+      "facade_azimuth_deg": 309,
+      "area_m2": 0.014,
+      "max_open_area_m2": 0.014,
+      "center_height_m": 2.4,
+      "default_state": "open",
+      "label": "Woonkamer rooster 2 (35×4cm)",
+      "plan_side": "right",
+      "plan_pos": 0.86
+    },
+    "nursery_vent": {
+      "room": "nursery",
+      "facade_azimuth_deg": 309,
+      "area_m2": 0.052,
+      "max_open_area_m2": 0.052,
+      "center_height_m": 2.2,
+      "default_state": "open",
+      "label": "Kinderkamer rooster (groot, 130×4cm)",
+      "plan_side": "right",
+      "plan_pos": 0.18
+    },
+    "bedroom_vent1": {
+      "room": "bedroom",
+      "facade_azimuth_deg": 309,
+      "area_m2": 0.01,
+      "max_open_area_m2": 0.01,
+      "center_height_m": 5.2,
+      "default_state": "open",
+      "label": "Slaapkamer rooster 1 (25×4cm)",
+      "plan_side": "right",
+      "plan_pos": 0.14
+    },
+    "bedroom_vent2": {
+      "room": "bedroom",
+      "facade_azimuth_deg": 309,
+      "area_m2": 0.01,
+      "max_open_area_m2": 0.01,
+      "center_height_m": 5.2,
+      "default_state": "open",
+      "label": "Slaapkamer rooster 2 (25×4cm)",
+      "plan_side": "right",
+      "plan_pos": 0.3
+    },
+    "office_vent1": {
+      "room": "office",
+      "facade_azimuth_deg": 309,
+      "area_m2": 0.012,
+      "max_open_area_m2": 0.012,
+      "center_height_m": 7.8,
+      "default_state": "open",
+      "label": "Kantoor rooster 1 (30×4cm)",
+      "plan_side": "right",
+      "plan_pos": 0.14
+    },
+    "office_vent2": {
+      "room": "office",
+      "facade_azimuth_deg": 309,
+      "area_m2": 0.012,
+      "max_open_area_m2": 0.012,
+      "center_height_m": 7.8,
+      "default_state": "open",
+      "label": "Kantoor rooster 2 (30×4cm)",
+      "plan_side": "right",
+      "plan_pos": 0.3
+    },
+    "front_door_leak": {
+      "room": "hall",
+      "facade_azimuth_deg": 309,
+      "area_m2": 0.005,
+      "max_open_area_m2": 0.005,
+      "center_height_m": 1.2,
+      "default_state": "open",
+      "label": "Voordeur-kieren (rest-lek; achter een altijd-dichte tussendeur)",
+      "plan_side": "top",
+      "plan_pos": 0.5
+    },
+    "bath_extract": {
+      "room": "bath",
+      "facade_azimuth_deg": 129,
+      "area_m2": 0.02,
+      "max_open_area_m2": 0.02,
+      "center_height_m": 2.2,
+      "default_state": "dicht",
+      "label": "Badkamer mechanische afzuiging (aan/uit)",
+      "plan_side": "left",
+      "plan_pos": 0.5
+    }
+  },
+  "doors": {
+    "living_hall": {
+      "between": [
+        "living",
+        "hall"
+      ],
+      "area_m2": 2.0,
+      "center_height_m": 1.0,
+      "default_state": "open",
+      "label": "Woonkamer ↔ gang (deur)",
+      "advice": {
+        "naam": "deur woonkamer↔hal"
+      }
+    },
+    "hall_bath": {
+      "between": [
+        "hall",
+        "bath"
+      ],
+      "area_m2": 1.6,
+      "center_height_m": 1.0,
+      "default_state": "dicht",
+      "label": "Gang ↔ badkamer"
+    },
+    "hall_stair": {
+      "between": [
+        "hall",
+        "stair"
+      ],
+      "area_m2": 2.2,
+      "center_height_m": 1.5,
+      "default_state": "open",
+      "fixed": true,
+      "label": "Gang ↔ trap (open doorgang)",
+      "subzone": "bg"
+    },
+    "nursery_stair": {
+      "between": [
+        "nursery",
+        "stair"
+      ],
+      "area_m2": 1.8,
+      "center_height_m": 1.0,
+      "default_state": "open",
+      "label": "Kinderkamer ↔ trap",
+      "plan_pos": 0.45,
+      "subzone": "bg",
+      "advice": {
+        "naam": "deur kinderkamer↔trap"
+      }
+    },
+    "bedroom_stair": {
+      "between": [
+        "bedroom",
+        "stair"
+      ],
+      "area_m2": 1.8,
+      "center_height_m": 3.9,
+      "default_state": "open",
+      "label": "Slaapkamer ↔ trap (1e)",
+      "subzone": "1e",
+      "advice": {
+        "naam": "deur bedroom↔trap"
+      }
+    },
+    "office_stair": {
+      "between": [
+        "office",
+        "stair"
+      ],
+      "area_m2": 1.8,
+      "center_height_m": 7.0,
+      "default_state": "open",
+      "label": "Kantoor ↔ trap (2e)",
+      "subzone": "2e",
+      "advice": {
+        "naam": "deur kantoor↔trap"
+      }
+    }
+  },
+  "routines": {
+    "_README": "Vaste dagelijkse routines die niemand in de openingen-log meldt: element-id (raam/deur/rooster of <raam>_shade) → {state, from_h, to_h} in lokale klokuren, from_h > to_h = over middernacht. vent_io.apply_routines dwingt ze af op de forecast-timelines (12u-vooruitblik tweeling + nachtvoorspelling, die vóór aug 2026 dit als eigen hardcode droeg). De kalibratie op het verleden blijft bewust op de gemelde log rijden: een routine daar óók toepassen verandert de fit-inputs en is een te meten wijziging (re-seed + backtest), geen bijvangst.",
+    "nursery_window_shade": {
+      "state": "dicht",
+      "from_h": 19,
+      "to_h": 8,
+      "_waarom": "verduisteringsgordijn gaat elke avond ~19:00 dicht; zonder dit rekende de avondsim fors avondzon-vermogen door een in werkelijkheid al dicht gordijn (gediagnosticeerd juli 2026, ~1°C te warm om 07:00)"
+    },
+    "nursery_stair": {
+      "state": "dicht",
+      "from_h": 19,
+      "to_h": 8,
+      "_waarom": "bewonersbevestiging aug 2026: de deur is 's nachts vrijwel altijd dicht. Zeldzame uitzondering: kamer ruwweg >23° en buiten koeler → deur toch open; precies die interventie rekenen de stapel/all-open-scenario's van de nachtvoorspelling en het koelplan door (scenario-overrides winnen van de routine), en een expliciete melding in de meldmodal wint óók (apply_routines' log-wint-regel)."
+    }
+  }
+}
