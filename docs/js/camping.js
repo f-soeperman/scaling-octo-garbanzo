@@ -186,11 +186,50 @@ function mapPinCat(r) {
   return catDag(dag);
 }
 
+// Tent-silhouet i.p.v. een generieke webkaart-teardrop — sluit aan bij het
+// "tent · peuter · auto"-thema. (x, y) is het grondpunt (de punt van de pin).
+function tentPinSVG(x, y, cls, tip) {
+  const [gx, gy] = [x.toFixed(1), y.toFixed(1)];
+  return `<g class="map-pin-shape" filter="url(#pinSchaduw)">
+    <path class="map-pin ${cls}" d="M${(x - 8).toFixed(1)},${gy} L${gx},${(y - 14).toFixed(1)} L${(x + 8).toFixed(1)},${gy} Z"/>
+    <path class="map-pin-deur" d="M${(x - 3).toFixed(1)},${gy} L${gx},${(y - 7).toFixed(1)} L${(x + 3).toFixed(1)},${gy} Z"/>
+    <line class="map-pin-nok" x1="${gx}" y1="${(y - 14).toFixed(1)}" x2="${gx}" y2="${gy}"/>
+    <title>${esc(tip)}</title>
+  </g>`;
+}
+
+// Kompasroos + schaalbalk: vaste kaartornamenten (rechtsonder/linksonder),
+// puur decoratief/oriënterend — geen data. pxPerKm volgt uit CAMPING_MAP.proj
+// (bij de referentiebreedte is de equirechthoekige projectie hier isotroop:
+// px/km oost-west == px/km noord-zuid, dus één schaalbalk volstaat).
+function compassRoseSVG(cx, cy, r) {
+  const n = (cy - r).toFixed(1), s = (cy + r).toFixed(1), e = (cx + r).toFixed(1), w = (cx - r).toFixed(1);
+  return `<g class="map-compass">
+    <circle cx="${cx}" cy="${cy}" r="${r}"/>
+    <path class="map-compass-n" d="M${cx},${n} L${(cx + r * 0.22).toFixed(1)},${cy} L${cx},${(cy - r * 0.22).toFixed(1)} L${(cx - r * 0.22).toFixed(1)},${cy} Z"/>
+    <line x1="${w}" y1="${cy}" x2="${e}" y2="${cy}"/>
+    <line x1="${cx}" y1="${n}" x2="${cx}" y2="${s}"/>
+    <text x="${cx}" y="${(cy - r - 6).toFixed(1)}" text-anchor="middle">N</text>
+  </g>`;
+}
+
+function scaleBarSVG(x, y, pxPerKm) {
+  const w = (100 * pxPerKm).toFixed(1);
+  const x2 = (x + Number(w)).toFixed(1);
+  return `<g class="map-scale">
+    <line x1="${x}" y1="${y}" x2="${x2}" y2="${y}"/>
+    <line x1="${x}" y1="${(y - 4).toFixed(1)}" x2="${x}" y2="${(y + 4).toFixed(1)}"/>
+    <line x1="${x2}" y1="${(y - 4).toFixed(1)}" x2="${x2}" y2="${(y + 4).toFixed(1)}"/>
+    <text x="${(x + Number(w) / 2).toFixed(1)}" y="${(y - 8).toFixed(1)}" text-anchor="middle">± 100 km</text>
+  </g>`;
+}
+
 function mapCardHTML(d) {
   if (typeof CAMPING_MAP === "undefined") return ""; // graceful: kaartbestand niet geladen
   const byId = new Map(d.regions.map((r) => [r.id, r]));
   const landPaths = (kind) =>
     CAMPING_MAP.borders[kind].map((c) => `<path d="${c.d}"/>`).join("");
+  const viewW = CAMPING_MAP.viewW, viewH = CAMPING_MAP.viewH;
 
   let markers = "";
   for (const reg of CAMPING_MAP.regions) {
@@ -203,25 +242,38 @@ function mapCardHTML(d) {
     const needsLeader = Math.abs(dx) > 22 || Math.abs(dy) > 14;
     const tipCat = cat ? CAT_LABEL[cat] : "geen gegevens";
     const tip = `${reg.label} (${reg.country}) — ${reg.lat.toFixed(2)}°, ${reg.lon.toFixed(2)}° · vandaag: ${tipCat}`;
-    const home = reg.id === "utrecht" ? `<circle class="map-pin-home" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="10"/>` : "";
+    const home = reg.id === "utrecht" ? `<circle class="map-pin-home" cx="${x.toFixed(1)}" cy="${(y - 6).toFixed(1)}" r="13"/>` : "";
     markers += `<g>
       ${needsLeader ? `<line class="map-leader" x1="${x.toFixed(1)}" y1="${y.toFixed(1)}" x2="${(lx - (anchor === "start" ? 6 : anchor === "end" ? -6 : 0)).toFixed(1)}" y2="${(ly - 4).toFixed(1)}"/>` : ""}
       ${home}
-      <circle class="map-pin ${pinCls}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="6"><title>${esc(tip)}</title></circle>
+      ${tentPinSVG(x, y, pinCls, tip)}
       <text class="map-lbl-shadow" x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="${anchor}">${esc(reg.label)}</text>
       <text class="map-lbl" x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="${anchor}">${esc(reg.label)}</text>
     </g>`;
   }
 
+  const pxPerKm = CAMPING_MAP.proj.scale / 111.32; // zie compassRoseSVG-comment: isotroop bij LAT0
+  const ornaments = scaleBarSVG(24, viewH - 22, pxPerKm) + compassRoseSVG(viewW - 56, viewH - 62, 26);
+
   return `
   <div class="grid" style="grid-template-columns:1fr;">
     <div class="park-card map-card"><div class="card-pad">
       <div class="park-rule" style="margin-top:0;">De kaart · twaalf streken</div>
-      <svg viewBox="0 0 ${CAMPING_MAP.viewW} ${CAMPING_MAP.viewH}" role="img" aria-label="Kaart van Nederland, Frankrijk en Oostenrijk met de twaalf kampeerstreken">
-        <rect class="map-sea" width="${CAMPING_MAP.viewW}" height="${CAMPING_MAP.viewH}"/>
+      <svg viewBox="0 0 ${viewW} ${viewH}" role="img" aria-label="Kaart van Nederland, Frankrijk en Oostenrijk met de twaalf kampeerstreken">
+        <defs>
+          <linearGradient id="mapZee" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#dcebf5"/>
+            <stop offset="100%" stop-color="#a9c9dd"/>
+          </linearGradient>
+          <filter id="pinSchaduw" x="-60%" y="-60%" width="220%" height="220%">
+            <feDropShadow dx="0" dy="1.5" stdDeviation="1.1" flood-color="#14243c" flood-opacity="0.5"/>
+          </filter>
+        </defs>
+        <rect class="map-sea" width="${viewW}" height="${viewH}"/>
         <g class="map-ctx-land">${landPaths("ctx")}</g>
         <g class="map-focus-land">${landPaths("focus")}</g>
         ${markers}
+        ${ornaments}
       </svg>
       <div class="map-note">Elke pin is het vaste referentiepunt (representatief kampeerdal, geen bergtop) waarop Open-Meteo per streek wordt bevraagd — dezelfde coördinaat die de tabel en matrix hieronder voeden. Kleur = de categorie van vandaag; hover voor coördinaten.</div>
       <div class="map-legend">
@@ -480,21 +532,26 @@ function statsOver(dagen) {
   };
 }
 
-function dagRijenHTML(bron) {
+// `venster` (optioneel {start, end_night}) markeert de dagen van het eerste
+// kampeervenster met .dr-win, zodat de volledige tabel toch in één oogopslag
+// laat zien welke dagen het venster vormen — de rest is ruwe data eronder.
+function dagRijenHTML(bron, venster) {
   if (!bron.length) return "";
   let rijen = `
     <span class="hdr">d·n</span><span class="hdr">dag</span>
     <span class="hdr num-r">dag°</span><span class="hdr num-r">nacht°</span>
     <span class="hdr num-r">regen d·n</span><span class="hdr num-r">dauw</span><span class="hdr num-r">wind</span>`;
   for (const dag of bron) {
+    const inVenster = venster && dag.date >= venster.start && dag.date <= venster.end_night;
+    const win = inVenster ? " dr-win" : "";
     rijen += `
-      <span><i class="dr-sw cat-${catDag(dag)}"></i><i class="dr-sw cat-${catNacht(dag) ?? "missing"}"></i></span>
-      <span>${dagKort(dag.date)}</span>
-      <span class="num-r">${fmt1(dag.tmax)}°</span>
-      <span class="num-r">${fmt1(dag.tmin_night)}°</span>
-      <span class="num-r">${fmt1(dag.rain_day_mm)} · ${fmt1(dag.rain_night_mm)}</span>
-      <span class="num-r">${fmt1(dag.dew_margin_night)}°</span>
-      <span class="num-r">${fmt1(dag.gust_max_kmh)}</span>`;
+      <span class="dr-c1${win}"><i class="dr-sw cat-${catDag(dag)}"></i><i class="dr-sw cat-${catNacht(dag) ?? "missing"}"></i></span>
+      <span class="dr-c2${win}">${dagKort(dag.date)}</span>
+      <span class="num-r${win}">${fmt1(dag.tmax)}°</span>
+      <span class="num-r${win}">${fmt1(dag.tmin_night)}°</span>
+      <span class="num-r${win}">${fmt1(dag.rain_day_mm)} · ${fmt1(dag.rain_night_mm)}</span>
+      <span class="num-r${win}">${fmt1(dag.dew_margin_night)}°</span>
+      <span class="num-r${win}">${fmt1(dag.gust_max_kmh)}</span>`;
   }
   return `<div class="day-rows">${rijen}</div>`;
 }
@@ -556,11 +613,16 @@ function regionCardHTML(r, d) {
     conf = `<div class="conf-line">Zekerheid venster: ${eerste.conf}.</div>`;
   }
 
+  const alleDagen = r.days || [];
+  const ruweData = alleDagen.length
+    ? `<div class="park-rule">Ruwe data · alle ${alleDagen.length} dagen${eerste ? " (venster gemarkeerd)" : ""}</div>${dagRijenHTML(alleDagen, eerste)}`
+    : "";
+
   return `<div class="park-card">${band}<div class="card-pad">
     ${status}${extraWins}
     ${dagNachtStripHTML(r.days || [], vandaag)}
     ${verwBlok}
-    ${dagRijenHTML(bron)}
+    ${ruweData}
     ${stats}${warns}${conf}
   </div></div>`;
 }
