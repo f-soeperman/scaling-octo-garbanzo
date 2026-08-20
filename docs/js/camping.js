@@ -166,6 +166,77 @@ function celHTML(dag, col, row) {
          ` title="${esc(celTitle(dag))}"></div>`;
 }
 
+// ── overzichtskaart: waar liggen de twaalf streken, en op welk punt is de
+// voorspelling per streek gebaseerd (landsgrenzen als oriëntatie) ──────────
+// CAMPING_MAP (docs/js/campingmap.js, vóór dit script geladen) draagt de
+// vooraf vereenvoudigde landcontouren + de vaste referentiecoördinaat per
+// streek (build-time contract, zie tools/campingmap_build.py) — de kleur per
+// pin komt wél live uit camping_data.json (de categorie van vandaag).
+const MAP_DEFAULT_OFFSET = [14, -8, "start"];
+
+function mapProject(lon, lat) {
+  const p = CAMPING_MAP.proj;
+  return [(lon - p.lonMin) * p.cosLat0 * p.scale, (p.latMax - lat) * p.scale];
+}
+
+function mapPinCat(r) {
+  if (!r || r.status !== "ok" || !(r.days || []).length) return null;
+  const vandaag = vandaagIso();
+  const dag = r.days.find((x) => x.date === vandaag) || r.days[0];
+  return catDag(dag);
+}
+
+function mapCardHTML(d) {
+  if (typeof CAMPING_MAP === "undefined") return ""; // graceful: kaartbestand niet geladen
+  const byId = new Map(d.regions.map((r) => [r.id, r]));
+  const landPaths = (kind) =>
+    CAMPING_MAP.borders[kind].map((c) => `<path d="${c.d}"/>`).join("");
+
+  let markers = "";
+  for (const reg of CAMPING_MAP.regions) {
+    const [x, y] = mapProject(reg.lon, reg.lat);
+    const r = byId.get(reg.id);
+    const cat = mapPinCat(r);
+    const pinCls = cat ? `cat-${cat}` : "map-pin-geen";
+    const [dx, dy, anchor] = CAMPING_MAP.labelOffset[reg.id] || MAP_DEFAULT_OFFSET;
+    const lx = x + dx, ly = y + dy;
+    const needsLeader = Math.abs(dx) > 22 || Math.abs(dy) > 14;
+    const tipCat = cat ? CAT_LABEL[cat] : "geen gegevens";
+    const tip = `${reg.label} (${reg.country}) — ${reg.lat.toFixed(2)}°, ${reg.lon.toFixed(2)}° · vandaag: ${tipCat}`;
+    const home = reg.id === "utrecht" ? `<circle class="map-pin-home" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="10"/>` : "";
+    markers += `<g>
+      ${needsLeader ? `<line class="map-leader" x1="${x.toFixed(1)}" y1="${y.toFixed(1)}" x2="${(lx - (anchor === "start" ? 6 : anchor === "end" ? -6 : 0)).toFixed(1)}" y2="${(ly - 4).toFixed(1)}"/>` : ""}
+      ${home}
+      <circle class="map-pin ${pinCls}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="6"><title>${esc(tip)}</title></circle>
+      <text class="map-lbl-shadow" x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="${anchor}">${esc(reg.label)}</text>
+      <text class="map-lbl" x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="${anchor}">${esc(reg.label)}</text>
+    </g>`;
+  }
+
+  return `
+  <div class="grid" style="grid-template-columns:1fr;">
+    <div class="park-card map-card"><div class="card-pad">
+      <div class="park-rule" style="margin-top:0;">De kaart · twaalf streken</div>
+      <svg viewBox="0 0 ${CAMPING_MAP.viewW} ${CAMPING_MAP.viewH}" role="img" aria-label="Kaart van Nederland, Frankrijk en Oostenrijk met de twaalf kampeerstreken">
+        <rect class="map-sea" width="${CAMPING_MAP.viewW}" height="${CAMPING_MAP.viewH}"/>
+        <g class="map-ctx-land">${landPaths("ctx")}</g>
+        <g class="map-focus-land">${landPaths("focus")}</g>
+        ${markers}
+      </svg>
+      <div class="map-note">Elke pin is het vaste referentiepunt (representatief kampeerdal, geen bergtop) waarop Open-Meteo per streek wordt bevraagd — dezelfde coördinaat die de tabel en matrix hieronder voeden. Kleur = de categorie van vandaag; hover voor coördinaten.</div>
+      <div class="map-legend">
+        <span><i class="sw cat-top"></i>top</span>
+        <span><i class="sw cat-goed"></i>goed</span>
+        <span><i class="sw cat-matig"></i>matig</span>
+        <span><i class="sw cat-slecht"></i>slecht</span>
+        <span><i class="sw cat-rood"></i>rode vlag</span>
+        <span><i class="sw" style="background:var(--night-soft);opacity:.45;"></i>geen gegevens</span>
+        <span><i class="sw sw-home"></i>Utrecht = thuisbasis</span>
+      </div>
+    </div></div>
+  </div>`;
+}
+
 function matrixCardHTML(d) {
   const okRegions = d.regions.filter((r) => r.status === "ok" && (r.days || []).length);
   if (!okRegions.length) return "";
@@ -518,6 +589,7 @@ function render() {
   document.getElementById("banner-slot").innerHTML = banners.join("");
 
   document.getElementById("content").innerHTML =
+    mapCardHTML(d) +
     matrixCardHTML(d) +
     flexSectionHTML(d) +
     `<div class="strip-legende">Per streek: brede tegel = de dag (9–21u) · smalle tegel ertussen = de nacht die die avond begint (21–9u) · ⚠ = officiële waarschuwing (oranje of rood) · ✕ = extreme voorspelde waarden</div>` +
