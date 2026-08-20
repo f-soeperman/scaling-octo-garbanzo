@@ -148,6 +148,29 @@
     .mx-legend .sw-win { background: transparent; box-shadow: inset 0 0 0 2px var(--night); }
     .strip-legende { padding: 14px clamp(14px, 3vw, 36px) 0; font-family: "Barlow Condensed", sans-serif; font-size: 14px; color: var(--night-soft); }
 
+    /* ── overzichtskaart ──────────────────────────────────────────────── */
+    .map-card svg { display: block; width: 100%; height: auto; }
+    .map-sea { fill: #cfe0ee; }
+    .map-ctx-land { fill: #ece4cd; }
+    .map-ctx-land path { stroke: #b3a98d; stroke-width: 1; }
+    .map-focus-land { fill: var(--paper); }
+    .map-focus-land path { stroke: var(--night); stroke-width: 2; stroke-linejoin: round; }
+    .map-leader { stroke: var(--night-soft); stroke-width: 1; }
+    .map-pin { stroke: var(--night); stroke-width: 1.5; }
+    .map-pin.cat-top    { fill: var(--cat-top); }
+    .map-pin.cat-goed   { fill: var(--cat-goed); }
+    .map-pin.cat-matig  { fill: var(--cat-matig); }
+    .map-pin.cat-slecht { fill: var(--cat-slecht); }
+    .map-pin.cat-rood   { fill: var(--cat-rood); }
+    .map-pin.map-pin-geen { fill: var(--night-soft); opacity: 0.45; }
+    .map-pin-home { stroke: var(--night); stroke-width: 2; stroke-dasharray: 3 2; fill: none; }
+    .map-lbl { font: 600 15px "Barlow Condensed", sans-serif; fill: var(--night); }
+    .map-lbl-shadow { font: 600 15px "Barlow Condensed", sans-serif; fill: var(--paper); stroke: var(--paper); stroke-width: 3; paint-order: stroke; }
+    .map-note { font-size: 13px; font-style: italic; color: var(--night-soft); margin-top: 10px; }
+    .map-legend { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin-top: 10px; font-family: "Barlow Condensed", sans-serif; font-size: 13px; color: var(--night-soft); }
+    .map-legend .sw { display: inline-block; width: 12px; height: 12px; border-radius: 50%; vertical-align: -2px; margin-right: 5px; border: 1px solid var(--hair); }
+    .map-legend .sw-home { border-radius: 50%; box-shadow: inset 0 0 0 2px var(--night); background: transparent; }
+
     /* ── flex-tegels (super-regio's, ronde 3) ─────────────────────────── */
     .flex-scroll { overflow-x: auto; margin-top: 12px; padding: 2px 0 4px; }
     .flex-strip { display: grid; grid-template-columns: repeat(var(--nd, 16), minmax(18px, 1fr)); gap: 2px; align-items: center; min-width: 340px; }
@@ -235,6 +258,7 @@
 </footer>
 
 </div>
-<script src="js/camping.js?v=9"></script>
+<script src="js/campingmap.js?v=1"></script>
+<script src="js/camping.js?v=10"></script>
 </body>
 </html>
