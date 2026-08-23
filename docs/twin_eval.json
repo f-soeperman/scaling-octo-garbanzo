@@ -1,0 +1,48 @@
+[
+ {
+  "date": "2026-08-23T07:04+02:00",
+  "weather": "hindcast",
+  "tm_mode": "shift",
+  "horizon_h": 12.0,
+  "stride_h": 3.0,
+  "origin_hours": null,
+  "n_origins": 540,
+  "physics_rev": 7,
+  "pooled": {
+   "physics": 1.06,
+   "freerun": 1.578,
+   "persist": 1.312,
+   "persist24": 1.408,
+   "clim": 1.88
+  },
+  "rooms": {
+   "living": 0.716,
+   "nursery": 0.659,
+   "bedroom": 1.445,
+   "office": 1.188
+  }
+ },
+ {
+  "date": "2026-08-23T07:04+02:00",
+  "weather": "forecast",
+  "tm_mode": "shift",
+  "horizon_h": 12.0,
+  "stride_h": 3.0,
+  "origin_hours": null,
+  "n_origins": 19,
+  "physics_rev": 7,
+  "pooled": {
+   "physics": 0.622,
+   "freerun": 0.642,
+   "persist": 0.604,
+   "persist24": 0.799,
+   "clim": 1.739
+  },
+  "rooms": {
+   "living": 0.394,
+   "nursery": 0.361,
+   "bedroom": 0.666,
+   "office": 0.905
+  }
+ }
+]
