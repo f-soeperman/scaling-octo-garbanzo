@@ -7,7 +7,7 @@ const state = { data: null, waarom: false };
 
 const CAT_LABEL = { top: "top", goed: "goed", matig: "matig", slecht: "slecht", rood: "rode vlag" };
 const LEVEL_LABEL = { yellow: "geel", orange: "oranje", red: "rood" };
-const LAND_NAAM = { NL: "Nederland", AT: "Oostenrijk", FR: "Frankrijk" };
+const LAND_NAAM = { NL: "Nederland", FR: "Frankrijk" };
 const VLAG_TEKST = {
   waarschuwing: "officiële waarschuwing",
   hitte_extreem: "extreme hitte",
@@ -166,7 +166,7 @@ function celHTML(dag, col, row) {
          ` title="${esc(celTitle(dag))}"></div>`;
 }
 
-// ── overzichtskaart: waar liggen de twaalf streken, en op welk punt is de
+// ── overzichtskaart: waar liggen de dertien streken, en op welk punt is de
 // voorspelling per streek gebaseerd (landsgrenzen als oriëntatie) ──────────
 // CAMPING_MAP (docs/js/campingmap.js, vóór dit script geladen) draagt de
 // vooraf vereenvoudigde landcontouren + de vaste referentiecoördinaat per
@@ -258,8 +258,8 @@ function mapCardHTML(d) {
   return `
   <div class="grid" style="grid-template-columns:1fr;">
     <div class="park-card map-card"><div class="card-pad">
-      <div class="park-rule" style="margin-top:0;">De kaart · twaalf streken</div>
-      <svg viewBox="0 0 ${viewW} ${viewH}" role="img" aria-label="Kaart van Nederland, Frankrijk en Oostenrijk met de twaalf kampeerstreken">
+      <div class="park-rule" style="margin-top:0;">De kaart · dertien streken</div>
+      <svg viewBox="0 0 ${viewW} ${viewH}" role="img" aria-label="Kaart van Nederland en Frankrijk met de dertien kampeerstreken">
         <defs>
           <linearGradient id="mapZee" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stop-color="#dcebf5"/>
@@ -275,7 +275,7 @@ function mapCardHTML(d) {
         ${markers}
         ${ornaments}
       </svg>
-      <div class="map-note">Elke pin is het vaste referentiepunt (representatief kampeerdal, geen bergtop) waarop Open-Meteo per streek wordt bevraagd — dezelfde coördinaat die de tabel en matrix hieronder voeden. Kleur = de categorie van vandaag; hover voor coördinaten.</div>
+      <div class="map-note">Elke pin is het vaste referentiepunt (de stad of het dorp zelf) waarop Open-Meteo per streek wordt bevraagd — dezelfde coördinaat die de tabel en matrix hieronder voeden. Kleur = de categorie van vandaag; hover voor coördinaten.</div>
       <div class="map-legend">
         <span><i class="sw cat-top"></i>top</span>
         <span><i class="sw cat-goed"></i>goed</span>

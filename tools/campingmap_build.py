@@ -4,7 +4,7 @@
 Eenmalige/handmatige build-tool (zelfde status als train_surrogate.py voor
 Project 13's surrogaat): geen pytest-module, niet in CI. Haalt Natural Earth
 1:50m admin-0 country boundaries op, clipt/vereenvoudigt ze tot een kleine
-contourset rond de twaalf kampeerstreken (NL/FR/AT + buurlanden als context),
+contourset rond de dertien kampeerstreken (NL/FR + buurlanden als context),
 projecteert (equirechthoekig met een cos(lat0)-correctie) en schrijft het
 resultaat als een klein statisch JS-contract (`CAMPING_MAP`) dat het
 kaartpaneel op docs/camping.html tekent.
@@ -29,8 +29,13 @@ NE_URL = ("https://raw.githubusercontent.com/nvkelso/natural-earth-vector/"
 CACHE_PATH = os.getenv("CAMPINGMAP_NE_CACHE", "/tmp/ne_50m_admin_0_countries.geojson")
 OUT_PATH = os.getenv("CAMPINGMAP_OUT", "docs/js/campingmap.js")
 
-# Kampeer-window: lon/lat-bounding box die alle twaalf streken + genoeg
-# buurland-context dekt (bewust ruim rond Bretagne t/m Süd-Steiermark).
+# Kampeer-window: lon/lat-bounding box die alle dertien streken + genoeg
+# buurland-context dekt. Bewust ONGEWIJZIGD gehouden toen Oostenrijk en
+# Noordwest-Frankrijk vervielen voor de Oost-Franse steden (aug 2026): de
+# noord-zuid-spreiding (Utrecht t/m Valence) is nauwelijks kleiner geworden,
+# dus een kleinere box zou vooral de kaart onnodig portrait-achtig maken
+# zonder de crowding rond de nieuwe, dicht opeen liggende steden op te
+# lossen — dat leunt op LABEL_OFFSET, niet op zoomen.
 LON_MIN, LON_MAX = -6.0, 19.2
 LAT_MIN, LAT_MAX = 42.5, 54.2
 VIEW_W = 1000
@@ -39,57 +44,64 @@ COS_LAT0 = math.cos(math.radians(LAT0))
 SCALE = VIEW_W / ((LON_MAX - LON_MIN) * COS_LAT0)
 VIEW_H = (LAT_MAX - LAT_MIN) * SCALE
 
-# "focus" = de drie landen waar de streken in liggen (dikke inktlijn);
-# "ctx" = buurlanden, alleen voor oriëntatie (dunne, verbleekte lijn).
+# "focus" = de landen waar de streken in liggen (dikke inktlijn); "ctx" =
+# buurlanden, alleen voor oriëntatie (dunne, verbleekte lijn). Oostenrijk
+# schoof van focus naar ctx toen de laatste AT-streek verviel (aug 2026) —
+# blijft in beeld voor de Alpen-oriëntatie bij Chamonix/Annecy, maar draagt
+# geen streek meer.
 WANTED = {
-    "Netherlands": "focus", "France": "focus", "Austria": "focus",
-    "Belgium": "ctx", "Luxembourg": "ctx", "Germany": "ctx", "Switzerland": "ctx",
-    "Italy": "ctx", "Czechia": "ctx", "Slovenia": "ctx", "Denmark": "ctx",
-    "United Kingdom": "ctx", "Spain": "ctx", "Poland": "ctx",
+    "Netherlands": "focus", "France": "focus",
+    "Austria": "ctx", "Belgium": "ctx", "Luxembourg": "ctx", "Germany": "ctx",
+    "Switzerland": "ctx", "Italy": "ctx", "Czechia": "ctx", "Slovenia": "ctx",
+    "Denmark": "ctx", "United Kingdom": "ctx", "Spain": "ctx", "Poland": "ctx",
     "Liechtenstein": "ctx", "Monaco": "ctx", "Andorra": "ctx",
 }
 
 # Hand-getunede label-offsets [dx, dy, anchor] in geprojecteerde px, zodat de
-# twee dichte Alpen-clusters (AT: salzburgerland/tirol/karnten/steiermark;
-# FR: jura/savoie/haute_savoie) leesbaar blijven. camping.js valt terug op
-# een vaste default voor een streek die hier ontbreekt.
+# twee dichte clusters leesbaar blijven — de Zuidoost-Alpen-hoek (grenoble/
+# chambery/annecy/chamonix/valbonnais/valence, aug 2026: allemaal binnen een
+# klein blokje sinds de focus op Oost-Frankrijk verschoof) en de Elzas-steden
+# (mulhouse/colmar, amper 20px verticaal uiteen op deze schaal). camping.js
+# valt terug op een vaste default voor een streek die hier ontbreekt.
 LABEL_OFFSET = {
     "utrecht": [14, -6, "start"],
-    "salzburgerland": [-8, -20, "middle"],
-    "tirol": [-95, 4, "end"],
-    "karnten": [22, 28, "start"],
-    "steiermark": [40, -12, "start"],
-    "normandie": [14, -10, "start"],
-    "bretagne": [14, 6, "start"],
-    "auvergne": [16, 4, "start"],
-    "elzas": [16, 2, "start"],
-    "jura": [-70, -10, "end"],
-    "savoie": [-16, 30, "end"],
-    "haute_savoie": [18, -14, "start"],
+    "grenoble": [-52, 22, "end"],
+    "chambery": [-64, -6, "end"],
+    "annecy": [-6, -26, "middle"],
+    "chamonix": [26, -6, "start"],
+    "vitry_le_francois": [14, -10, "start"],
+    "besancon": [4, -40, "middle"],
+    "valbonnais": [-8, 40, "middle"],
+    "dijon": [-18, -4, "end"],
+    "montbeliard": [20, 40, "start"],
+    "mulhouse": [26, 22, "start"],
+    "colmar": [22, -18, "start"],
+    "valence": [-14, 34, "end"],
 }
 
 # Mirror van camping_forecast.py's REGIONS (id/label/country/lat/lon) — bewust
 # hier gedupliceerd i.p.v. uit het live artefact gelezen: dit zijn de vaste
-# referentiepunten waarop Open-Meteo per streek wordt bevraagd (representatieve
-# kampeerdalen, geen bergtoppen — zie camping_forecast.py), geen gemeten data.
-# Een streek die tijdelijk "unavailable" is (fetch-fout) draagt in het
-# artefact geen lat/lon; de kaart moet toch alle twaalf pins tonen. Bij een
-# wijziging in camping_forecast.py's REGIONS moet dit lijstje meeveranderen —
-# er is bewust geen runtime-koppeling (dit is een build-time contour/pin-
-# contract, geen live data-laag).
+# referentiepunten waarop Open-Meteo per streek wordt bevraagd (aug 2026: de
+# gevraagde steden/dorpen zelf, geen representatieve streek-benadering meer —
+# zie camping_forecast.py), geen gemeten data. Een streek die tijdelijk
+# "unavailable" is (fetch-fout) draagt in het artefact geen lat/lon; de kaart
+# moet toch alle dertien pins tonen. Bij een wijziging in camping_forecast.py's
+# REGIONS moet dit lijstje meeveranderen — er is bewust geen runtime-koppeling
+# (dit is een build-time contour/pin-contract, geen live data-laag).
 REGIONS = [
     {"id": "utrecht", "label": "Utrecht", "country": "NL", "lat": 52.09, "lon": 5.12},
-    {"id": "salzburgerland", "label": "Salzburgerland", "country": "AT", "lat": 47.32, "lon": 12.80},
-    {"id": "tirol", "label": "Tirol", "country": "AT", "lat": 47.05, "lon": 10.94},
-    {"id": "karnten", "label": "Kärnten", "country": "AT", "lat": 46.61, "lon": 13.86},
-    {"id": "steiermark", "label": "Steiermark", "country": "AT", "lat": 46.73, "lon": 15.36},
-    {"id": "normandie", "label": "Normandië", "country": "FR", "lat": 49.38, "lon": -1.75},
-    {"id": "bretagne", "label": "Bretagne", "country": "FR", "lat": 48.25, "lon": -4.49},
-    {"id": "auvergne", "label": "Auvergne", "country": "FR", "lat": 45.57, "lon": 2.87},
-    {"id": "elzas", "label": "Elzas", "country": "FR", "lat": 48.08, "lon": 7.36},
-    {"id": "jura", "label": "Jura", "country": "FR", "lat": 46.57, "lon": 5.75},
-    {"id": "savoie", "label": "Savoie", "country": "FR", "lat": 45.55, "lon": 5.79},
-    {"id": "haute_savoie", "label": "Haute-Savoie", "country": "FR", "lat": 45.85, "lon": 6.17},
+    {"id": "grenoble", "label": "Grenoble", "country": "FR", "lat": 45.19, "lon": 5.72},
+    {"id": "chambery", "label": "Chambéry", "country": "FR", "lat": 45.56, "lon": 5.92},
+    {"id": "annecy", "label": "Annecy", "country": "FR", "lat": 45.90, "lon": 6.13},
+    {"id": "chamonix", "label": "Chamonix", "country": "FR", "lat": 45.92, "lon": 6.87},
+    {"id": "vitry_le_francois", "label": "Vitry-le-François", "country": "FR", "lat": 48.73, "lon": 4.58},
+    {"id": "besancon", "label": "Besançon", "country": "FR", "lat": 47.24, "lon": 6.02},
+    {"id": "valbonnais", "label": "Valbonnais", "country": "FR", "lat": 44.98, "lon": 5.92},
+    {"id": "dijon", "label": "Dijon", "country": "FR", "lat": 47.32, "lon": 5.04},
+    {"id": "montbeliard", "label": "Montbéliard", "country": "FR", "lat": 47.51, "lon": 6.80},
+    {"id": "mulhouse", "label": "Mulhouse", "country": "FR", "lat": 47.75, "lon": 7.34},
+    {"id": "colmar", "label": "Colmar", "country": "FR", "lat": 48.08, "lon": 7.36},
+    {"id": "valence", "label": "Valence", "country": "FR", "lat": 44.93, "lon": 4.89},
 ]
 
 
@@ -187,9 +199,9 @@ def render_js(borders):
         "// De landsgrenzen zijn geen live kaartlaag (CSP staat geen tegel-CDN toe en",
         "// hoort ook niet bij een statische GitHub Pages-site) maar een eenmalig",
         "// vereenvoudigd contourbestand: Natural Earth 1:50m admin-0 countries,",
-        "// geclipt op de kampeer-window (lon -6..17.8, lat 42.5..54.2), vereenvoudigd",
+        "// geclipt op de kampeer-window (lon -6..19.2, lat 42.5..54.2), vereenvoudigd",
         "// met Ramer-Douglas-Peucker en geprojecteerd (equirechthoekig met een",
-        "// cos(48°)-correctie, zodat Frankrijk en Oostenrijk niet vervormen t.o.v.",
+        "// cos(48°)-correctie, zodat Nederland en Frankrijk niet vervormen t.o.v.",
         "// elkaar). Regenereren: `python3 tools/campingmap_build.py`.",
         "// Geladen vóór camping.js; definieert de globale `CAMPING_MAP`.",
         '"use strict";',

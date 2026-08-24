@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """camping_forecast.py — Project 15: Kampeerkompas.
 
-Doorlopend (jaarrond, 4×/dag) overzicht van waar en wanneer twaalf streken
+Doorlopend (jaarrond, 4×/dag) overzicht van waar en wanneer dertien streken
 geschikt zijn om te kamperen met tent, peuter en auto. Per streek wordt de
 Open-Meteo-voorspelling (16 dagen) gescoord op de kampeercriteria:
 
@@ -45,68 +45,67 @@ FORECAST_DAYS = 16
 ENSEMBLE_DAYS = 15
 DATA_PATH = os.getenv("CAMPING_DATA_PATH", "docs/camping_data.json")
 
-# Alle twaalf streken liggen in CET/CEST → één timezone-param volstaat en de
+# Alle dertien streken liggen in CET/CEST → één timezone-param volstaat en de
 # dag/nacht-snedes vallen overal op dezelfde klok (repo-beleid: Europe/Amsterdam).
 OM_TIMEZONE = "Europe/Amsterdam"
 
-# Representatieve kampeerdalen (bewust aanpasbaar; hoogte doet ertoe voor de
-# nachten — dit zijn dal-/meerlocaties waar campings liggen, geen bergtoppen).
+# Bewonersverzoek (aug 2026): Oostenrijk en Noordwest-Frankrijk zijn vervallen,
+# de focus ligt op Oost-Frankrijk — en dan niet als brede departementstreek
+# (zoals voorheen "Savoie"/"Jura"), maar als twaalf met naam genoemde
+# steden/dorpen. Elk punt is dus letterlijk de gevraagde plaats zelf, geen
+# representatief kampeerdal meer.
 # area_patterns: substring-match tegen MeteoAlarm-areaDesc/geocodes. Geijkt op
 # de echte feeds (eerste run, 13 aug 2026): NL waarschuwt per provincie
-# ("Utrecht"), FR per departement ("Haut-Rhin"), AT per Bezirk ("Schwaz",
-# "Villach Land", "Sankt Johann im Pongau") — de AT-lijsten dragen daarom álle
-# Bezirke van de deelstaat, ook die zonder de deelstaatnaam erin.
+# ("Utrecht"), FR per departement ("Haut-Rhin").
 # Bekende, geaccepteerde overlap (best-effort, geen exacte match): een
 # departementnaam die zelf een woord-substring is van een ander departement
 # ("Savoie" in "Haute-Savoie", "Eure" in "Eure-et-Loir") laat het kortere
 # departement soms meetellen op een waarschuwing die alleen het langere raakt
 # — nooit andersom. Over-inclusief, niet under-inclusief: een rode vlag die
-# er niet hoort te zijn is minder erg dan eentje die ontbreekt.
+# er niet hoort te zijn is minder erg dan eentje die ontbreekt. Twee steden in
+# hetzelfde departement (Grenoble/Valbonnais in Isère, Besançon/Montbéliard in
+# Doubs, Mulhouse/Colmar in Haut-Rhin) delen bewust dezelfde patterns — een
+# departementswaarschuwing raakt ze allebei.
 REGIONS = [
     {"id": "utrecht", "label": "Utrecht", "country": "NL",
      "lat": LATITUDE, "lon": LONGITUDE,
      "area_patterns": ("utrecht",)},
-    {"id": "salzburgerland", "label": "Salzburgerland", "country": "AT",
-     "lat": 47.32, "lon": 12.80,  # Zell am See-dal
-     "area_patterns": ("salzburg", "flachgau", "tennengau", "pongau", "pinzgau", "lungau",
-                       "hallein", "zell am see", "tamsweg")},
-    {"id": "tirol", "label": "Tirol", "country": "AT",
-     "lat": 47.05, "lon": 10.94,  # Ötztal/Längenfeld (Bezirk Imst) — west-Tirol
-     "area_patterns": ("tirol", "innsbruck", "unterland", "oberland", "imst", "kitzbühel",
-                       "kitzbuhel", "kufstein", "landeck", "reutte", "schwaz", "lienz")},
-    {"id": "karnten", "label": "Kärnten", "country": "AT",
-     "lat": 46.61, "lon": 13.86,  # Villach/merengebied
-     "area_patterns": ("kärnten", "karnten", "klagenfurt", "villach", "feldkirchen",
-                       "hermagor", "spittal", "völkermarkt", "volkermarkt", "wolfsberg",
-                       "sankt veit", "st. veit")},
-    {"id": "steiermark", "label": "Steiermark", "country": "AT",
-     "lat": 46.73, "lon": 15.36,  # Süd-Steiermark/Gamlitz (Bezirk Leibnitz) — zuidoost
-     "area_patterns": ("steiermark", "graz-umgebung", "graz", "deutschlandsberg",
-                       "hartberg-fürstenfeld", "hartberg-furstenfeld", "leibnitz", "leoben",
-                       "liezen", "murau", "murtal", "südoststeiermark", "sudoststeiermark",
-                       "voitsberg", "weiz")},
-    {"id": "normandie", "label": "Normandië", "country": "FR",
-     "lat": 49.38, "lon": -1.75,  # Cotentin (Barneville-Carteret)
-     "area_patterns": ("calvados", "manche", "orne", "eure", "seine-maritime")},
-    {"id": "bretagne", "label": "Bretagne", "country": "FR",
-     "lat": 48.25, "lon": -4.49,  # Crozon-schiereiland (Finistère)
-     "area_patterns": ("finistère", "finistere", "côtes-d'armor", "cotes-d'armor",
-                       "morbihan", "ille-et-vilaine")},
-    {"id": "auvergne", "label": "Auvergne", "country": "FR",
-     "lat": 45.57, "lon": 2.87,  # Lac Chambon/Monts Dore (Puy-de-Dôme)
-     "area_patterns": ("puy-de-dôme", "puy-de-dome", "cantal", "haute-loire", "allier")},
-    {"id": "elzas", "label": "Elzas", "country": "FR",
-     "lat": 48.08, "lon": 7.36,  # Colmar/wijnroute
-     "area_patterns": ("haut-rhin", "bas-rhin", "alsace")},
-    {"id": "jura", "label": "Jura", "country": "FR",
-     "lat": 46.57, "lon": 5.75,  # Clairvaux-les-Lacs
-     "area_patterns": ("jura", "doubs")},
-    {"id": "savoie", "label": "Savoie", "country": "FR",
-     "lat": 45.55, "lon": 5.79,  # Lac d'Aiguebelette
+    {"id": "grenoble", "label": "Grenoble", "country": "FR",
+     "lat": 45.19, "lon": 5.72,
+     "area_patterns": ("isère", "isere")},
+    {"id": "chambery", "label": "Chambéry", "country": "FR",
+     "lat": 45.56, "lon": 5.92,
      "area_patterns": ("savoie",)},
-    {"id": "haute_savoie", "label": "Haute-Savoie", "country": "FR",
-     "lat": 45.85, "lon": 6.17,  # Lac d'Annecy/Talloires
+    {"id": "annecy", "label": "Annecy", "country": "FR",
+     "lat": 45.90, "lon": 6.13,
      "area_patterns": ("haute-savoie",)},
+    {"id": "chamonix", "label": "Chamonix", "country": "FR",
+     "lat": 45.92, "lon": 6.87,  # Chamonix-Mont-Blanc
+     "area_patterns": ("haute-savoie",)},
+    {"id": "vitry_le_francois", "label": "Vitry-le-François", "country": "FR",
+     "lat": 48.73, "lon": 4.58,
+     "area_patterns": ("marne",)},
+    {"id": "besancon", "label": "Besançon", "country": "FR",
+     "lat": 47.24, "lon": 6.02,
+     "area_patterns": ("doubs",)},
+    {"id": "valbonnais", "label": "Valbonnais", "country": "FR",
+     "lat": 44.98, "lon": 5.92,  # Ecrins-voorland
+     "area_patterns": ("isère", "isere")},
+    {"id": "dijon", "label": "Dijon", "country": "FR",
+     "lat": 47.32, "lon": 5.04,
+     "area_patterns": ("côte-d'or", "cote-d'or")},
+    {"id": "montbeliard", "label": "Montbéliard", "country": "FR",
+     "lat": 47.51, "lon": 6.80,
+     "area_patterns": ("doubs",)},
+    {"id": "mulhouse", "label": "Mulhouse", "country": "FR",
+     "lat": 47.75, "lon": 7.34,
+     "area_patterns": ("haut-rhin", "alsace")},
+    {"id": "colmar", "label": "Colmar", "country": "FR",
+     "lat": 48.08, "lon": 7.36,
+     "area_patterns": ("haut-rhin", "alsace")},
+    {"id": "valence", "label": "Valence", "country": "FR",
+     "lat": 44.93, "lon": 4.89,
+     "area_patterns": ("drôme", "drome")},
 ]
 
 # Dag/nacht-vensters (lokale klokuren; halfopen [start, eind)). Op de twee
@@ -199,16 +198,15 @@ MIN_NIGHTS = 3  # minimale kampeerduur (gebruikersbesluit — geldt overal)
 
 # Super-regio's voor de flexibiliteitsvraag: "waar zitten we het beste als we
 # binnen één landstreek af en toe willen verkassen, minstens MIN_NIGHTS
-# nachten per plek?" utrecht is thuisbasis en doet bewust niet mee. Een test
-# bewaakt dat de drie groepen samen exact de overige REGIONS-ids dekken,
-# disjunct.
+# nachten per plek?" utrecht is thuisbasis en doet bewust niet mee. Sinds
+# Oostenrijk en Noordwest-Frankrijk vervielen (aug 2026) is Oost-Frankrijk de
+# enige groep — een test bewaakt dat 'm samen exact de overige REGIONS-ids
+# dekt, disjunct (triviaal met één groep, maar bewaakt toekomstige groei).
 SUPER_REGIONS = [
-    {"id": "oostenrijk", "label": "Oostenrijk",
-     "region_ids": ("salzburgerland", "tirol", "karnten", "steiermark")},
-    {"id": "nw_frankrijk", "label": "Noordwest-Frankrijk",
-     "region_ids": ("normandie", "bretagne")},
     {"id": "oost_frankrijk", "label": "Oost-Frankrijk",
-     "region_ids": ("auvergne", "elzas", "jura", "savoie", "haute_savoie")},
+     "region_ids": ("grenoble", "chambery", "annecy", "chamonix", "vitry_le_francois",
+                    "besancon", "valbonnais", "dijon", "montbeliard", "mulhouse",
+                    "colmar", "valence")},
 ]
 # Verkassen is niet gratis (tent afbreken en opbouwen met een peuter): één
 # "licht ongemak"-equivalent, zodat de route niet voor 2 punten winst met de
@@ -320,7 +318,7 @@ REGION_RETRY_DELAY_S = 30
 def fetch_region_forecast_resilient(region: dict) -> dict:
     """`fetch_region_forecast` met één regio-brede herkansing erbovenop.
 
-    Met twaalf regio's (was zeven, aug 2026) valt een korte, bredere
+    Met dertien regio's (was zeven, aug 2026) valt een korte, bredere
     netwerk-hobbel eerder samen met de volle uitputting van één regio's eigen
     5 pogingen (~100s, zie http_util.get_json) dan met zeven — gemeten
     14 aug 2026: Bretagne verloor alle 5 pogingen binnen dezelfde hobbel,
