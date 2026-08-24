@@ -694,7 +694,7 @@ def test_een_kapotte_regio_laat_de_rest_doorgaan(monkeypatch, tmp_path):
     monkeypatch.setattr(cf.time, "sleep", lambda s: None)
 
     def fake_forecast(region):
-        if region["id"] == "tirol":
+        if region["id"] == "grenoble":
             raise RuntimeError("boom")
         return _om_payload()
 
@@ -703,7 +703,7 @@ def test_een_kapotte_regio_laat_de_rest_doorgaan(monkeypatch, tmp_path):
     data = json.loads(pad.read_text(encoding="utf-8"))
     per_id = {r["id"]: r for r in data["regions"]}
     assert len(data["regions"]) == len(cf.REGIONS)
-    assert per_id["tirol"]["status"] == "unavailable"
+    assert per_id["grenoble"]["status"] == "unavailable"
     assert per_id["utrecht"]["status"] == "ok"
 
 
@@ -717,12 +717,12 @@ def test_een_regio_die_alleen_de_herkansing_haalt_blijft_ok(monkeypatch, tmp_pat
     slaap = []
     monkeypatch.setattr(cf.time, "sleep", slaap.append)
 
-    pogingen = {"tirol": 0}
+    pogingen = {"grenoble": 0}
 
     def fake_forecast(region):
-        if region["id"] == "tirol":
-            pogingen["tirol"] += 1
-            if pogingen["tirol"] == 1:
+        if region["id"] == "grenoble":
+            pogingen["grenoble"] += 1
+            if pogingen["grenoble"] == 1:
                 raise RuntimeError("boom")
         return _om_payload()
 
@@ -730,8 +730,8 @@ def test_een_regio_die_alleen_de_herkansing_haalt_blijft_ok(monkeypatch, tmp_pat
     cf.main()
     data = json.loads(pad.read_text(encoding="utf-8"))
     per_id = {r["id"]: r for r in data["regions"]}
-    assert per_id["tirol"]["status"] == "ok"
-    assert pogingen["tirol"] == 2
+    assert per_id["grenoble"]["status"] == "ok"
+    assert pogingen["grenoble"] == 2
     assert slaap == [cf.REGION_RETRY_DELAY_S]
 
 
@@ -967,7 +967,7 @@ def test_warnings_status_onderscheidt_ok_en_failed(monkeypatch, tmp_path):
     data = json.loads(pad.read_text(encoding="utf-8"))
     assert data["warnings_status"]["FR"] == "failed"
     assert data["warnings_status"]["NL"] == "ok"
-    assert data["warnings_status"]["AT"] == "ok"
+    assert set(data["warnings_status"]) == {"NL", "FR"}
 
 
 def test_dry_run_schrijft_geen_artefact(monkeypatch, tmp_path):

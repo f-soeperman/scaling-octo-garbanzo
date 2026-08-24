@@ -1117,7 +1117,7 @@ koelplan verwijst) is benoemd maar uitgesteld.
 
 ## Project 15: Kampeerkompas (Camping Forecast)
 
-**Goal:** Doorlopend (jaarrond, 4×/dag) overzicht van waar en wanneer twaalf streken — Utrecht, Salzburgerland, Tirol, Kärnten, Steiermark, Normandië, Bretagne, Auvergne, Elzas, Jura, Savoie, Haute-Savoie — geschikt zijn om te kamperen met tent, peuter en auto: dagen < 30°, nachten > 10° én ruim boven het dauwpunt (droge tent), dagregen zwaarder gewogen dan nachtregen, officiële waarschuwingen van **oranje of hoger** als rode vlag — **geel wordt bewust volledig genegeerd** (bewonersbesluit aug 2026: een gele hittegolfwaarschuwing kleurde vrijwel de hele matrix rood) — en vertrekken na een droge nacht + ochtend. **Dashboard-only:** geen Telegram-advies, alleen de gedeelde `run_guarded`-crash-alert.
+**Goal:** Doorlopend (jaarrond, 4×/dag) overzicht van waar en wanneer dertien streken — Utrecht plus twaalf met naam genoemde Oost-Franse steden/dorpen: Grenoble, Chambéry, Annecy, Chamonix, Vitry-le-François, Besançon, Valbonnais, Dijon, Montbéliard, Mulhouse, Colmar, Valence (Oostenrijk en Noordwest-Frankrijk vervielen aug 2026, zie "Flexibele super-regio's") — geschikt zijn om te kamperen met tent, peuter en auto: dagen < 30°, nachten > 10° én ruim boven het dauwpunt (droge tent), dagregen zwaarder gewogen dan nachtregen, officiële waarschuwingen van **oranje of hoger** als rode vlag — **geel wordt bewust volledig genegeerd** (bewonersbesluit aug 2026: een gele hittegolfwaarschuwing kleurde vrijwel de hele matrix rood) — en vertrekken na een droge nacht + ochtend. **Dashboard-only:** geen Telegram-advies, alleen de gedeelde `run_guarded`-crash-alert.
 
 ### Files
 - `camping_forecast.py` — runner: per regio Open-Meteo-forecast (16d) + ECMWF-ensemble, MeteoAlarm-waarschuwingen per land, score → vensters → `docs/camping_data.json`
@@ -1152,12 +1152,16 @@ koelplan verwijst) is benoemd maar uitgesteld.
 - **`main_reason` + de "waarom?"-toggle (aug 2026):** additief per-dag-veld met de zwaarste reden van de zwaarste helft — dezelfde helft die de celkleur bepaalt, dus het ene woord dat de kleur verklaart (gelijkspel → de dag). De matrix toont er achter een toggle (standaard uit) een reden-icoon mee, **alleen op matig/slecht-cellen**: top/goed behoeven geen uitleg, rood houdt ⚠/✕. Iconengroepen: ☂ regen · ☀ hitte · ❄ koude nacht · 💧 dauw · 💨 wind. De tooltip noemt de reden altijd voluit ("vooral: …" via `REDEN_TEKST` in camping.js) — dat is ook het mobiele pad. Oud artefact zonder het veld → de toggle doet niets (graceful).
 
 ### Flexibele super-regio's (ronde 3, aug 2026)
-Drie extra tegels onder de matrix beantwoorden de vraag *"in welke grote regio
-zitten we mét verplaatsen het beste?"*: `SUPER_REGIONS` partitioneert de elf
-niet-Utrecht-streken in **Oostenrijk** (salzburgerland/tirol/karnten/steiermark),
-**Noordwest-Frankrijk** (normandie/bretagne) en **Oost-Frankrijk**
-(auvergne/elzas/jura/savoie/haute_savoie) — een test bewaakt dat de partitie
-exact en disjunct dekt. Per super-regio rekent `flex_route` (klein dynamisch
+Eén tegel onder de matrix beantwoordt de vraag *"in welke grote regio zitten
+we mét verplaatsen het beste?"*: `SUPER_REGIONS` partitioneert de twaalf
+niet-Utrecht-streken in **Oost-Frankrijk** (grenoble/chambery/annecy/chamonix/
+vitry_le_francois/besancon/valbonnais/dijon/montbeliard/mulhouse/colmar/
+valence) — een test bewaakt dat de partitie exact en disjunct dekt (triviaal
+met één groep, maar bewaakt toekomstige groei). **Oostenrijk** en
+**Noordwest-Frankrijk** waren hier tot aug 2026 twee aparte groepen
+(salzburgerland/tirol/karnten/steiermark resp. normandie/bretagne); ze
+vervielen samen met hun streken toen de focus op naam genoemde Oost-Franse
+steden verschoof (bewonersverzoek). Per super-regio rekent `flex_route` (klein dynamisch
 programma over (subregio, nachten-op-deze-plek), server-side, stdlib) de
 goedkoopste route uit met **minimaal `MIN_NIGHTS` nachten per plek**:
 - Dagkosten = de bestaande celscore van de gekozen subregio; **verkassen kost
