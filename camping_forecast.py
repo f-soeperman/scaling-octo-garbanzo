@@ -66,43 +66,46 @@ OM_TIMEZONE = "Europe/Amsterdam"
 # hetzelfde departement (Grenoble/Valbonnais in Isère, Besançon/Montbéliard in
 # Doubs, Mulhouse/Colmar in Haut-Rhin) delen bewust dezelfde patterns — een
 # departementswaarschuwing raakt ze allebei.
+# Volgorde is bewust noord→zuid op lat (bewonersverzoek aug 2026) — dit is de
+# volgorde waarin de matrix/tabel op het dashboard de streken toont, dus
+# Utrecht bovenaan en Valence onderaan.
 REGIONS = [
     {"id": "utrecht", "label": "Utrecht", "country": "NL",
      "lat": LATITUDE, "lon": LONGITUDE,
      "area_patterns": ("utrecht",)},
-    {"id": "grenoble", "label": "Grenoble", "country": "FR",
-     "lat": 45.19, "lon": 5.72,
-     "area_patterns": ("isère", "isere")},
-    {"id": "chambery", "label": "Chambéry", "country": "FR",
-     "lat": 45.56, "lon": 5.92,
-     "area_patterns": ("savoie",)},
-    {"id": "annecy", "label": "Annecy", "country": "FR",
-     "lat": 45.90, "lon": 6.13,
-     "area_patterns": ("haute-savoie",)},
-    {"id": "chamonix", "label": "Chamonix", "country": "FR",
-     "lat": 45.92, "lon": 6.87,  # Chamonix-Mont-Blanc
-     "area_patterns": ("haute-savoie",)},
     {"id": "vitry_le_francois", "label": "Vitry-le-François", "country": "FR",
      "lat": 48.73, "lon": 4.58,
      "area_patterns": ("marne",)},
-    {"id": "besancon", "label": "Besançon", "country": "FR",
-     "lat": 47.24, "lon": 6.02,
-     "area_patterns": ("doubs",)},
-    {"id": "valbonnais", "label": "Valbonnais", "country": "FR",
-     "lat": 44.98, "lon": 5.92,  # Ecrins-voorland
-     "area_patterns": ("isère", "isere")},
-    {"id": "dijon", "label": "Dijon", "country": "FR",
-     "lat": 47.32, "lon": 5.04,
-     "area_patterns": ("côte-d'or", "cote-d'or")},
-    {"id": "montbeliard", "label": "Montbéliard", "country": "FR",
-     "lat": 47.51, "lon": 6.80,
-     "area_patterns": ("doubs",)},
-    {"id": "mulhouse", "label": "Mulhouse", "country": "FR",
-     "lat": 47.75, "lon": 7.34,
-     "area_patterns": ("haut-rhin", "alsace")},
     {"id": "colmar", "label": "Colmar", "country": "FR",
      "lat": 48.08, "lon": 7.36,
      "area_patterns": ("haut-rhin", "alsace")},
+    {"id": "mulhouse", "label": "Mulhouse", "country": "FR",
+     "lat": 47.75, "lon": 7.34,
+     "area_patterns": ("haut-rhin", "alsace")},
+    {"id": "montbeliard", "label": "Montbéliard", "country": "FR",
+     "lat": 47.51, "lon": 6.80,
+     "area_patterns": ("doubs",)},
+    {"id": "dijon", "label": "Dijon", "country": "FR",
+     "lat": 47.32, "lon": 5.04,
+     "area_patterns": ("côte-d'or", "cote-d'or")},
+    {"id": "besancon", "label": "Besançon", "country": "FR",
+     "lat": 47.24, "lon": 6.02,
+     "area_patterns": ("doubs",)},
+    {"id": "chamonix", "label": "Chamonix", "country": "FR",
+     "lat": 45.92, "lon": 6.87,  # Chamonix-Mont-Blanc
+     "area_patterns": ("haute-savoie",)},
+    {"id": "annecy", "label": "Annecy", "country": "FR",
+     "lat": 45.90, "lon": 6.13,
+     "area_patterns": ("haute-savoie",)},
+    {"id": "chambery", "label": "Chambéry", "country": "FR",
+     "lat": 45.56, "lon": 5.92,
+     "area_patterns": ("savoie",)},
+    {"id": "grenoble", "label": "Grenoble", "country": "FR",
+     "lat": 45.19, "lon": 5.72,
+     "area_patterns": ("isère", "isere")},
+    {"id": "valbonnais", "label": "Valbonnais", "country": "FR",
+     "lat": 44.98, "lon": 5.92,  # Ecrins-voorland
+     "area_patterns": ("isère", "isere")},
     {"id": "valence", "label": "Valence", "country": "FR",
      "lat": 44.93, "lon": 4.89,
      "area_patterns": ("drôme", "drome")},
@@ -199,14 +202,18 @@ MIN_NIGHTS = 3  # minimale kampeerduur (gebruikersbesluit — geldt overal)
 # Super-regio's voor de flexibiliteitsvraag: "waar zitten we het beste als we
 # binnen één landstreek af en toe willen verkassen, minstens MIN_NIGHTS
 # nachten per plek?" utrecht is thuisbasis en doet bewust niet mee. Sinds
-# Oostenrijk en Noordwest-Frankrijk vervielen (aug 2026) is Oost-Frankrijk de
-# enige groep — een test bewaakt dat 'm samen exact de overige REGIONS-ids
-# dekt, disjunct (triviaal met één groep, maar bewaakt toekomstige groei).
+# aug 2026 twee groepen, bewonersindeling op geografie i.p.v. departement:
+# **Noordoost-Frankrijk** (Vitry-le-François t/m Besançon — Bourgogne/
+# Franche-Comté/Elzas) en **Oost-Frankrijk** (Chamonix t/m Valence — de
+# Zuidoost-Alpen-hoek, Savoie/Haute-Savoie/Isère/Drôme). Een test bewaakt dat
+# de twee groepen samen exact de overige REGIONS-ids dekken, disjunct.
 SUPER_REGIONS = [
+    {"id": "noordoost_frankrijk", "label": "Noordoost-Frankrijk",
+     "region_ids": ("vitry_le_francois", "colmar", "mulhouse", "montbeliard",
+                    "dijon", "besancon")},
     {"id": "oost_frankrijk", "label": "Oost-Frankrijk",
-     "region_ids": ("grenoble", "chambery", "annecy", "chamonix", "vitry_le_francois",
-                    "besancon", "valbonnais", "dijon", "montbeliard", "mulhouse",
-                    "colmar", "valence")},
+     "region_ids": ("chamonix", "annecy", "chambery", "grenoble", "valbonnais",
+                    "valence")},
 ]
 # Verkassen is niet gratis (tent afbreken en opbouwen met een peuter): één
 # "licht ongemak"-equivalent, zodat de route niet voor 2 punten winst met de

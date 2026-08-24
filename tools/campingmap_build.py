@@ -88,19 +88,21 @@ LABEL_OFFSET = {
 # moet toch alle dertien pins tonen. Bij een wijziging in camping_forecast.py's
 # REGIONS moet dit lijstje meeveranderen — er is bewust geen runtime-koppeling
 # (dit is een build-time contour/pin-contract, geen live data-laag).
+# Volgorde noord→zuid, zelfde reden en zelfde volgorde als camping_forecast.py's
+# REGIONS (het dashboard toont de streken in deze volgorde).
 REGIONS = [
     {"id": "utrecht", "label": "Utrecht", "country": "NL", "lat": 52.09, "lon": 5.12},
-    {"id": "grenoble", "label": "Grenoble", "country": "FR", "lat": 45.19, "lon": 5.72},
-    {"id": "chambery", "label": "Chambéry", "country": "FR", "lat": 45.56, "lon": 5.92},
-    {"id": "annecy", "label": "Annecy", "country": "FR", "lat": 45.90, "lon": 6.13},
-    {"id": "chamonix", "label": "Chamonix", "country": "FR", "lat": 45.92, "lon": 6.87},
     {"id": "vitry_le_francois", "label": "Vitry-le-François", "country": "FR", "lat": 48.73, "lon": 4.58},
-    {"id": "besancon", "label": "Besançon", "country": "FR", "lat": 47.24, "lon": 6.02},
-    {"id": "valbonnais", "label": "Valbonnais", "country": "FR", "lat": 44.98, "lon": 5.92},
-    {"id": "dijon", "label": "Dijon", "country": "FR", "lat": 47.32, "lon": 5.04},
-    {"id": "montbeliard", "label": "Montbéliard", "country": "FR", "lat": 47.51, "lon": 6.80},
-    {"id": "mulhouse", "label": "Mulhouse", "country": "FR", "lat": 47.75, "lon": 7.34},
     {"id": "colmar", "label": "Colmar", "country": "FR", "lat": 48.08, "lon": 7.36},
+    {"id": "mulhouse", "label": "Mulhouse", "country": "FR", "lat": 47.75, "lon": 7.34},
+    {"id": "montbeliard", "label": "Montbéliard", "country": "FR", "lat": 47.51, "lon": 6.80},
+    {"id": "dijon", "label": "Dijon", "country": "FR", "lat": 47.32, "lon": 5.04},
+    {"id": "besancon", "label": "Besançon", "country": "FR", "lat": 47.24, "lon": 6.02},
+    {"id": "chamonix", "label": "Chamonix", "country": "FR", "lat": 45.92, "lon": 6.87},
+    {"id": "annecy", "label": "Annecy", "country": "FR", "lat": 45.90, "lon": 6.13},
+    {"id": "chambery", "label": "Chambéry", "country": "FR", "lat": 45.56, "lon": 5.92},
+    {"id": "grenoble", "label": "Grenoble", "country": "FR", "lat": 45.19, "lon": 5.72},
+    {"id": "valbonnais", "label": "Valbonnais", "country": "FR", "lat": 44.98, "lon": 5.92},
     {"id": "valence", "label": "Valence", "country": "FR", "lat": 44.93, "lon": 4.89},
 ]
 
