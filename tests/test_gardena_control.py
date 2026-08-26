@@ -168,17 +168,21 @@ def test_meter_verlopen_en_heropend_binnen_het_gat():
     assert gc.parse_ts(entry["since"]) == reopen
 
 
-def test_meter_volledig_gemiste_beurt_krijgt_halve_venster_schatting():
+def test_meter_dicht_dicht_met_verschoven_ts_verzint_geen_beurt():
+    # Ooit werd een verschoven activity-ts tussen twee dicht-metingen gelezen
+    # als bewijs van een volledig binnen het gat geopende-en-gesloten beurt
+    # (halve-venster-schatting). Dat bleek in de praktijk een vals-positieve
+    # registratie te kunnen opleveren voor een kraan die nooit is opengegaan
+    # (de activity-ts kan om andere redenen verschuiven) — de meter verzint
+    # nu nooit meer een interval als beide metingen dicht waren.
     now = utc(2026, 8, 14, 12, 0)
     c1 = utc(2026, 8, 14, 11, 0)
     close = utc(2026, 8, 14, 11, 40)
     prev = {"open": False, "since": None, "cmd_s": None,
             "ts": _iso(utc(2026, 8, 14, 9, 0)), "checked": _iso(c1)}
     entry, done = gc.meter_step(prev, False, close, None, now)
-    assert len(done) == 1
-    start, end = done[0]
-    assert end == close
-    assert start == c1 + (close - c1) / 2  # helft van het mogelijke venster
+    assert done == []
+    assert entry["open"] is False
 
 
 def test_meter_onzin_timestamp_valt_terug_op_commando_eindtijd_of_ondertelling():
