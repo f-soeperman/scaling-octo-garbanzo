@@ -250,7 +250,11 @@ def load_soil_data(now: datetime, path: str | None = None):
 # Reconstrueert per kraan de voltooide open-intervallen uit opeenvolgende
 # uurlijkse snapshots. De activity-timestamp van de kraan is leidend maar
 # wordt altijd geklemd op [vorige check, nu] — blijkt hij onzin, dan degradeert
-# de meting naar ±een half uur i.p.v. naar garbage.
+# de meting naar de vorige check i.p.v. naar garbage. Een kraan die op zowel
+# de vorige als de huidige check dicht rapporteert, levert nooit een interval
+# op — ook niet als de activity-ts intussen verschoof (zie de toelichting
+# onderin `meter_step`): dat bleek in de praktijk een vals-positieve beurt te
+# kunnen opleveren voor een kraan die nooit heeft opengestaan.
 
 def meter_step(prev, cur_open: bool, cur_ts, cur_dur, now: datetime):
     """(nieuwe meter-entry, [voltooide (start, eind)-intervallen])."""
@@ -317,13 +321,14 @@ def meter_step(prev, cur_open: bool, cur_ts, cur_dur, now: datetime):
         since = _clamp(cur_ts, prev_checked, now) if cur_ts else \
             prev_checked + (now - prev_checked) / 2
         return open_entry(since), completed
-    if changed_ts:
-        # Volledig binnen het gat geopend én gesloten: eindtijd bekend (de
-        # activity-ts), starttijd niet → schatting = de helft van het venster.
-        close = _clamp(cur_ts, prev_checked, now)
-        start = prev_checked + (close - prev_checked) / 2
-        if close > start:
-            completed.append((start, close))
+    # Dicht bij de vorige én de huidige check: nooit een interval verzinnen,
+    # ook niet als de activity-ts intussen verschoof. Die verschuiving werd
+    # gelezen als bewijs van een volledig binnen het gat geopende-en-gesloten
+    # beurt, maar de kraan kan op dezelfde manier dicht blijven terwijl de API
+    # de timestamp om een andere reden bijwerkt — en dan verzint dit een
+    # opentijd die nooit bestond. Bewuste ondertelling, zelfde afweging als
+    # hierboven: een gemiste korte beurt kost een paar mm in de balans, een
+    # verzonnen beurt is een registratie die nooit had mogen bestaan.
     return closed_entry(), completed
 
 
