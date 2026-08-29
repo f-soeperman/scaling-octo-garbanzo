@@ -1,6 +1,6 @@
 {
-  "date": "2026-08-28",
-  "plan_sent": false,
-  "reminder_at": null,
+  "date": "2026-08-29",
+  "plan_sent": true,
+  "reminder_at": "11:00",
   "reminder_sent": false
 }
