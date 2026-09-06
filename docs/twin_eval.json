@@ -90,5 +90,51 @@
    "bedroom": 0.804,
    "office": 1.017
   }
+ },
+ {
+  "date": "2026-09-06T05:31+02:00",
+  "weather": "hindcast",
+  "tm_mode": "shift",
+  "horizon_h": 12.0,
+  "stride_h": 3.0,
+  "origin_hours": null,
+  "n_origins": 624,
+  "physics_rev": 7,
+  "pooled": {
+   "physics": 1.028,
+   "freerun": 1.583,
+   "persist": 1.242,
+   "persist24": 1.34,
+   "clim": 1.806
+  },
+  "rooms": {
+   "living": 0.675,
+   "nursery": 0.638,
+   "bedroom": 1.396,
+   "office": 1.172
+  }
+ },
+ {
+  "date": "2026-09-06T05:35+02:00",
+  "weather": "forecast",
+  "tm_mode": "shift",
+  "horizon_h": 12.0,
+  "stride_h": 3.0,
+  "origin_hours": null,
+  "n_origins": 103,
+  "physics_rev": 7,
+  "pooled": {
+   "physics": 0.601,
+   "freerun": 0.924,
+   "persist": 0.584,
+   "persist24": 0.63,
+   "clim": 1.334
+  },
+  "rooms": {
+   "living": 0.364,
+   "nursery": 0.29,
+   "bedroom": 0.661,
+   "office": 0.889
+  }
  }
 ]
