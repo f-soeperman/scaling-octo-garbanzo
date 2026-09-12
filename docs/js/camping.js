@@ -7,7 +7,7 @@ const state = { data: null, waarom: false };
 
 const CAT_LABEL = { top: "top", goed: "goed", matig: "matig", slecht: "slecht", rood: "rode vlag" };
 const LEVEL_LABEL = { yellow: "geel", orange: "oranje", red: "rood" };
-const LAND_NAAM = { NL: "Nederland", FR: "Frankrijk" };
+const LAND_NAAM = { NL: "Nederland", FR: "Frankrijk", DE: "Duitsland", ES: "Spanje" };
 const VLAG_TEKST = {
   waarschuwing: "officiële waarschuwing",
   hitte_extreem: "extreme hitte",
@@ -166,11 +166,11 @@ function celHTML(dag, col, row) {
          ` title="${esc(celTitle(dag))}"></div>`;
 }
 
-// ── overzichtskaart: waar liggen de dertien streken, en op welk punt is de
-// voorspelling per streek gebaseerd (landsgrenzen als oriëntatie) ──────────
+// ── overzichtskaart: waar liggen de steden, en op welk punt is de
+// voorspelling per stad gebaseerd (landsgrenzen als oriëntatie) ────────────
 // CAMPING_MAP (docs/js/campingmap.js, vóór dit script geladen) draagt de
 // vooraf vereenvoudigde landcontouren + de vaste referentiecoördinaat per
-// streek (build-time contract, zie tools/campingmap_build.py) — de kleur per
+// stad (build-time contract, zie tools/campingmap_build.py) — de kleur per
 // pin komt wél live uit camping_data.json (de categorie van vandaag).
 const MAP_DEFAULT_OFFSET = [14, -8, "start"];
 
@@ -258,8 +258,8 @@ function mapCardHTML(d) {
   return `
   <div class="grid" style="grid-template-columns:1fr;">
     <div class="park-card map-card"><div class="card-pad">
-      <div class="park-rule" style="margin-top:0;">De kaart · dertien streken</div>
-      <svg viewBox="0 0 ${viewW} ${viewH}" role="img" aria-label="Kaart van Nederland en Frankrijk met de dertien kampeerstreken">
+      <div class="park-rule" style="margin-top:0;">De kaart · ${CAMPING_MAP.regions.length} steden</div>
+      <svg viewBox="0 0 ${viewW} ${viewH}" role="img" aria-label="Kaart van West-Europa met de ${CAMPING_MAP.regions.length} steden, elk met de kleur van vandaag">
         <defs>
           <linearGradient id="mapZee" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stop-color="#dcebf5"/>
@@ -275,7 +275,7 @@ function mapCardHTML(d) {
         ${markers}
         ${ornaments}
       </svg>
-      <div class="map-note">Elke pin is het vaste referentiepunt (de stad of het dorp zelf) waarop Open-Meteo per streek wordt bevraagd — dezelfde coördinaat die de tabel en matrix hieronder voeden. Kleur = de categorie van vandaag; hover voor coördinaten.</div>
+      <div class="map-note">Elke pin is het vaste referentiepunt (het stadscentrum) waarop Open-Meteo per stad wordt bevraagd — dezelfde coördinaat die de tabel en matrix hieronder voeden. Kleur = de categorie van vandaag; hover voor coördinaten.</div>
       <div class="map-legend">
         <span><i class="sw cat-top"></i>top</span>
         <span><i class="sw cat-goed"></i>goed</span>
@@ -443,7 +443,7 @@ function flexTileHTML(s, besteId) {
   const verkassen = s.moves ? `${s.moves}× verkassen` : "zonder verkassen";
   const kop = `<div class="status-line"><strong>${s.nights_ok} van ${s.nights_total}</strong> nachten goed · ${verkassen}</div>`;
   const rood = s.red_days
-    ? `<div class="warn-line">⚠ ${s.red_days} ${s.red_days === 1 ? "dag" : "dagen"} met rode vlag onvermijdelijk in deze streek.</div>`
+    ? `<div class="warn-line">⚠ ${s.red_days} ${s.red_days === 1 ? "dag" : "dagen"} met rode vlag onvermijdelijk op deze route.</div>`
     : "";
   return `<div class="park-card">${band}<div class="card-pad">
     ${kop}${flexStripHTML(s)}${flexRouteZin(s)}${rood}
@@ -453,8 +453,10 @@ function flexTileHTML(s, besteId) {
 function flexSectionHTML(d) {
   const supers = d.super_regions || []; // oud artefact → geen sectie
   if (!supers.length) return "";
-  const beste = besteSuper(supers);
-  return `<div class="strip-legende">Grote regio's, mét verkassen (minimaal ${d.params.MIN_NIGHTS} nachten per plek): per landstreek de beste route langs de streken hierboven — donkere linkerrand = verkasdag. De route is indicatief en kan per run verschuiven; de kopcijfers zijn stabieler.</div>` +
+  // "★ beste keuze" vergelijkt tegels met elkaar; met één tegel is dat geen
+  // keuze maar een tautologie, dus dan geen ster.
+  const beste = supers.length > 1 ? besteSuper(supers) : null;
+  return `<div class="strip-legende">Mét verkassen (minimaal ${d.params.MIN_NIGHTS} nachten per plek): de beste route langs de steden hierboven — donkere linkerrand = verkasdag. Verkassen kost strafpunten, maar die zijn geijkt op een tent afbreken, niet op de rit tussen twee hoofdsteden: de route hupt dus eerder dan je in het echt zou doen. Indicatief en kan per run verschuiven; de kopcijfers zijn stabieler.</div>` +
     `<div class="grid grid-tiles">${supers.map((s) => flexTileHTML(s, beste)).join("")}</div>`;
 }
 
@@ -654,7 +656,7 @@ function render() {
     mapCardHTML(d) +
     matrixCardHTML(d) +
     flexSectionHTML(d) +
-    `<div class="strip-legende">Per streek: brede tegel = de dag (9–21u) · smalle tegel ertussen = de nacht die die avond begint (21–9u) · ⚠ = officiële waarschuwing (oranje of rood) · ✕ = extreme voorspelde waarden</div>` +
+    `<div class="strip-legende">Per stad: brede tegel = de dag (9–21u) · smalle tegel ertussen = de nacht die die avond begint (21–9u) · ⚠ = officiële waarschuwing (oranje of rood) · ✕ = extreme voorspelde waarden</div>` +
     `<div class="grid grid-tiles">${d.regions.map((r) => regionCardHTML(r, d)).join("")}</div>`;
 
   // "Waarom?"-toggle (CSP: geen inline handlers — na elke render opnieuw

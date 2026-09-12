@@ -4,7 +4,7 @@
 Eenmalige/handmatige build-tool (zelfde status als train_surrogate.py voor
 Project 13's surrogaat): geen pytest-module, niet in CI. Haalt Natural Earth
 1:50m admin-0 country boundaries op, clipt/vereenvoudigt ze tot een kleine
-contourset rond de dertien kampeerstreken (NL/FR + buurlanden als context),
+contourset rond de vier steden (NL/DE/FR/ES + buurlanden als context),
 projecteert (equirechthoekig met een cos(lat0)-correctie) en schrijft het
 resultaat als een klein statisch JS-contract (`CAMPING_MAP`) dat het
 kaartpaneel op docs/camping.html tekent.
@@ -29,81 +29,62 @@ NE_URL = ("https://raw.githubusercontent.com/nvkelso/natural-earth-vector/"
 CACHE_PATH = os.getenv("CAMPINGMAP_NE_CACHE", "/tmp/ne_50m_admin_0_countries.geojson")
 OUT_PATH = os.getenv("CAMPINGMAP_OUT", "docs/js/campingmap.js")
 
-# Kampeer-window: lon/lat-bounding box die alle dertien streken + genoeg
-# buurland-context dekt. Bewust ONGEWIJZIGD gehouden toen Oostenrijk en
-# Noordwest-Frankrijk vervielen voor de Oost-Franse steden (aug 2026): de
-# noord-zuid-spreiding (Utrecht t/m Valence) is nauwelijks kleiner geworden,
-# dus een kleinere box zou vooral de kaart onnodig portrait-achtig maken
-# zonder de crowding rond de nieuwe, dicht opeen liggende steden op te
-# lossen — dat leunt op LABEL_OFFSET, niet op zoomen.
-LON_MIN, LON_MAX = -6.0, 19.2
-LAT_MIN, LAT_MAX = 42.5, 54.2
+# Reis-window: lon/lat-bounding box die alle vier de steden + genoeg
+# buurland-context dekt. Bij de stedenwissel (sep 2026) moest de box wél mee:
+# Madrid ligt op 40.4° en viel ruim onder de oude ondergrens van 42.5°, dus de
+# pin zou buiten de viewBox vallen. Naar het zuiden tot 39° (marge onder
+# Madrid) en naar het westen tot -9.8° zodat het Iberisch schiereiland als
+# herkenbare vorm in beeld komt i.p.v. half afgesneden; in het oosten is 16.5°
+# genoeg voor Berlijn met wat Poolse context erachter.
+LON_MIN, LON_MAX = -9.8, 16.5
+LAT_MIN, LAT_MAX = 39.0, 54.2
 VIEW_W = 1000
-LAT0 = 48.0  # referentiebreedte voor de cos-correctie
+LAT0 = 46.5  # referentiebreedte voor de cos-correctie (midden van de nieuwe box)
 COS_LAT0 = math.cos(math.radians(LAT0))
 SCALE = VIEW_W / ((LON_MAX - LON_MIN) * COS_LAT0)
 VIEW_H = (LAT_MAX - LAT_MIN) * SCALE
 
-# "focus" = de landen waar de streken in liggen (dikke inktlijn); "ctx" =
-# buurlanden, alleen voor oriëntatie (dunne, verbleekte lijn). Oostenrijk
-# schoof van focus naar ctx toen de laatste AT-streek verviel (aug 2026) —
-# blijft in beeld voor de Alpen-oriëntatie bij Chamonix/Annecy, maar draagt
-# geen streek meer.
+# "focus" = de landen waar de steden in liggen (dikke inktlijn); "ctx" =
+# buurlanden, alleen voor oriëntatie (dunne, verbleekte lijn). Duitsland en
+# Spanje schoven van ctx naar focus bij de stedenwissel (sep 2026); Oostenrijk
+# bleef ctx (geen stad meer sinds aug 2026) en Portugal kwam erbij, omdat een
+# Iberisch schiereiland zonder westrand niet als schiereiland leest.
 WANTED = {
-    "Netherlands": "focus", "France": "focus",
-    "Austria": "ctx", "Belgium": "ctx", "Luxembourg": "ctx", "Germany": "ctx",
+    "Netherlands": "focus", "France": "focus", "Germany": "focus", "Spain": "focus",
+    "Austria": "ctx", "Belgium": "ctx", "Luxembourg": "ctx", "Portugal": "ctx",
     "Switzerland": "ctx", "Italy": "ctx", "Czechia": "ctx", "Slovenia": "ctx",
-    "Denmark": "ctx", "United Kingdom": "ctx", "Spain": "ctx", "Poland": "ctx",
+    "Denmark": "ctx", "United Kingdom": "ctx", "Poland": "ctx",
     "Liechtenstein": "ctx", "Monaco": "ctx", "Andorra": "ctx",
 }
 
-# Hand-getunede label-offsets [dx, dy, anchor] in geprojecteerde px, zodat de
-# twee dichte clusters leesbaar blijven — de Zuidoost-Alpen-hoek (grenoble/
-# chambery/annecy/chamonix/valbonnais/valence, aug 2026: allemaal binnen een
-# klein blokje sinds de focus op Oost-Frankrijk verschoof) en de Elzas-steden
-# (mulhouse/colmar, amper 20px verticaal uiteen op deze schaal). camping.js
-# valt terug op een vaste default voor een streek die hier ontbreekt.
+# Hand-getunede label-offsets [dx, dy, anchor] in geprojecteerde px. Sinds de
+# stedenwissel (sep 2026) is het hand-tunen grotendeels overbodig: vier steden
+# over half Europa hebben geen clusters meer die overlappen (de dichtste twee,
+# Utrecht en Berlijn, liggen ~315px uit elkaar), dus ze staan allemaal op de
+# gewone "label rechts van de pin"-stand. Blijft staan als expliciet contract —
+# camping.js valt terug op een vaste default voor een stad die hier ontbreekt.
 LABEL_OFFSET = {
     "utrecht": [14, -6, "start"],
-    "grenoble": [-52, 22, "end"],
-    "chambery": [-64, -6, "end"],
-    "annecy": [-6, -26, "middle"],
-    "chamonix": [26, -6, "start"],
-    "vitry_le_francois": [14, -10, "start"],
-    "besancon": [4, -40, "middle"],
-    "valbonnais": [-8, 40, "middle"],
-    "dijon": [-18, -4, "end"],
-    "montbeliard": [20, 40, "start"],
-    "mulhouse": [26, 22, "start"],
-    "colmar": [22, -18, "start"],
-    "valence": [-14, 34, "end"],
+    "berlijn": [14, -6, "start"],
+    "parijs": [14, -6, "start"],
+    "madrid": [14, -6, "start"],
 }
 
 # Mirror van camping_forecast.py's REGIONS (id/label/country/lat/lon) — bewust
 # hier gedupliceerd i.p.v. uit het live artefact gelezen: dit zijn de vaste
-# referentiepunten waarop Open-Meteo per streek wordt bevraagd (aug 2026: de
-# gevraagde steden/dorpen zelf, geen representatieve streek-benadering meer —
-# zie camping_forecast.py), geen gemeten data. Een streek die tijdelijk
-# "unavailable" is (fetch-fout) draagt in het artefact geen lat/lon; de kaart
-# moet toch alle dertien pins tonen. Bij een wijziging in camping_forecast.py's
-# REGIONS moet dit lijstje meeveranderen — er is bewust geen runtime-koppeling
-# (dit is een build-time contour/pin-contract, geen live data-laag).
-# Volgorde noord→zuid, zelfde reden en zelfde volgorde als camping_forecast.py's
-# REGIONS (het dashboard toont de streken in deze volgorde).
+# referentiepunten waarop Open-Meteo per stad wordt bevraagd, geen gemeten
+# data. Een stad die tijdelijk "unavailable" is (fetch-fout) draagt in het
+# artefact geen lat/lon; de kaart moet toch alle vier de pins tonen. Bij een
+# wijziging in camping_forecast.py's REGIONS moet dit lijstje meeveranderen —
+# er is bewust geen runtime-koppeling (dit is een build-time contour/pin-
+# contract, geen live data-laag).
+# Zelfde volgorde als camping_forecast.py's REGIONS (thuisbasis eerst, daarna
+# noord→zuid) — het dashboard toont ze in deze volgorde.
 REGIONS = [
     {"id": "utrecht", "label": "Utrecht", "country": "NL", "lat": 52.09, "lon": 5.12},
-    {"id": "vitry_le_francois", "label": "Vitry-le-François", "country": "FR", "lat": 48.73, "lon": 4.58},
-    {"id": "colmar", "label": "Colmar", "country": "FR", "lat": 48.08, "lon": 7.36},
-    {"id": "mulhouse", "label": "Mulhouse", "country": "FR", "lat": 47.75, "lon": 7.34},
-    {"id": "montbeliard", "label": "Montbéliard", "country": "FR", "lat": 47.51, "lon": 6.80},
-    {"id": "dijon", "label": "Dijon", "country": "FR", "lat": 47.32, "lon": 5.04},
-    {"id": "besancon", "label": "Besançon", "country": "FR", "lat": 47.24, "lon": 6.02},
-    {"id": "chamonix", "label": "Chamonix", "country": "FR", "lat": 45.92, "lon": 6.87},
-    {"id": "annecy", "label": "Annecy", "country": "FR", "lat": 45.90, "lon": 6.13},
-    {"id": "chambery", "label": "Chambéry", "country": "FR", "lat": 45.56, "lon": 5.92},
-    {"id": "grenoble", "label": "Grenoble", "country": "FR", "lat": 45.19, "lon": 5.72},
-    {"id": "valbonnais", "label": "Valbonnais", "country": "FR", "lat": 44.98, "lon": 5.92},
-    {"id": "valence", "label": "Valence", "country": "FR", "lat": 44.93, "lon": 4.89},
+    {"id": "berlijn", "label": "Berlijn", "country": "DE", "lat": 52.52, "lon": 13.40},
+    {"id": "parijs", "label": "Parijs", "country": "FR", "lat": 48.86, "lon": 2.35},
+    {"id": "madrid", "label": "Madrid", "country": "ES", "lat": 40.42, "lon": -3.70},
 ]
 
 
@@ -201,10 +182,12 @@ def render_js(borders):
         "// De landsgrenzen zijn geen live kaartlaag (CSP staat geen tegel-CDN toe en",
         "// hoort ook niet bij een statische GitHub Pages-site) maar een eenmalig",
         "// vereenvoudigd contourbestand: Natural Earth 1:50m admin-0 countries,",
-        "// geclipt op de kampeer-window (lon -6..19.2, lat 42.5..54.2), vereenvoudigd",
-        "// met Ramer-Douglas-Peucker en geprojecteerd (equirechthoekig met een",
-        "// cos(48°)-correctie, zodat Nederland en Frankrijk niet vervormen t.o.v.",
-        "// elkaar). Regenereren: `python3 tools/campingmap_build.py`.",
+        # Uit de constanten opgebouwd i.p.v. met de hand meegeschreven — deze
+        # regel liep bij de stedenwissel anders stilzwijgend achter op de box.
+        f"// geclipt op het reis-window (lon {LON_MIN}..{LON_MAX}, lat {LAT_MIN}..{LAT_MAX}),",
+        "// vereenvoudigd met Ramer-Douglas-Peucker en geprojecteerd (equirechthoekig",
+        f"// met een cos({LAT0:g}°)-correctie, zodat de landen onderling niet vervormen).",
+        "// Regenereren: `python3 tools/campingmap_build.py`.",
         "// Geladen vóór camping.js; definieert de globale `CAMPING_MAP`.",
         '"use strict";',
         "",

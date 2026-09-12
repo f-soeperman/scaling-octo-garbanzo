@@ -693,8 +693,13 @@ def test_een_kapotte_regio_laat_de_rest_doorgaan(monkeypatch, tmp_path):
     monkeypatch.setattr(cf, "fetch_region_ensemble", lambda r: None)
     monkeypatch.setattr(cf.time, "sleep", lambda s: None)
 
+    # Laatste regio, niet bij naam: de regiolijst is een bewonerskeuze die
+    # verandert (sep 2026: twaalf Oost-Franse plaatsen → drie hoofdsteden),
+    # het gedrag dat hier getoetst wordt niet. utrecht staat altijd vooraan.
+    kapot = cf.REGIONS[-1]["id"]
+
     def fake_forecast(region):
-        if region["id"] == "grenoble":
+        if region["id"] == kapot:
             raise RuntimeError("boom")
         return _om_payload()
 
@@ -703,7 +708,7 @@ def test_een_kapotte_regio_laat_de_rest_doorgaan(monkeypatch, tmp_path):
     data = json.loads(pad.read_text(encoding="utf-8"))
     per_id = {r["id"]: r for r in data["regions"]}
     assert len(data["regions"]) == len(cf.REGIONS)
-    assert per_id["grenoble"]["status"] == "unavailable"
+    assert per_id[kapot]["status"] == "unavailable"
     assert per_id["utrecht"]["status"] == "ok"
 
 
@@ -717,12 +722,13 @@ def test_een_regio_die_alleen_de_herkansing_haalt_blijft_ok(monkeypatch, tmp_pat
     slaap = []
     monkeypatch.setattr(cf.time, "sleep", slaap.append)
 
-    pogingen = {"grenoble": 0}
+    hapert = cf.REGIONS[-1]["id"]  # zie de test hierboven: niet bij naam
+    pogingen = {hapert: 0}
 
     def fake_forecast(region):
-        if region["id"] == "grenoble":
-            pogingen["grenoble"] += 1
-            if pogingen["grenoble"] == 1:
+        if region["id"] == hapert:
+            pogingen[hapert] += 1
+            if pogingen[hapert] == 1:
                 raise RuntimeError("boom")
         return _om_payload()
 
@@ -730,8 +736,8 @@ def test_een_regio_die_alleen_de_herkansing_haalt_blijft_ok(monkeypatch, tmp_pat
     cf.main()
     data = json.loads(pad.read_text(encoding="utf-8"))
     per_id = {r["id"]: r for r in data["regions"]}
-    assert per_id["grenoble"]["status"] == "ok"
-    assert pogingen["grenoble"] == 2
+    assert per_id[hapert]["status"] == "ok"
+    assert pogingen[hapert] == 2
     assert slaap == [cf.REGION_RETRY_DELAY_S]
 
 
@@ -967,7 +973,9 @@ def test_warnings_status_onderscheidt_ok_en_failed(monkeypatch, tmp_path):
     data = json.loads(pad.read_text(encoding="utf-8"))
     assert data["warnings_status"]["FR"] == "failed"
     assert data["warnings_status"]["NL"] == "ok"
-    assert set(data["warnings_status"]) == {"NL", "FR"}
+    # Precies één status per land dat een regio draagt — sinds de stedenwissel
+    # (sep 2026) zijn dat er vier (NL/DE/FR/ES), dus afgeleid i.p.v. gepind.
+    assert set(data["warnings_status"]) == {r["country"] for r in cf.REGIONS}
 
 
 def test_dry_run_schrijft_geen_artefact(monkeypatch, tmp_path):

@@ -45,70 +45,46 @@ FORECAST_DAYS = 16
 ENSEMBLE_DAYS = 15
 DATA_PATH = os.getenv("CAMPING_DATA_PATH", "docs/camping_data.json")
 
-# Alle dertien streken liggen in CET/CEST → één timezone-param volstaat en de
-# dag/nacht-snedes vallen overal op dezelfde klok (repo-beleid: Europe/Amsterdam).
+# Alle vier de steden liggen in CET/CEST (Spanje draait op midden-Europese tijd)
+# → één timezone-param volstaat en de dag/nacht-snedes vallen overal op dezelfde
+# klok (repo-beleid: Europe/Amsterdam).
 OM_TIMEZONE = "Europe/Amsterdam"
 
-# Bewonersverzoek (aug 2026): Oostenrijk en Noordwest-Frankrijk zijn vervallen,
-# de focus ligt op Oost-Frankrijk — en dan niet als brede departementstreek
-# (zoals voorheen "Savoie"/"Jura"), maar als twaalf met naam genoemde
-# steden/dorpen. Elk punt is dus letterlijk de gevraagde plaats zelf, geen
-# representatief kampeerdal meer.
+# Bewonersverzoek (sep 2026): de twaalf Oost-Franse steden/dorpen zijn
+# vervallen voor **vier grote steden** — Utrecht plus drie hoofdsteden, een
+# generiekere lijst dan de uitgekamde streeklijst die hier stond. De cadans
+# blijft onveranderd 4×/dag: de inhoud van dit project mag wisselen, het ritme
+# niet (zie "De stedenwissel" bij Project 15 in CLAUDE.md — een publieke
+# pijplijn die stilvalt of vertraagt is zelf een signaal).
+# De kampeercriteria zijn ongemoeid gelaten: tent, peuter en dauwpunt worden
+# nog steeds precies zo gewogen. Dat een hoofdstad geen kampeerdal is, is de
+# grap — niet iets om de scoring op te hertunen.
 # area_patterns: substring-match tegen MeteoAlarm-areaDesc/geocodes. Geijkt op
 # de echte feeds (eerste run, 13 aug 2026): NL waarschuwt per provincie
-# ("Utrecht"), FR per departement ("Haut-Rhin").
-# Bekende, geaccepteerde overlap (best-effort, geen exacte match): een
-# departementnaam die zelf een woord-substring is van een ander departement
-# ("Savoie" in "Haute-Savoie", "Eure" in "Eure-et-Loir") laat het kortere
-# departement soms meetellen op een waarschuwing die alleen het langere raakt
-# — nooit andersom. Over-inclusief, niet under-inclusief: een rode vlag die
-# er niet hoort te zijn is minder erg dan eentje die ontbreekt. Twee steden in
-# hetzelfde departement (Grenoble/Valbonnais in Isère, Besançon/Montbéliard in
-# Doubs, Mulhouse/Colmar in Haut-Rhin) delen bewust dezelfde patterns — een
-# departementswaarschuwing raakt ze allebei.
-# Volgorde is bewust noord→zuid op lat (bewonersverzoek aug 2026) — dit is de
-# volgorde waarin de matrix/tabel op het dashboard de streken toont, dus
-# Utrecht bovenaan en Valence onderaan.
+# ("Utrecht"), FR per departement ("Paris" is departement 75). DE (DWD) en ES
+# (AEMET) zijn nieuw en niet tegen een echte feed geijkt — maar Berlijn en
+# Madrid zijn beide óók de naam van hun deelstaat/provincie, dus een kale
+# substring raakt ze in elke schrijfwijze. Blijft het patroon toch leeg, dan is
+# het gevolg hooguit een gemiste oranje vlag: de rest van de score draait door
+# en een onbereikbare feed is al zichtbaar als warnings_status="failed".
+# Over-inclusief, niet under-inclusief (ongewijzigd beleid): "île-de-france"
+# laat een regionale waarschuwing meetellen op Parijs.
+# Volgorde: Utrecht bovenaan als thuisbasis (de referentierij op het
+# dashboard), daarná noord→zuid — en Berlijn ligt nét noordelijker dan Utrecht,
+# dus dat is geen strikte lat-sortering meer.
 REGIONS = [
     {"id": "utrecht", "label": "Utrecht", "country": "NL",
      "lat": LATITUDE, "lon": LONGITUDE,
      "area_patterns": ("utrecht",)},
-    {"id": "vitry_le_francois", "label": "Vitry-le-François", "country": "FR",
-     "lat": 48.73, "lon": 4.58,
-     "area_patterns": ("marne",)},
-    {"id": "colmar", "label": "Colmar", "country": "FR",
-     "lat": 48.08, "lon": 7.36,
-     "area_patterns": ("haut-rhin", "alsace")},
-    {"id": "mulhouse", "label": "Mulhouse", "country": "FR",
-     "lat": 47.75, "lon": 7.34,
-     "area_patterns": ("haut-rhin", "alsace")},
-    {"id": "montbeliard", "label": "Montbéliard", "country": "FR",
-     "lat": 47.51, "lon": 6.80,
-     "area_patterns": ("doubs",)},
-    {"id": "dijon", "label": "Dijon", "country": "FR",
-     "lat": 47.32, "lon": 5.04,
-     "area_patterns": ("côte-d'or", "cote-d'or")},
-    {"id": "besancon", "label": "Besançon", "country": "FR",
-     "lat": 47.24, "lon": 6.02,
-     "area_patterns": ("doubs",)},
-    {"id": "chamonix", "label": "Chamonix", "country": "FR",
-     "lat": 45.92, "lon": 6.87,  # Chamonix-Mont-Blanc
-     "area_patterns": ("haute-savoie",)},
-    {"id": "annecy", "label": "Annecy", "country": "FR",
-     "lat": 45.90, "lon": 6.13,
-     "area_patterns": ("haute-savoie",)},
-    {"id": "chambery", "label": "Chambéry", "country": "FR",
-     "lat": 45.56, "lon": 5.92,
-     "area_patterns": ("savoie",)},
-    {"id": "grenoble", "label": "Grenoble", "country": "FR",
-     "lat": 45.19, "lon": 5.72,
-     "area_patterns": ("isère", "isere")},
-    {"id": "valbonnais", "label": "Valbonnais", "country": "FR",
-     "lat": 44.98, "lon": 5.92,  # Ecrins-voorland
-     "area_patterns": ("isère", "isere")},
-    {"id": "valence", "label": "Valence", "country": "FR",
-     "lat": 44.93, "lon": 4.89,
-     "area_patterns": ("drôme", "drome")},
+    {"id": "berlijn", "label": "Berlijn", "country": "DE",
+     "lat": 52.52, "lon": 13.40,
+     "area_patterns": ("berlin",)},
+    {"id": "parijs", "label": "Parijs", "country": "FR",
+     "lat": 48.86, "lon": 2.35,
+     "area_patterns": ("paris", "île-de-france", "ile-de-france")},
+    {"id": "madrid", "label": "Madrid", "country": "ES",
+     "lat": 40.42, "lon": -3.70,
+     "area_patterns": ("madrid",)},
 ]
 
 # Dag/nacht-vensters (lokale klokuren; halfopen [start, eind)). Op de twee
@@ -200,20 +176,19 @@ NIGHT_OK_CATS = ("top", "goed")  # venster-nachten; "matig" breekt het venster
 MIN_NIGHTS = 3  # minimale kampeerduur (gebruikersbesluit — geldt overal)
 
 # Super-regio's voor de flexibiliteitsvraag: "waar zitten we het beste als we
-# binnen één landstreek af en toe willen verkassen, minstens MIN_NIGHTS
-# nachten per plek?" utrecht is thuisbasis en doet bewust niet mee. Sinds
-# aug 2026 twee groepen, bewonersindeling op geografie i.p.v. departement:
-# **Noordoost-Frankrijk** (Vitry-le-François t/m Besançon — Bourgogne/
-# Franche-Comté/Elzas) en **Oost-Frankrijk** (Chamonix t/m Valence — de
-# Zuidoost-Alpen-hoek, Savoie/Haute-Savoie/Isère/Drôme). Een test bewaakt dat
-# de twee groepen samen exact de overige REGIONS-ids dekken, disjunct.
+# af en toe willen verkassen, minstens MIN_NIGHTS nachten per plek?" utrecht is
+# thuisbasis en doet bewust niet mee. Sinds de stedenwissel (sep 2026) is er
+# nog één groep — de drie hoofdsteden samen, als stedentrip-route i.p.v. een
+# landstreek waarbinnen je met de tent opschuift. Een test bewaakt dat de
+# groepen samen exact de overige REGIONS-ids dekken, disjunct.
+# Let op bij het lezen van die route: MOVE_PENALTY is geijkt op "tent
+# afbreken en opbouwen met een peuter", niet op 1000 km rijden tussen twee
+# hoofdsteden — verkassen is hier dus te goedkoop en de route hupt eerder dan
+# je in het echt zou doen. Bewust niet hertuned (domeinbeslissing, zie de
+# constante hieronder); de kopcijfers blijven leidend, de route is indicatief.
 SUPER_REGIONS = [
-    {"id": "noordoost_frankrijk", "label": "Noordoost-Frankrijk",
-     "region_ids": ("vitry_le_francois", "colmar", "mulhouse", "montbeliard",
-                    "dijon", "besancon")},
-    {"id": "oost_frankrijk", "label": "Oost-Frankrijk",
-     "region_ids": ("chamonix", "annecy", "chambery", "grenoble", "valbonnais",
-                    "valence")},
+    {"id": "stedentrip", "label": "Stedentrip",
+     "region_ids": ("berlijn", "parijs", "madrid")},
 ]
 # Verkassen is niet gratis (tent afbreken en opbouwen met een peuter): één
 # "licht ongemak"-equivalent, zodat de route niet voor 2 punten winst met de

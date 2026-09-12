@@ -28,7 +28,16 @@ import requests
 from notify import sanitize_error
 
 FEED_URL = "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-{feed}"
-COUNTRY_FEEDS = {"NL": "netherlands", "AT": "austria", "FR": "france"}
+# Feed-slug = de Engelse landsnaam in kleine letters. NL/AT/FR zijn tegen de
+# echte feeds geijkt; DE/ES kwamen erbij met de stedenwissel (sep 2026) en
+# volgen hetzelfde patroon, maar konden vanuit de ontwikkelomgeving niet
+# geverifieerd worden (de feed-host is daar geblokkeerd). Een verkeerde slug is
+# niet fataal: fetch_country_warnings raist, en camping_forecast degradeert dat
+# land naar warnings_status="failed" — zichtbaar op het dashboard i.p.v. stil.
+# AT draagt sinds aug 2026 geen streek meer, maar blijft staan: deze module is
+# de generieke feedclient, niet de regiolijst.
+COUNTRY_FEEDS = {"NL": "netherlands", "AT": "austria", "FR": "france",
+                 "DE": "germany", "ES": "spain"}
 
 # CAP-severity → MeteoAlarm-kleur (fallback wanneer awareness_level ontbreekt).
 CAP_SEVERITY_TO_LEVEL = {"moderate": "yellow", "severe": "orange", "extreme": "red"}
