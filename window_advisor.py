@@ -266,33 +266,11 @@ def gist_read_file(filename: str) -> str | None:
     return gist_io.read_file(gist_id, filename, token=token, timeout=20)
 
 
-# Elke kwartier-iteratie doet twee PATCHes vlak na elkaar naar dezelfde Gist:
-# eerst de geroteerde tado-token (get_access_token), dan de advies-state
-# (save_state). Die tweede PATCH raakt af en toe een 409 Conflict — Gist's
-# git-backend heeft de eerste commit soms nog niet verwerkt. Kort en klein
-# retryen (de PATCH is idempotent) i.p.v. de hele iteratie te laten crashen;
-# een écht aanhoudend conflict blijft na deze pogingen alsnog zichtbaar falen.
-GIST_WRITE_RETRY_DELAYS = (1, 2, 4)  # s
-
-
 def gist_write_files(files: dict[str, str]) -> None:
+    # Elke kwartier-iteratie PATCHt twee keer vlak na elkaar (token-persist, dan
+    # de state); de 409-retry daarvoor zit in gist_io.write_files.
     gist_id, token = _gist_env()
-    payload = {"files": {fn: {"content": content} for fn, content in files.items()}}
-    for attempt, delay in enumerate((0, *GIST_WRITE_RETRY_DELAYS), start=1):
-        if delay:
-            time.sleep(delay)
-        r = requests.patch(
-            f"https://api.github.com/gists/{gist_id}",
-            headers={"Authorization": f"Bearer {token}",
-                     "Accept": "application/vnd.github+json"},
-            json=payload,
-            timeout=20,
-        )
-        if r.status_code == 409 and attempt <= len(GIST_WRITE_RETRY_DELAYS):
-            print(f"[gist] 409 Conflict op PATCH-poging {attempt}, retry")
-            continue
-        r.raise_for_status()
-        return
+    gist_io.write_files(gist_id, files, token=token, timeout=20)
 
 
 # ── tado auth (refresh-token flow, met rotatie-persistentie) ──────────────────────

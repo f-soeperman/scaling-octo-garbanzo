@@ -12,16 +12,70 @@ import gist_io
 
 
 class _Resp:
-    def __init__(self, payload, status_ok=True):
+    def __init__(self, payload, status_ok=True, status_code=None):
         self._payload = payload
         self._status_ok = status_ok
+        self.status_code = status_code or (200 if status_ok else 404)
 
     def raise_for_status(self):
         if not self._status_ok:
-            raise requests.HTTPError("404")
+            raise requests.HTTPError(str(self.status_code))
 
     def json(self):
         return self._payload
+
+
+# ── write_files: retry op 409 Conflict ───────────────────────────────────────────
+# De artefact-gist heeft vier schrijvers op eigen cadans en binnen één run gaan
+# PATCHes vlak na elkaar; twee die elkaar raken geven een 409 uit Gist's
+# git-backend. Zonder retry crashte dat de hele iteratie (raam-adviseur 6× op
+# rij, maai-adviseur 2×, sept 2026).
+
+def test_write_files_retryt_op_409(monkeypatch):
+    monkeypatch.setattr(gist_io.time, "sleep", lambda s: None)
+    calls = []
+
+    def fake_patch(url, headers=None, json=None, timeout=None):
+        calls.append(json)
+        if len(calls) < 3:
+            return _Resp({}, status_ok=False, status_code=409)
+        return _Resp({})
+
+    monkeypatch.setattr(gist_io.requests, "patch", fake_patch)
+    gist_io.write_files("gid", {"x.json": "{}"}, token="tok")
+    assert len(calls) == 3
+    assert calls[0] == {"files": {"x.json": {"content": "{}"}}}
+
+
+def test_write_files_geeft_op_na_de_retries(monkeypatch):
+    slaap = []
+    monkeypatch.setattr(gist_io.time, "sleep", slaap.append)
+    calls = []
+
+    def fake_patch(url, headers=None, json=None, timeout=None):
+        calls.append(json)
+        return _Resp({}, status_ok=False, status_code=409)
+
+    monkeypatch.setattr(gist_io.requests, "patch", fake_patch)
+    with pytest.raises(requests.HTTPError):
+        gist_io.write_files("gid", {"x.json": "{}"})
+    assert len(calls) == 1 + len(gist_io.WRITE_RETRY_DELAYS)
+    assert slaap == list(gist_io.WRITE_RETRY_DELAYS)
+
+
+def test_write_files_retryt_geen_andere_fout(monkeypatch):
+    """Alleen een 409 is een 'probeer zo nog eens'; een 401/422 is meteen fout."""
+    monkeypatch.setattr(gist_io.time, "sleep", lambda s: None)
+    calls = []
+
+    def fake_patch(url, headers=None, json=None, timeout=None):
+        calls.append(json)
+        return _Resp({}, status_ok=False, status_code=401)
+
+    monkeypatch.setattr(gist_io.requests, "patch", fake_patch)
+    with pytest.raises(requests.HTTPError):
+        gist_io.write_files("gid", {"x.json": "{}"})
+    assert len(calls) == 1
 
 
 def _gist(files: dict) -> dict:

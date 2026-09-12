@@ -23,8 +23,6 @@ lokale bestand zolang dat nog bestaat.
 import json
 import os
 
-import requests
-
 import gist_io
 
 
@@ -59,12 +57,7 @@ def write_json_str(filename: str, local_path: str, payload: str) -> str:
     (de workflows hebben een in-job herkansing)."""
     if gist_active():
         gid, token = _creds()
-        r = requests.patch(f"https://api.github.com/gists/{gid}",
-                           headers={"Accept": "application/vnd.github+json",
-                                    "Authorization": f"Bearer {token}"},
-                           json={"files": {filename: {"content": payload}}},
-                           timeout=30)
-        r.raise_for_status()
+        gist_io.write_files(gid, {filename: payload}, token=token, timeout=30)
         return filename
     os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
     with open(local_path, "w", encoding="utf-8") as f:

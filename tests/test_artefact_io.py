@@ -36,6 +36,8 @@ def test_gist_modus_leest_en_schrijft_via_de_api(tmp_path, monkeypatch):
         return {"b": 2}
 
     class _Resp:
+        status_code = 200
+
         def raise_for_status(self):
             pass
 
@@ -44,7 +46,7 @@ def test_gist_modus_leest_en_schrijft_via_de_api(tmp_path, monkeypatch):
         return _Resp()
 
     monkeypatch.setattr(artefact_io.gist_io, "read_json", fake_read_json)
-    monkeypatch.setattr(artefact_io.requests, "patch", fake_patch)
+    monkeypatch.setattr(artefact_io.gist_io.requests, "patch", fake_patch)
 
     lokaal = tmp_path / "data.json"
     assert artefact_io.gist_active() is True
