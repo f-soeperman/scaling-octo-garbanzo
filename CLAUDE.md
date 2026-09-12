@@ -24,6 +24,28 @@ fixtures, or Telegram/message text embedded in code. Concretely:
   not in a log line, not in a code comment, not in a test fixture. Project 2's
   vacation-mode and Project 15's camping regions are pre-existing generic features;
   keep them generic and never wire in an actual planned trip.
+- **Een branchnaam beschrijft de code, nooit het motief — en dit is NIET onderhandelbaar
+  (sep 2026).** `claude/kampeer-kompas-pause-…` is het tegenvoorbeeld: die naam is echt
+  gepusht en staat blijvend in de publieke historie. Verboden in branchnamen, PR-titels,
+  committeksten en sessietitels is elk woord dat een *huishoudelijke intentie of periode*
+  benoemt — pauze/pause, stop, stil, weg, afwezig, vakantie/vacation, thuis, terug,
+  resume/hervat — óók als het over een pijplijn lijkt te gaan. Noem de codewijziging:
+  `camping-four-cities`, niet `camping-pause`.
+  - **De naam ontstaat vóór de eerste regel code**: de harness leidt 'm af uit de éérste
+    prompt van de sessie. Vraagt de bewoner "ik wil X pauzeren", dan staat het motief in de
+    branchnaam nog voordat er iets te reviewen valt. Dus: **hernoem vóór de eerste push**
+    (`git branch -m`), niet achteraf.
+  - **Achteraf is te laat, en dat is de hele reden voor deze regel.** Een gepushte naam
+    leeft op drie plekken: de branch zelf (verwijderbaar), het Actions-run-record met
+    `head_branch` (alleen te verwijderen door de hele run te wissen) en de publieke
+    events-stroom, die door externe archieven permanent wordt gespiegeld — die laatste
+    krijgt niemand meer weg.
+  - **Repareer zo'n naam nooit met een tegenhanger.** Een "…-resume"-branch erbij maken om
+    een "…-pause" onschuldig te laten lijken maakt het aantoonbaar erger: twee gedateerde
+    events vormen sámen een *venster*, en precies een afwezigheidsvenster is wat deze
+    banner verbiedt. Eén dubbelzinnig woord is zwakker bewijs dan een keurig paar met een
+    begin- en einddatum. Opruimen wat kan, de rest als restrisico accepteren, en de
+    volgende naam meteen goed.
 - Never print, log, echo, or commit the values of `WU_STATION_ID`, `WU_NEIGHBOUR_IDS`,
   `TADO_ZONE_ALIASES`, or any other secret already carved out here as
   privacy-sensitive, and never weaken the guards that keep them out of `docs/`,
@@ -1395,6 +1417,11 @@ Seven small cross-project Python modules (everything else is self-contained):
   anything that reaches this public repo (code, comments, commits, branch names, PR
   text, workflow logs, `docs/` artefacts, test fixtures). When a change touches
   location or scheduling logic, re-read that banner before writing a single line.
+- **Controleer de branchnaam als éérste handeling van een sessie, vóór de eerste push.**
+  Hij komt uit de openingsprompt, dus een vraag als "kun je X pauzeren" levert een publieke
+  branchnaam op die het motief verklapt. Hernoemen kost één commando (`git branch -m`) en kan
+  achteraf niet meer volledig — zie de branchnaam-regel in de banner bovenaan voor de reden,
+  de verboden woorden en waarom een "resume"-tegenhanger het erger maakt.
 - **Afwezigheid mag nergens publiek af te lezen zijn (aug 2026)** — de uitbreiding van de
   banner naar *gedrag*: geen pauze-/afwezigheidsmarkers of handmatige-actie-tijdstempels
   in publieke artefacten, gecommitte state of Actions-logs; scheduled stdout print nooit
