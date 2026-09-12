@@ -1314,9 +1314,16 @@ Seven small cross-project Python modules (everything else is self-contained):
 - **`gist_io.py`** — shared **read-only** Gist helpers (`read_file` raises, `read_json` is
   graceful, `read_files` haalt alle bestanden in één call). Volgt bij de ~1 MB-truncation
   van de Gist-API de `raw_url` i.p.v. stilletjes een halve JSON terug te geven.
-  Gist *writes* deliberately stay per-project (see ground rule on Gist write logic; de
-  enige uitzonderingen zijn expliciet: window_advisor's token-persist en het
-  openingen-archief van de vent-action in `vent_io._gist_write_files`).
+  Gist-schrijf*semantiek* (wat/wanneer) stays per-project (see ground rule on Gist write
+  logic; de schrijvers zijn expliciet: window_advisor's token-persist + state,
+  `artefact_io.write_json_str`, en het openingen-archief van de vent-action in
+  `vent_io._gist_write_files`). Sinds sept 2026 lopen die alle drie voor het *transport*
+  via `gist_io.write_files`: één PATCH-helper met een korte, begrensde **retry op 409
+  Conflict** (`WRITE_RETRY_DELAYS`). De artefact-gist heeft vier schrijvers op eigen
+  cadans (raam-adviseur + tweeling elk kwartier, bodem + maai elk uur) en binnen één run
+  gaan PATCHes vlak na elkaar; twee die elkaar raken geven een 409 uit Gist's git-backend.
+  Dat crashte een iteratie zonder retry (raam-adviseur 6× op rij, maai-adviseur 2×). De
+  PATCH is idempotent, dus opnieuw proberen is veilig; een 409 dat blijft, faalt alsnog.
 - **`artefact_io.py`** — de privé artefact-gist (`ARTEFACT_GIST_ID`) voor `data.json`,
   `mowing_data.json`, `mowing_state.json`, `window_data.json` en de drie vent-artefacten
   (privatisering aug 2026, uitgebreid door de privacy-sweep): secret gezet → lees/schrijf via de

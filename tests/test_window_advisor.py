@@ -9,7 +9,6 @@ af en toe geretuned, vgl. tests/test_soil_model.py).
 from datetime import datetime, timedelta, timezone
 
 import pytest
-import requests
 
 import om_bias
 import window_advisor as wa
@@ -1064,10 +1063,6 @@ class _Resp:
     def json(self):
         return self._payload
 
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            raise requests.exceptions.HTTPError(f"status {self.status_code}")
-
 
 @pytest.fixture
 def wu_env(monkeypatch):
@@ -1129,43 +1124,19 @@ def test_workflow_checkout_pint_branch_tip(assert_checkout_pinned):
     assert_checkout_pinned("window-notify.yml")
 
 
-# ── Gist-write retry op 409 Conflict ─────────────────────────────────────────────
-# Elke kwartier-iteratie PATCHt de TADO_GIST_ID-gist twee keer vlak na elkaar
-# (token-persist, dan de state-write) — dat raakte af en toe een 409 uit Gist's
-# git-backend en crashte de iteratie zonder retry (gemeld: 6× op rij).
+# ── Gist-writes lopen via de gedeelde 409-retry ─────────────────────────────────
+# De retry zelf is getest in tests/test_gist_io.py; hier alleen dat de
+# TADO-gist-schrijver (token-persist + state) erdoorheen gaat.
 
-@pytest.fixture
-def tado_gist_env(monkeypatch):
+def test_gist_write_files_gebruikt_de_gedeelde_helper(monkeypatch):
     monkeypatch.setenv("TADO_GIST_ID", "gistid")
     monkeypatch.setenv("GIST_TOKEN", "tok")
-
-
-def test_gist_write_files_retryt_op_409(tado_gist_env, monkeypatch):
-    monkeypatch.setattr(wa.time, "sleep", lambda s: None)
     calls = []
-
-    def fake_patch(url, headers=None, json=None, timeout=None):
-        calls.append(json)
-        status = 409 if len(calls) < 3 else 200
-        return _Resp({}, status=status)
-
-    monkeypatch.setattr(wa.requests, "patch", fake_patch)
+    monkeypatch.setattr(wa.gist_io, "write_files",
+                        lambda gid, files, token=None, timeout=None:
+                        calls.append((gid, files, token)))
     wa.gist_write_files({"window_state.json": "{}"})
-    assert len(calls) == 3
-
-
-def test_gist_write_files_geeft_op_na_de_retries(tado_gist_env, monkeypatch):
-    monkeypatch.setattr(wa.time, "sleep", lambda s: None)
-    calls = []
-
-    def fake_patch(url, headers=None, json=None, timeout=None):
-        calls.append(json)
-        return _Resp({}, status=409)
-
-    monkeypatch.setattr(wa.requests, "patch", fake_patch)
-    with pytest.raises(requests.exceptions.HTTPError):
-        wa.gist_write_files({"window_state.json": "{}"})
-    assert len(calls) == 1 + len(wa.GIST_WRITE_RETRY_DELAYS)
+    assert calls == [("gistid", {"window_state.json": "{}"}, "tok")]
 
 
 # ── Privacy-sweep aug 2026: het dashboard-artefact is privé ─────────────────────
@@ -1182,10 +1153,12 @@ def test_dashboard_gaat_naar_de_artefact_gist(tmp_path, monkeypatch):
     written = {}
 
     class _Ok:
+        status_code = 200
+
         def raise_for_status(self):
             pass
 
-    monkeypatch.setattr(wa.artefact_io.requests, "patch",
+    monkeypatch.setattr(wa.gist_io.requests, "patch",
                         lambda url, headers=None, json=None, timeout=None:
                         (written.update(json["files"]), _Ok())[1])
     wa.write_dashboard({"rooms": {"Shower": {"humidity": 68}}})

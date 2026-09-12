@@ -23,7 +23,6 @@ import os
 import subprocess
 from datetime import date, datetime, timedelta, timezone
 
-import requests
 
 import artefact_io
 import shared_const
@@ -985,12 +984,7 @@ def _gist_write_files(files: dict[str, str]) -> None:
     """Multi-file PATCH naar de GIST_ID-gist (archief-bestanden only). Raist bij
     fouten — de aanroepers zitten in een vangnet-try van de runner."""
     gist_id, token = _gist_creds()
-    r = requests.patch(f"https://api.github.com/gists/{gist_id}",
-                       headers={"Accept": "application/vnd.github+json",
-                                "Authorization": f"Bearer {token}"},
-                       json={"files": {n: {"content": c} for n, c in files.items()}},
-                       timeout=30)
-    r.raise_for_status()
+    gist_io.write_files(gist_id, files, token=token, timeout=30)
 
 
 def _norm_entries(raw) -> dict[str, dict]:
