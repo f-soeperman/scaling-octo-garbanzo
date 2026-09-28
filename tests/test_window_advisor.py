@@ -959,11 +959,16 @@ def test_build_day_plan_negeert_blips_en_sorteert_op_openingstijd():
         "Living room": {"open_intervals": [
             {"start": "17:45", "end": "23:00", "start_h": 4.5, "end_h": 9.75}]},
     }
-    plan = wa.build_day_plan(rooms, NOW)
+    plan = wa.build_day_plan(rooms, NOW, {})
     # Kamers met een venster op volgorde van openen; de kamer zónder venster achteraan.
     assert [p["room"] for p in plan] == ["Living room", "office", "Nursery", "bedroom"]
     # De blip van 13:00–13:15 telt niet mee als het open-moment van office.
     assert plan[1]["windows"][0]["start"] == "18:45"
+
+
+def _told_open(room: str) -> dict:
+    """State-fixture: alsof we deze kamer eerder daadwerkelijk als 'open' gemeld hebben."""
+    return {"notified": {room: {"state": "open"}}}
 
 
 def test_build_day_plan_houdt_een_lopend_venster_altijd_in_het_plan():
@@ -976,15 +981,35 @@ def test_build_day_plan_houdt_een_lopend_venster_altijd_in_het_plan():
     uur te gaan (Living room, Nursery) stonden in het bericht als "blijft vandaag dicht".
     """
     kort = {"start": "08:00", "end": "09:15", "start_h": -0.25, "end_h": 1.0}
-    plan = wa.build_day_plan({"Nursery": {"open_intervals": [kort]}}, NOW)
+    plan = wa.build_day_plan({"Nursery": {"open_intervals": [kort]}}, NOW, _told_open("Nursery"))
     nursery = next(p for p in plan if p["room"] == "Nursery")
     assert [w["start"] for w in nursery["windows"]] == ["08:00"]
     assert nursery["windows"][0]["running"] is True
     assert "*Nursery* — staat al open, dicht rond 09:15" in wa.day_plan_message(plan, 33.7, NOW)
     # Hetzelfde korte venster in de toekomst is wél een blip: daar poort de duur-eis door.
     straks = {"start": "12:00", "end": "13:15", "start_h": 3.75, "end_h": 5.0}
-    plan = wa.build_day_plan({"Nursery": {"open_intervals": [straks]}}, NOW)
+    plan = wa.build_day_plan({"Nursery": {"open_intervals": [straks]}}, NOW, _told_open("Nursery"))
     assert next(p for p in plan if p["room"] == "Nursery")["windows"] == []
+
+
+def test_build_day_plan_toont_geen_al_open_zonder_dat_bericht():
+    """Een lopend venster telt alléén als 'staat al open' als we dat ook echt gemeld hebben.
+
+    Het live advies (`decide()`) kan een kamer al "open" verklaren terwijl de meldlaag dat
+    specifieke bericht onderdrukte (cooldown, de versheidspoort, of de duur-poort die het bij
+    de eerste flip nog tegenhield) — dan heeft niemand ooit "zet het raam open" gekregen en
+    staat het raam vermoedelijk nog gewoon dicht. Gemeld door de bewoner: het dagplan zei
+    "Nursery — staat al open" terwijl de kamer nooit open is gezet. Zónder gemeld
+    open-bericht (`state["notified"]` leeg → "dicht") moet het venster dus als een
+    ván-nu-af-venster tellen ("open {start}–{end}"), niet als "staat al open".
+    """
+    kort = {"start": "08:00", "end": "12:00", "start_h": -0.25, "end_h": 4.0}
+    plan = wa.build_day_plan({"Nursery": {"open_intervals": [kort]}}, NOW, {})
+    nursery = next(p for p in plan if p["room"] == "Nursery")
+    assert nursery["windows"][0]["running"] is False
+    msg = wa.day_plan_message(plan, 21.6, NOW)
+    assert "staat al open" not in msg
+    assert "*Nursery* — open 08:00–12:00" in msg
 
 
 def test_build_day_plan_houdt_elke_kamer_in_het_overzicht():
@@ -993,7 +1018,7 @@ def test_build_day_plan_houdt_elke_kamer_in_het_overzicht():
     Vielen die kamers weg, dan noemde het plan alleen de kamers die toevallig een venster
     hadden en zei het over de rest niets.
     """
-    plan = wa.build_day_plan({}, NOW)
+    plan = wa.build_day_plan({}, NOW, {})
     assert [p["room"] for p in plan] == list(wa.ROOMS)
     assert all(p["windows"] == [] for p in plan)
 
@@ -1004,7 +1029,7 @@ def test_build_day_plan_neemt_alle_vensters_mee_tot_het_maximum():
            {"start": "18:45", "end": "21:00", "start_h": 5.5, "end_h": 7.75},
            {"start": "22:00", "end": "23:45", "start_h": 8.75, "end_h": 10.5},
            {"start": "01:00", "end": "03:00", "start_h": 11.75, "end_h": 13.75}]
-    plan = wa.build_day_plan({"Nursery": {"open_intervals": ivs}}, NOW)
+    plan = wa.build_day_plan({"Nursery": {"open_intervals": ivs}}, NOW, _told_open("Nursery"))
     vensters = plan[0]["windows"]
     assert len(vensters) == wa.MAX_PLAN_WINDOWS
     assert [w["start"] for w in vensters] == ["08:45", "18:45", "22:00"]

@@ -1370,7 +1370,7 @@ def advice_message(now: datetime, entries: list[tuple[str, dict]], lines: list[s
     return "\n".join([f"{kop} ({now.strftime('%H:%M')})", *lines])
 
 
-def build_day_plan(dash_rooms: dict, now: datetime) -> list[dict]:
+def build_day_plan(dash_rooms: dict, now: datetime, state: dict) -> list[dict]:
     """Per advies-kamer álle open-vensters van de komende horizon die lang genoeg zijn om
     te melden — de vooruitblik die het dashboard toch al berekent, nu ook bruikbaar als plan.
 
@@ -1384,10 +1384,22 @@ def build_day_plan(dash_rooms: dict, now: datetime) -> list[dict]:
       venster heeft een begin én een eind, en juist het eind — wanneer moet dat raam weer
       dicht — is de actie die je 's ochtends wilt kunnen plannen. Het eerste venster alleen
       verzweeg zowel de sluittijd als een tweede opening later op de dag.
+
+    `state` levert `notified_advice()` — "staat al open" mag alléén als we dat ook
+    daadwerkelijk gemeld hebben. `dash_rooms[room]["open_intervals"][0]` loopt al zodra het
+    **live** advies (`decide()`, dit run) "open" zegt — maar de meldlaag kan datzelfde
+    open-advies onderdrukt hebben (cooldown, de versheidspoort `OPEN_MSG_MAX_AGE_H`, of de
+    duur-poort die het bij de eerste flip nog tegenhield). In dat geval is er nooit een
+    Telegram geweest die zei "zet het raam open", dus staat het raam vermoedelijk nog dicht
+    — precies het gerapporteerde gedrag (Nursery "staat al open" terwijl niemand het ooit
+    open heeft gezet). Ongenotificeerd behandelen we een lopend segment daarom als een
+    ván-nu-af venster (`running=False`, de "open {start}–{end}"-tekst) in plaats van als
+    "staat al open".
     """
     plan: list[dict] = []
     for room in ROOMS:
         d = dash_rooms.get(room) or {}
+        told_open = notified_advice(state, room) == "open"
         vensters: list[dict] = []
         for iv in d.get("open_intervals") or []:
             start_h, end_h = iv.get("start_h"), iv.get("end_h")
@@ -1396,8 +1408,9 @@ def build_day_plan(dash_rooms: dict, now: datetime) -> list[dict]:
             # Een segment dat in het verleden begon en nog niet voorbij is lóópt: dat raam
             # staat nu open. Dat als "open vanaf 08:45" opschrijven leest als een actie die
             # nog moet komen, terwijl er niets te doen valt. `end_h > 0` hoort erbij — een
-            # segment dat al voorbij is (start_h ≤ end_h ≤ 0) loopt niet meer.
-            running = start_h <= 0 < end_h
+            # segment dat al voorbij is (start_h ≤ end_h ≤ 0) loopt niet meer. Alleen tellen
+            # als we ook echt gemeld hebben dat het open moet — zie de docstring hierboven.
+            running = start_h <= 0 < end_h and told_open
             # De duur-poort weegt of een *voorspeld* venster het openzetten waard is: hij
             # rekent vanaf nú, want dat is wat een raam dat je nu opendoet nog oplevert.
             # Op een lópend venster is dat de verkeerde vraag — dat raam stáát open, er
@@ -1904,7 +1917,7 @@ def main():
     # ná PLAN_HOUR. Idempotent via day.plan_sent, want de kwartierlus herstart elke ~5u.
     day = roll_day(state, now.date().isoformat())
     if not day["plan_sent"] and now.hour >= PLAN_HOUR:
-        plan = build_day_plan(dash_rooms, now)
+        plan = build_day_plan(dash_rooms, now, state)
         plan_msg = day_plan_message(plan, dmax, now)
         groep = os.getenv("TELEGRAM_CHAT_GROUP_ID")
         if dry:
