@@ -316,23 +316,121 @@ def _row(t="2026-08-14T04:30:00+00:00", hum=31):
             "battery": 92, "battery_state": "OK", "rf": "ONLINE"}
 
 
-def test_shard_idempotent_op_sensor_timestamp(archive):
-    assert gc.append_sensor_rows([_row()]) == (1, 0)
-    assert gc.append_sensor_rows([_row()]) == (0, 0)
-    assert gc.append_sensor_rows([_row(hum=33)]) == (0, 1)
-    shard = json.loads((archive / "2026-08.json").read_text())
+def test_merge_idempotent_op_sensor_timestamp():
+    shard = gc._empty_shard("2026-08")
+    assert gc.merge_sensor_rows(shard, [_row()]) == (1, 0)
+    assert gc.merge_sensor_rows(shard, [_row()]) == (0, 0)
+    assert gc.merge_sensor_rows(shard, [_row(hum=33)]) == (0, 1)
     assert len(shard["rows"]) == 1 and shard["rows"][0]["soil_hum"] == 33
-    gc.append_sensor_rows([_row(t="2026-08-14T03:30:00+00:00")])
-    shard = json.loads((archive / "2026-08.json").read_text())
+    gc.merge_sensor_rows(shard, [_row(t="2026-08-14T03:30:00+00:00")])
     assert [r["t"] for r in shard["rows"]] == sorted(r["t"] for r in shard["rows"])
 
 
+def test_lokale_terugval_schrijft_zelf_en_levert_geen_gist_bestanden(archive):
+    assert gc.append_sensor_rows([_row()]) == {}
+    gc.append_sensor_rows([_row(hum=33)])
+    shard = json.loads((archive / "2026-08.json").read_text())
+    assert len(shard["rows"]) == 1 and shard["rows"][0]["soil_hum"] == 33
+
+
 def test_shard_whitelist_alleen_sensorvelden(archive):
-    # Privacy-whitelist: nooit kraandata, ids of vlagstanden in het publieke
-    # archief — alleen t + de sensorvelden.
+    # Privacy-whitelist: nooit kraandata, ids of vlagstanden in het archief —
+    # alleen t + de sensorvelden (ook nu het archief privé is: minimale data).
     gc.append_sensor_rows([{**_row(), "kraan": "x", "extra": 1}])
     shard = json.loads((archive / "2026-08.json").read_text())
     assert set(shard["rows"][0]) == {"t", *gc.SENSOR_FIELDS}
+
+
+# ── Sensor-archief in de privé Gist + zelf-uitvoerende migratie (sep 2026) ────
+
+@pytest.fixture
+def gist_store(tmp_path, monkeypatch):
+    """Gist-modus met een in-memory dubbelganger: HISTORY_DIR wijst naar tmp
+    én _HISTORY_DIR_DEFAULT schuift mee (zo ziet _history_gist_active het
+    'onaangepaste default-pad'), creds staan, en de twee Gist-randen draaien
+    op `store` (zelfde constructie als tests/test_vent_io.py::_fake_gist)."""
+    store = {}
+    monkeypatch.setattr(gc, "HISTORY_DIR", str(tmp_path))
+    monkeypatch.setattr(gc, "_HISTORY_DIR_DEFAULT", str(tmp_path))
+    monkeypatch.setenv("GIST_ID", "g123")
+    monkeypatch.setenv("GH_TOKEN", "t456")
+    monkeypatch.setattr(gc.gist_io, "read_file",
+                        lambda gid, name, token=None, timeout=20: store.get(name))
+    monkeypatch.setattr(gc.gist_io, "write_files",
+                        lambda gid, files, token=None, timeout=20: store.update(files))
+    return store
+
+
+def _local_shard(dirpath, month, rows):
+    (dirpath / f"{month}.json").write_text(json.dumps(
+        {"schema": 1, "month": month, "source": "gardena smart sensor", "rows": rows}))
+
+
+def test_gist_modus_levert_patch_bestand_en_schrijft_niets_lokaal(gist_store, tmp_path):
+    gist_store["gardena_history_2026-08.json"] = json.dumps(
+        {"schema": 1, "month": "2026-08", "rows": [_row(t="2026-08-14T03:30:00+00:00")]})
+    files = gc.append_sensor_rows([_row()])
+    assert set(files) == {"gardena_history_2026-08.json"}
+    rows = json.loads(files["gardena_history_2026-08.json"])["rows"]
+    assert [r["t"] for r in rows] == ["2026-08-14T03:30:00+00:00", "2026-08-14T04:30:00+00:00"]
+    assert not list(tmp_path.glob("*.json"))
+    # De aanroeper schrijft (mee in de state-PATCH); append zelf raakt de Gist niet.
+    assert json.loads(gist_store["gardena_history_2026-08.json"])["rows"][-1]["t"] \
+        == "2026-08-14T03:30:00+00:00"
+
+
+def test_gist_leesfout_raist_i_p_v_de_maand_te_overschrijven(gist_store, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("gist down")
+    monkeypatch.setattr(gc.gist_io, "read_file", boom)
+    with pytest.raises(RuntimeError):
+        gc.append_sensor_rows([_row()])
+
+
+def test_migratie_seed_verify_delete(gist_store, tmp_path):
+    _local_shard(tmp_path, "2026-07", [_row(t="2026-07-01T00:00:00+00:00"),
+                                       _row(t="2026-07-01T01:00:00+00:00")])
+    _local_shard(tmp_path, "2026-08", [_row()])
+    assert gc.migrate_sensor_shards() == 2
+    assert not list(tmp_path.glob("*.json"))
+    assert len(json.loads(gist_store["gardena_history_2026-07.json"])["rows"]) == 2
+    assert len(json.loads(gist_store["gardena_history_2026-08.json"])["rows"]) == 1
+    assert gc.migrate_sensor_shards() == 0                 # idempotent
+
+
+def test_migratie_is_een_unie_waarin_de_gist_wint(gist_store, tmp_path):
+    _local_shard(tmp_path, "2026-07", [_row(t="2026-07-01T00:00:00+00:00", hum=31),
+                                       _row(t="2026-07-01T01:00:00+00:00", hum=33)])
+    gist_store["gardena_history_2026-07.json"] = json.dumps(
+        {"schema": 1, "month": "2026-07",
+         "rows": [_row(t="2026-07-01T00:00:00+00:00", hum=99),
+                  _row(t="2026-07-02T00:00:00+00:00", hum=35)]})
+    assert gc.migrate_sensor_shards() == 1
+    rows = json.loads(gist_store["gardena_history_2026-07.json"])["rows"]
+    assert [r["t"] for r in rows] == sorted(r["t"] for r in rows) and len(rows) == 3
+    assert rows[0]["soil_hum"] == 99                        # gist won op de overlap
+
+
+def test_migratie_readback_mist_laat_de_boom_staan(gist_store, tmp_path, monkeypatch):
+    _local_shard(tmp_path, "2026-08", [_row()])
+    monkeypatch.setattr(gc.gist_io, "write_files", lambda *a, **k: None)
+    with pytest.raises(RuntimeError, match="read-back"):
+        gc.migrate_sensor_shards()
+    assert (tmp_path / "2026-08.json").exists()
+
+
+def test_migratie_laat_een_onleesbaar_bestand_staan(gist_store, tmp_path):
+    (tmp_path / "2026-07.json").write_text("{kapot")
+    _local_shard(tmp_path, "2026-08", [_row()])
+    assert gc.migrate_sensor_shards() == 1
+    assert (tmp_path / "2026-07.json").exists()
+    assert not (tmp_path / "2026-08.json").exists()
+
+
+def test_migratie_zonder_gist_modus_is_een_no_op(archive):
+    _local_shard(archive, "2026-08", [_row()])
+    assert gc.migrate_sensor_shards() == 0
+    assert (archive / "2026-08.json").exists()
 
 
 def test_sensor_row_whitelist():
@@ -359,7 +457,8 @@ def _snap(lawn="CLOSED", shrubs="CLOSED", lawn_ts=None, shrubs_ts=None,
 
 
 def run_main(monkeypatch, capsys, *, now, flags=None, state=None, snapshot=None,
-             soil=None, irrigations=None, dry=False, force_zone=None):
+             soil=None, irrigations=None, dry=False, force_zone=None,
+             archive=None, migrate=None):
     calls = {"commands": [], "telegram": [], "persisted": []}
     for var, val in (("GARDENA_APP_KEY", "k"), ("GARDENA_APP_SECRET", "s"),
                      ("GIST_ID", "g"), ("GH_TOKEN", "t")):
@@ -395,7 +494,10 @@ def run_main(monkeypatch, capsys, *, now, flags=None, state=None, snapshot=None,
     monkeypatch.setattr(gc, "send_telegram",
                         lambda text, **kw: calls["telegram"].append(text) or True)
     monkeypatch.setattr(gc, "load_soil_data", lambda now, path=None: soil)
-    monkeypatch.setattr(gc, "append_sensor_rows", lambda rows: (0, 0))
+    # Het archief altijd faken: met GIST_ID in de env en de échte boom als
+    # HISTORY_DIR zou de migratie anders de netwerk-Gist aanspreken.
+    monkeypatch.setattr(gc, "append_sensor_rows", archive or (lambda rows: {}))
+    monkeypatch.setattr(gc, "migrate_sensor_shards", migrate or (lambda: 0))
     monkeypatch.setattr(gc.ga, "mint_token", lambda k, s: "tok")
     monkeypatch.setattr(gc.ga, "fetch_location", lambda t, k, loc: {"doc": True})
     monkeypatch.setattr(gc.ga, "parse_snapshot",
@@ -512,6 +614,49 @@ def test_zero_delivery_alert(monkeypatch, capsys):
     assert any("lijkt niet te zijn opengegaan" in t for t in got["telegram"])
     state_out = json.loads(got["persisted"][-1][gc.STATE_FILE])
     assert state_out["session"] is None
+
+
+def _snap_met_sensor(hum=31):
+    snap = _snap()
+    snap["sensors"] = {"sens": {"soil_hum": hum, "soil_hum_ts": "2026-08-14T10:10:00Z",
+                                "soil_temp": 18, "soil_temp_ts": None,
+                                "amb_temp": None, "device": "ds"}}
+    snap["common"] = {"ds": {"battery": 96, "battery_state": "OK", "rf": "ONLINE"}}
+    return snap
+
+
+def test_sensorrij_gaat_mee_in_de_state_patch(monkeypatch, capsys):
+    # Het archief landt in dezelfde atomaire PATCH als de state — één
+    # schrijfmoment per run, en nooit meer in de repo.
+    seen = []
+
+    def fake_append(rows):
+        seen.extend(rows)
+        return {"gardena_history_2026-08.json": json.dumps({"rows": rows})}
+
+    got = run_main(monkeypatch, capsys, now=local(2026, 8, 14, 12, 15),
+                   soil=_soil(priority="low"), snapshot=_snap_met_sensor(),
+                   archive=fake_append)
+    assert [r["soil_hum"] for r in seen] == [31]
+    assert set(got["persisted"][-1]) == {gc.STATE_FILE, "gardena_history_2026-08.json"}
+
+
+def test_haperend_archief_houdt_de_state_niet_tegen(monkeypatch, capsys):
+    # Faalt het archief (Gist-leesfout, migratie-read-back), dan gaat er één
+    # privé-alert uit, wordt de state gewoon opgeslagen en blijft de log gelijk.
+    quiet = run_main(monkeypatch, capsys, now=local(2026, 8, 14, 12, 15),
+                     soil=_soil(priority="low"), snapshot=_snap_met_sensor())
+
+    def boom(*a, **k):
+        raise RuntimeError("gist down")
+
+    got = run_main(monkeypatch, capsys, now=local(2026, 8, 14, 12, 15),
+                   soil=_soil(priority="low"), snapshot=_snap_met_sensor(),
+                   archive=boom, migrate=boom)
+    assert sum("sensor-archief" in t for t in got["telegram"]) == 1   # cooldown: één
+    state = json.loads(got["persisted"][-1][gc.STATE_FILE])
+    assert "sensor_archive" in state["alerts"]
+    assert got["stdout"] == quiet["stdout"]
 
 
 def test_dry_run_stuurt_geen_commandos_en_schrijft_niets(monkeypatch, capsys):

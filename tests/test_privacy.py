@@ -244,6 +244,18 @@ def test_twin2_shards_zijn_gitignored():
     assert ignored, "data/twin2_history/*.json ontbreekt in .gitignore"
 
 
+def test_gardena_sensorshards_zijn_gitignored():
+    """Zelfde preventieve helft voor de bodemsensorreeks (sep 2026): een
+    vochtsprong zonder regen ís een bewateringsbeurt — automatisch of met de
+    hand — dus de shards leven in de privé Gist (gardena_control.py) en de
+    lokale terugval mag nooit terug in git. De nog gevolgde maanden van vóór
+    de verhuizing verdwijnen via de zelf-uitvoerende migratie in de
+    eerstvolgende run mét secrets."""
+    ignored = subprocess.run(["git", "-C", _ROOT, "check-ignore", "-q",
+                              "data/gardena_history/2099-01.json"]).returncode == 0
+    assert ignored, "data/gardena_history/*.json ontbreekt in .gitignore"
+
+
 _PRIVATE_ARTEFACTS = (
     "docs/data.json", "docs/mowing_data.json", "docs/window_data.json",
     "docs/vent_data.json", "docs/vent_forecast.json", "docs/vent_learned.json",

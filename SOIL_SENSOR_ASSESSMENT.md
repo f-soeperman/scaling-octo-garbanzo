@@ -215,8 +215,10 @@ de beurten netjes geregistreerd te houden.
   elke vertaling in productie een gok zijn die zichzelf daarna bevestigt.
 - **Geen dashboard/Telegram.** Er is niets te melden dat een bericht rechtvaardigt, en een
   vochtgrafiek met één punt suggereert kennis die er niet is.
-- **De sensorreeks niet in `docs/` gepubliceerd.** De shards zijn al publiek en dat is genoeg;
-  Project 16 meldt verder uitsluitend privé.
+- **De sensorreeks niet in `docs/` gepubliceerd.** Project 16 meldt uitsluitend privé.
+  _(Sep 2026: de shards zelf zijn inmiddels ook privé — `gardena_history_<YYYY-MM>.json` in de
+  privé Gist, want een vochtsprong zonder regen is een bewateringsbeurt. Draaien kan via de
+  workflow `gardena-sensor-eval.yml`, die het rapport in de privé artefact-gist zet.)_
 
 ## 6. Wanneer dit opnieuw draaien
 
@@ -230,7 +232,7 @@ staan — bij ongestoorde cadans 2026-08-18. De eerstvolgende zinnige momenten:
 2. **~08-20, op uurresolutie** — **het echte moment**: de vorm van de sensorrespons op de regen
    van 08-18/19 beantwoordt de dieptevraag (§4b), en de eindstand beantwoordt de
    lineariteitsvraag (§4c). Hier is het dagmiddel níet de juiste blik; kijk naar de rijen zelf in
-   `data/gardena_history/`.
+   de sensor-shards (sinds sep 2026 in de privé Gist, zie §5).
 3. **~08-21** — eerste volledige dagen voor de bodemtemperatuur-vergelijking (`full_day = ja`),
    waarmee de vlag uit §3 over de Open-Meteo-overlay beslisbaar wordt.
 4. **schouderseizoen (okt–nov)** — pas dan wordt de `temp_factor`-proxy toetsbaar, en dat is de

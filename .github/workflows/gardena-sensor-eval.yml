@@ -4,18 +4,18 @@ name: Gardena-sensor vs. bodemmodel
 # sensor/model-diagnose van Project 16, zie SOIL_SENSOR_ASSESSMENT.md) tegen
 # de échte modelcurve. Die tool is zelf bewust "geen netwerk" (zuivere
 # functies over lokale bestanden); `tools/gardena_eval_fetch.py` is de dunne
-# ophaal-laag ervoor die de twee benodigde gist-artefacten read-only naar
-# schijf haalt: `data.json` uit de privé artefact-gist (`ARTEFACT_GIST_ID`,
-# het bodemmodel) en — optioneel, alleen voor de bodemtemperatuur-
-# dempingsvergelijking — de buitentemperatuur uit de twin2-maandshards in de
-# privé Gist (`GIST_ID`). De twin2-fetch laat `rooms` (per-kamer temp/vocht,
-# gedragsdata) bewust overal weg, ook in het geüploade artefact hieronder.
+# gist-laag eromheen. Ophalen (read-only): `data.json` uit de privé
+# artefact-gist (`ARTEFACT_GIST_ID`, het bodemmodel), de sensor-maandshards
+# uit de privé Gist (`GIST_ID`) en — optioneel, alleen voor de
+# bodemtemperatuur-dempingsvergelijking — de buitentemperatuur uit de
+# twin2-maandshards (de fetch laat `rooms` bewust weg).
 #
-# LET OP (privacy): het rapport gaat over tuinbodemvocht/-temperatuur, geen
-# afwezigheids-/aanwezigheidssignaal — maar op een publieke repo kan élke
-# ingelogde GitHub-gebruiker de joblog en het artefact van een
-# workflow_dispatch-run lezen zolang de retentie loopt. Alleen bewust
-# dispatchen (zelfde voorbehoud als ml-dataset.yml).
+# PRIVACY: sinds sep 2026 is de sensorreeks privé — de vochtreeks toont elke
+# bewateringsbeurt. Het rapport draagt die reeks, dus het gaat NIET naar de
+# joblog of een Actions-artefact (op een publieke repo voor elke ingelogde
+# GitHub-gebruiker leesbaar) maar naar de privé artefact-gist als
+# `gardena_sensor_eval.txt/.json`. De stdout van de evaluatie wordt daarom
+# naar een bestand omgeleid; de log toont alleen de vaste fetch/publish-regels.
 
 on:
   workflow_dispatch:
@@ -30,7 +30,8 @@ on:
         type: string
         default: "2"
 
-# Alleen lezen: dit schrijft niets terug naar de repo, enkel een artefact.
+# Alleen lezen: dit schrijft niets terug naar de repo, alleen naar de privé
+# artefact-gist (met het Gist-token, los van GITHUB_TOKEN).
 permissions:
   contents: read
 
@@ -61,6 +62,7 @@ jobs:
         run: |
           python tools/gardena_eval_fetch.py \
             --out-data "$RUNNER_TEMP/gardena_eval/data.json" \
+            --out-sensor-dir "$RUNNER_TEMP/gardena_eval/sensor" \
             --out-twin-dir "$RUNNER_TEMP/gardena_eval/twin2"
 
       - name: Run the evaluation
@@ -68,17 +70,18 @@ jobs:
           ZONE: ${{ inputs.zone }}
           SETTLE_H: ${{ inputs.settle_h }}
         run: |
+          # Rapport naar een bestand, niet naar de (publieke) joblog.
           python tools/gardena_sensor_eval.py \
             --data "$RUNNER_TEMP/gardena_eval/data.json" \
+            --history-dir "$RUNNER_TEMP/gardena_eval/sensor" \
             --twin-dir "$RUNNER_TEMP/gardena_eval/twin2" \
             --zone "$ZONE" \
             --settle-h "$SETTLE_H" \
-            --json "$RUNNER_TEMP/gardena_eval/report.json"
+            --json "$RUNNER_TEMP/gardena_eval/report.json" \
+            > "$RUNNER_TEMP/gardena_eval/report.txt"
 
-      - name: Upload report artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: gardena-sensor-eval-report
-          path: ${{ runner.temp }}/gardena_eval/report.json
-          if-no-files-found: error
-          retention-days: 14
+      - name: Publish report to the private artefact gist
+        env:
+          ARTEFACT_GIST_ID: ${{ secrets.ARTEFACT_GIST_ID }}
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+        run: python tools/gardena_eval_fetch.py --publish "$RUNNER_TEMP/gardena_eval"

@@ -2,9 +2,11 @@
 
 DE VRAAG, EN WAAROM HIJ LASTIGER IS DAN HIJ LIJKT
 --------------------------------------------------
-Project 16 archiveert sinds aug 2026 de bodemsensor (19040-20) in
-`data/gardena_history/`. Dat is de eerste directe meting van bodemvocht in deze
-tuin — tot dan was `docs/data.json` een volledig ongetoetste waterbalans.
+Project 16 archiveert sinds aug 2026 de bodemsensor (19040-20) in maand-shards
+(sinds sep 2026 als `gardena_history_<YYYY-MM>.json` in de privé Gist — de
+vochtreeks toont elke bewateringsbeurt). Dat is de eerste directe meting van
+bodemvocht in deze tuin — tot dan was `docs/data.json` een volledig ongetoetste
+waterbalans.
 
 Alleen: sensor en model meten niet hetzelfde ding, op drie manieren tegelijk.
 
@@ -55,10 +57,11 @@ Wel, in volgorde van bewijskracht:
      forward-chaining-gedachte als `bias_eval`.
 
 Zuivere functies over gewone dicts; **geen netwerk**. Alles draait op lokale
-artefacten (`docs/data.json`, `data/gardena_history/`, en optioneel een lokale
-twin2-shard-kopie voor uurlijkse luchttemperatuur — de shards zelf leven sinds
-de privacy-assessment aug 2026 in de privé Gist, dus wijs `--twin-dir` of
-`VENT_HISTORY_DIR` naar een export) — het `weekjournaal`-patroon.
+kopieën (`data.json`, de sensor-shards via `--history-dir`, en optioneel een
+twin2-shard-kopie voor uurlijkse luchttemperatuur via `--twin-dir`) — die
+leven allemaal in privé gists en `tools/gardena_eval_fetch.py` haalt ze op; de
+workflow `gardena-sensor-eval.yml` doet beide en zet het rapport in de privé
+artefact-gist. Het `weekjournaal`-patroon.
 Runner: `python tools/gardena_sensor_eval.py`.
 """
 
