@@ -96,7 +96,7 @@ git-historie staan; volledig verwijderen kan alleen met een nieuwe history-squas
 
 ---
 
-This repo contains fourteen independent automation pipelines (P1–P7, P9–P11, P13–P16 — the numbering keeps historical gaps: Projects 8 and 12 were replaced by Project 13 in aug 2026), all running on GitHub Actions (most notify via Telegram; Project 7's Telegram is optional, Project 13 sends only an operational anomaly nudge — no advice messages, **Project 14 is the advice mouth of the twin**: the evening cool-down plan, **Project 15 is dashboard-only** — geen Telegram-advies, alleen de crash-alert, and **Project 16 meldt uitsluitend privé** — start/stop/afwijkingen naar de privé-chat, nooit de groep). They share Telegram/WU/Gist secrets and a few **deliberate read-only** data hand-offs (Project 5 reads Project 1's `data.json`; Project 13 reads Project 6's `window_data.json`; Projects 9/10/14 reuse Project 13's pure modules (`vent_physics`/`vent_io`, P10/P14 also `vent_forecast`/`vent_suggest`) read-only; Project 11 aggregates the published artefacts of 1/5/7/13; Project 16 reads Project 1's `data.json` and is the only *second writer* of the irrigations-Gist), but are otherwise separate. The daily jobs are fired at their local target time by the **Timing Orchestrator** (`.github/workflows/orchestrator.yml`, a self-driven 15-min klok-loop); each project keeps a ~30–60 min later fallback cron + a dedup guard-job. **Projects 1, 5 en 16 draaien uurlijks** (dedup-venster = het lopende klokuur i.p.v. de dag; 1 en 5 sinds aug 2026) zodat hun dashboards met de dag meebewegen; hun *berichten* schalen niet mee — die vallen op één moment per dag, beslist door het script zelf (zie "Meldmoment" bij Project 1).
+This repo contains thirteen independent automation pipelines (P1–P7, P9–P11, P13, P15, P16 — the numbering keeps historical gaps: Projects 8 and 12 were replaced by Project 13 in aug 2026, Project 14 (koelplan) is retired sep 2026), all running on GitHub Actions (most notify via Telegram; Project 7's Telegram is optional, Project 13 sends only an operational anomaly nudge — no advice messages, **Project 15 is dashboard-only** — geen Telegram-advies, alleen de crash-alert, and **Project 16 meldt uitsluitend privé** — start/stop/afwijkingen naar de privé-chat, nooit de groep). They share Telegram/WU/Gist secrets and a few **deliberate read-only** data hand-offs (Project 5 reads Project 1's `data.json`; Project 13 reads Project 6's `window_data.json`; Projects 9/10 reuse Project 13's pure modules (`vent_physics`/`vent_io`, P10 also `vent_forecast`) read-only; Project 11 aggregates the published artefacts of 1/5/7/13; Project 16 reads Project 1's `data.json` and is the only *second writer* of the irrigations-Gist), but are otherwise separate. The daily jobs are fired at their local target time by the **Timing Orchestrator** (`.github/workflows/orchestrator.yml`, a self-driven 15-min klok-loop); each project keeps a ~30–60 min later fallback cron + a dedup guard-job. **Projects 1, 5 en 16 draaien uurlijks** (dedup-venster = het lopende klokuur i.p.v. de dag; 1 en 5 sinds aug 2026) zodat hun dashboards met de dag meebewegen; hun *berichten* schalen niet mee — die vallen op één moment per dag, beslist door het script zelf (zie "Meldmoment" bij Project 1).
 
 ---
 
@@ -728,7 +728,7 @@ Read-only on Project 13's pure modules (`vent_physics.per_window_solar`/`sun_pos
 
 ### Files
 - `night_forecast.py` — forward sim + scenario's + tog table + message; sinds aug 2026 **niet meer stateless**: elke avondrun legt zijn dicht-scenario-voorspelling vast in `data/night_forecast_log/<YYYY-MM>.json` (één rij per lokale datum, óók op stille avonden, niet onder `DRY_RUN` — een testdispatch mag het datum-slot niet opeten; **zonder** `reported_open` — dat was een gedateerde raamstand-afgeleide in een publiek gecommit bestand, en night_verify scoort toch onvoorwaardelijk tegen de ruwe metingen; de runner heet publiek `kinderkamer-nacht`), zodat `tools/night_verify.py` hem de ochtend erna afrekent tegen de kinderkamer-metingen die al in de twin2-shards staan → `night_verify.json` in de **privé artefact-gist** (wekelijks via twin-eval.yml; sinds de privacy-assessment aug 2026 — per-nacht kinderkamerscores horen niet onder `docs/`, lokale terugval gitignored). Vóór dit spoor was de voorspelling precies één keer gevalideerd (9 nachten) en daarna nooit meer.
-- `.github/workflows/night-forecast.yml` — orchestrator target 18:45 + fallback cron 19:15 + guard-job; `contents: write` (commit van het voorspellingslog) + checkout gepind op de branch-tip; in-job retry sleeps 300s (not 600) so a retried message still lands near the 19:00 target
+- `.github/workflows/night-forecast.yml` — orchestrator target 18:45 + fallback cron 19:15 + guard-job; de guard slaat een schedule-run vóór 18:45 lokaal altijd over (sep 2026: GitHub vuurde de 19:15-cron eens pas om 00:30 af, en met alleen het middernacht-venster ging er een tweede avondbericht uit); `contents: write` (commit van het voorspellingslog) + checkout gepind op de branch-tip; in-job retry sleeps 300s (not 600) so a retried message still lands near the 19:00 target
 
 ### Logic
 - `vent_io.build_timeline(..., end_h=hours-until-tomorrow-08:00)` (~13h at 18:45) with 24h warmup history (mass-node equilibration, the `vent_twin.main()` pattern); `fetch_weather`'s `forecast_days=2` covers the horizon. Params via `vent_io.merged_params(house, load_learned())` — reads `docs/vent_learned.json`; seed from the actual tado temps in `window_data.json` (`collect_actual`), missing rooms → outside temp. Krijgt zijn ankers (buur/grond) én de **ontbiaste om_bias-driver** via `vent_io.make_context` → `RunContext` (expliciet argument aan `build_timeline`/`simulate`; vergeten = TypeError — de oude "must rebind the module global"-valkuil is structureel weg). Die driver blijft belangrijk: het tog-advies hangt aan het nachtgemiddelde van het `dicht`-scenario, dus een systematisch te warme nacht rekende structureel een tog te dun.
@@ -789,7 +789,7 @@ Read-only aggregation of the published artefacts of Projects 1, 5, 7, 13 from th
   `VENT_FORECAST_LOG_DIR`: elke 3 klokuren één compact kolom-snapshot van wat Open-Meteo
   nú voor de komende 48u voorspelt — de dataset waarmee `tools/horizon_backtest.py
   --weather forecast` het perfecte-forecast-gat gaat sluiten), en de gedeelde
-  onzekerheidsband-lezer (`load_uncertainty`/`band_for`, gebruikt door P10 én P14).
+  onzekerheidsband-lezer (`load_uncertainty`/`band_for`, gebruikt door P10).
 - `vent_fit.py` — online kalibratie (`calibrate`), de AC/verwarmings/pauze-filters + de
   structurele kamer-uitsluiting (`filter_excluded_rooms`), en de **deadlock-proof
   anomalie-poort** `anomaly_step` (zie "Learning regime").
@@ -839,14 +839,14 @@ Read-only aggregation of the published artefacts of Projects 1, 5, 7, 13 from th
   Open-Meteo-forecast i.p.v. hindcast — sluit het perfecte-forecast-gat zodra
   `data/forecast_log` gevuld is; leeg log → nette n=0), `--origin-hours` + `--tm-mode ewma`
   (het anker-A/B-harnas waarmee de nachtvoorspelling is omgezet, zie Project 10),
-  `--stratify-openings` (fout per raamstand-klasse op de oorsprong — de plek waar de
-  koelplan-adviezen op leunen) en `--summary-out` (kopcijfers appenden aan
+  `--stratify-openings` (fout per raamstand-klasse op de oorsprong — de plek waar
+  raamstand-scenario's op leunen) en `--summary-out` (kopcijfers appenden aan
   `docs/twin_eval.json`, het wekelijkse trendspoor).
 - `tools/export_uncertainty.py` — empirische p10/p50/p90-band per (kamer, horizon-uur) uit een
   backtest-dump + het validatie-envelop voor de OOD-waarschuwing. **Niet per run** — het is een
   eigenschap van het model; wekelijks ververst door twin-eval.yml (stond daarvóór stil op een
   handmatige momentopname). Consumenten: de speeltuin, de band op de dashboard-
-  temperatuurgrafiek (vent.js), de marge-regel in het nachtbericht en in het koelplan.
+  temperatuurgrafiek (vent.js), de marge-regel in het nachtbericht.
 - `.github/workflows/twin-eval.yml` — **wekelijkse evaluatiecron** (zo 05:10 lokaal,
   `contents: write`, checkout branch-tip): ERA5-shardverversing (in-job only — de
   kwartierloops committen dezelfde shards, dus die commit hoort niet hier), backtest
@@ -898,18 +898,18 @@ lokale klokuren, over-middernacht toegestaan) voor standen die níemand in de op
 meldt maar die elke dag hetzelfde zijn — nu alleen het verduisteringsgordijn van de kinderkamer
 (`nursery_window_shade` dicht 19–08, de fix die P10 al hardcodeerde: ~1 °C te warm om 07:00
 zonder). `vio.apply_routines` dwingt ze af op de **forecast-tijdlijnen** (de 12u-vooruitblik
-hier + beide fasen van de nachtvoorspelling + het koelplan); de laatst gemelde stand 12 uur
+hier + beide fasen van de nachtvoorspelling); de laatst gemelde stand 12 uur
 doortrekken was 's nachts elke nacht aantoonbaar fout. De **kalibratie op het verleden blijft
 bewust op de gemelde log** rijden: de routine dáár ook toepassen verandert de fit-inputs en is
 dus een te méten wijziging (re-seed + backtest, zie de ground rules), geen bijvangst.
 Sinds de bewonersbevestiging (aug 2026) staat óók **`nursery_stair` dicht 19–08** in de config:
 de deur is 's nachts vrijwel altijd dicht, met als zeldzame uitzondering een te warme kamer
 (ruwweg >23°) bij koelere buitenlucht — precies de interventie die de stapel/all-open-
-scenario's van P10/P14 doorrekenen (scenario-overrides worden ná de routine gemerged en
+scenario's van P10 doorrekenen (scenario-overrides worden ná de routine gemerged en
 winnen dus altijd). Bijbehorende regel: **een expliciete melding ín het lopende
 routinevenster wint van de routine** (`apply_routines(..., log=log)`) — routines dekken wat
 níemand meldt, maar op de avond dat de bewoner de deur wél openzet en dat meldt, mag de
-routine het eigen rapport niet overschrijven (anders spreken dashboard en koelplan-baseline
+routine het eigen rapport niet overschrijven (anders spreken dashboard en scenario-baseline
 de gemelde stand tegen). Een melding van vóór het venster telt niet.
 
 ### Physics (samenvatting — do not casually retune the structure)
@@ -1072,7 +1072,7 @@ per-stand-fractie, default — de **volgorde is het kolomcontract van het surrog
 
 ### Relation to other projects
 Leest `window_data.json` (Project 6, privé artefact-gist) + de openingen-Gist **read-only**; schrijft uitsluitend
-eigen artefacten + de twin2-shards (privé Gist sinds de privacy-assessment aug 2026). **P9/P10/P14 importeren `vent_physics`/`vent_io` read-only** met een
+eigen artefacten + de twin2-shards (privé Gist sinds de privacy-assessment aug 2026). **P9/P10 importeren `vent_physics`/`vent_io` read-only** met een
 ctx-prologue van 3 regels (`vent_io.make_context` → `RunContext`); P11 leest `docs/vent_learned.json`.
 Geen tado-auth, geen nieuwe secrets (WU-, privé-chat-Telegram- en Gist-secrets hergebruikt).
 `house_model.json`: de twin-2-only velden `subzones` en per-element `exposure` zijn inert;
@@ -1080,60 +1080,12 @@ Geen tado-auth, geen nieuwe secrets (WU-, privé-chat-Telegram- en Gist-secrets 
 
 ---
 
-## Project 14: Koelplan (Cool-down Advisor)
+## Project 14 — met pensioen (sep 2026)
 
-**Goal:** Eén avondbericht (orchestrator-doel 21:15, ná de kinderkamer-nachtvoorspelling) dat de vraag
-beantwoordt waar de tweeling voor bestaat: **welke ramen en deuren moeten vanavond open om het
-huis echt te koelen** — het adviesluik dat bij de herbouw van P8/P12 bewust wérd weggelaten,
-nu als apart project bovenop de gekalibreerde tweeling (P13 zelf blijft advies-stil).
-
-### Files
-- `vent_suggest.py` — de zuivere kern: **gecureerde scenario-grammatica** (~15 sims, afgeleid
-  uit de geometrie — per raam een solo, per slaapkamer een "stapel" (raam + eigen trapdeur +
-  daklicht: de lage-inlaat/hoge-uitlaat-route waar de koker met deuren op 1.0/3.9/7.0 m
-  letterlijk voor bestaat), living-dwarsventilatie, een huis-stapel, en "alles open" als
-  **plafond dat nooit advies is**; bewust géén 2^n-zoektocht: een vaste grammatica is
-  uitlegbaar, contract-testbaar en kan geen fysiek onzinnige combinaties voorstellen),
-  de praktische filterlaag (`practical_filter`: regen ≥ 0.2 mm/u, windstoten ≥ 14 m/s en de
-  additieve `advice`-vlaggen in `house_model.json` — `night_ok` (bg-buitendeuren nooit vol
-  open 's nachts), `rain_ok`, `tilt_ok` (het platte daklicht kiept niet weg bij regen maar
-  vervalt), kiepbare ramen vallen terug op "tilt", na het snoeien identieke scenario's worden
-  gededupliceerd), de score (`score_plan`: per advieskamer het 07:00-verschil t.o.v. de
-  dicht-baseline, alléén voor kamers boven hun comfortband en **geklemd op comfort_low** —
-  koelen onder de band is niets waard; onderkoelings-graaduren als straf; een kleine
-  actiekost zodat het kleinste effectieve plan wint), de zendpoort (`should_send`: mei–sep +
-  minstens één te warme kamer + beste plan ≥ `DELTA_MIN_C` 0.7 — kleiner kan het model niet
-  onderscheiden, dus dat is geen bericht waard) en de berichttekst (kop-delta op 0,5 °C
-  afgerond; een te warme kamer waar het plan níets aan doet zegt dat expliciet).
-- `cooldown_notify.py` — runner: het twee-fasen-patroon van night_forecast (24u aanloop op de
-  échte log + routines, herankeren via `vent_forecast.anchor_seed`), dan élk scenario
-  **bóvenop de dicht-baseline** (alle beweegbare ramen dicht + `nursery_stair` dicht — de
-  avondroutine-aanname; "solo raampje" betekent alléén dat raampje open) gesimuleerd over
-  [nu, morgen 08:00] in sensorruimte, gescoord, gerangschikt, met een marge-regel uit de
-  gedeelde band (`vio.band_for`) op de kamer met het grootste voordeel. Naar de
-  **groepschat**; `DRY_RUN=1` print. Stil buiten het seizoen, zonder te warme kamer of onder
-  de ondergrens.
-- `.github/workflows/cooldown-notify.yml` — orchestrator target 21:15 + fallback cron 21:45 +
-  guard-job; `contents: read` (stateless — leest checkout + Gist, commit niets).
-
-### Eerlijkheidsgrenzen (bewust in het ontwerp)
-De deltas zijn model-afgeleid en alleen op wérkelijk bezochte raamstanden gevalideerd
-(`uncertainty.json` zegt dat zelf: `measured_on_observed_states_only`); een gesloten huis
-wisselt in het model exact nul lucht (infiltratie zit in de geleerde `ua_env`), dus
-open-vs-dicht-verschillen zijn een **optimistische bovengrens** — vandaar de zendpoort, de
-0,5°-afronding en het plafond-frame. De counterfactual van dezelfde nacht is fundamenteel
-onverifieerbaar; wat wél kan: `horizon_backtest --stratify-openings` begrenst de fout per
-raamstand-klasse, en gevolgd advies wordt via de openingen-log vanzelf een geobserveerde
-stand in de shards.
-
-### Relation to other projects
-Read-only op P13's zuivere modules (`vent_physics`/`vent_io`/`vent_forecast`) met de
-ctx-prologue, en op `window_advisor.ROOM_COMFORT` (dezelfde comfortbanden als P6/P13's
-kamerkaarten — één waarheid voor "te warm"). Schrijft niets. Geen nieuwe secrets
-(`TELEGRAM_CHAT_GROUP_ID` + Gist-secrets hergebruikt). Botsingsvlak met Project 6 (dat
-'s avonds óók open/dicht-advies stuurt, maar per kamer op de gemeten temperatuur): bewust
-één bericht per avond op een vast tijdstip; een echte verzoening (P6 dat 's avonds naar het
-koelplan verwijst) is benoemd maar uitgesteld.
+Het avond-koelplan (`vent_suggest.py`, `cooldown_notify.py`, `cooldown-notify.yml`) is op
+bewonersbesluit verwijderd: het bericht werd in de praktijk niet gebruikt. Code en ontwerp
+staan in de git-historie. De scenario-sims van Project 10 (dicht / raampje open / alles open)
+blijven ongewijzigd.
 
 ---
 
@@ -1332,7 +1284,7 @@ Seven small cross-project Python modules (everything else is self-contained):
   uitsluitend de browser (toggle "🔕 Meldingen" in de vent-meldmodal, token-gated):
   `{"quiet": bool, "since": ISO, "cleared_at": ISO}`. Adviesberichten geven per call site
   `muted_in_quiet=True` mee (weerbericht, zandbak, maai-, bodem-, raam-advies + dagplan +
-  urgente sluitingen, zonwering, nachtvoorspelling, koelplan, tweeling-nudges,
+  urgente sluitingen, zonwering, nachtvoorspelling, tweeling-nudges,
   verwarmingsexperiment); bij actieve stilte wordt niet verstuurd maar is het gedrag voor
   aanroeper én stdout **exact** dat van een geslaagde verzending (zelfde
   `[telegram] ✓ verzonden`, return True) — elke meld-state stempelt as-if-sent en géén
@@ -1376,7 +1328,7 @@ Seven small cross-project Python modules (everything else is self-contained):
   bestand: data.json ← check_and_notify, mowing_data.json + mowing_state.json ←
   mowing_advisor, window_data.json ← window_advisor, de drie vent-artefacten ← vent_twin;
   lezers: mowing_advisor, gardena_control, weekjournaal, vent_io (`load_window_data`/
-  `load_learned`, dus ook P10/P14) + de dashboards client-side.
+  `load_learned`, dus ook P10) + de dashboards client-side.
 - **`http_util.py`** — `get_json(url, params, timeout=, label=)`: the one GET→JSON transport with
   retry/backoff (5 attempts, 3+8+30+60s — a ~100s window that rides out short TLS-reset/timeout
   bursts) and sanitized error logs, used by all six Open-Meteo fetch sites.
@@ -1398,7 +1350,7 @@ Seven small cross-project Python modules (everything else is self-contained):
 ## Shared secrets (GitHub Actions)
 - `WU_STATION_ID`, `WU_API_KEY` — Weather Underground (soil project + window advisor)
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — soil, sandbox, heating, mowing + window advisor (raam-advies + operational alerts, privé-chat) + vent twin (Project 13: anomalie-nudge + crash-alert, privé-chat)
-- `TELEGRAM_CHAT_GROUP_ID` — weather briefing + night forecast + koelplan (Project 14) + het dagplan van de raam-adviseur (group chat)
+- `TELEGRAM_CHAT_GROUP_ID` — weather briefing + night forecast + het dagplan van de raam-adviseur (group chat)
 - `WU_NEIGHBOUR_IDS` — komma-gescheiden buur-PWS-id's voor de coherentie-toets (Project 7, route A); locatiegegevens, dus nooit in de repo
 - `GIST_ID`, `GIST_TOKEN` — soil project (irrigation log) + mowing advisor (mow log, same Gist) + vent twin (Project 13: opening log `house_openings.json` read-only from Python, plus het action-geschreven openingen-archief `house_openings_<YYYY-MM>.json` én — sinds de privacy-assessment aug 2026 — de twin2-maand-shards `twin2_history_<YYYY-MM>.json`, action-geschreven, read-only voor twin-eval/ml-dataset/tools) + de stille modus (`notify_prefs.json`, browser-geschreven, door álle melders read-only gelezen) + bewatering-automaat (Project 16: `gardena_config.json`, `garden_automation.json`, `gardena_state.json`, de sensor-shards `gardena_history_<YYYY-MM>.json` + tweede schrijver van `irrigations.json`, same Gist); `GIST_TOKEN` also used by the window advisor
 - `GARDENA_APP_KEY`, `GARDENA_APP_SECRET` — Husqvarna Developer Portal-applicatie (Project 16); key = OAuth client_id = X-Api-Key, secret = client_secret

@@ -782,7 +782,7 @@ def test_scenario_override_wint_van_de_routine():
 def test_apply_routines_expliciete_melding_in_het_venster_wint():
     """De log-wint-regel: op de zeldzame avond dat de deur wél opengezet en gemeld wordt
     (de kinderkamer te warm, buiten koeler) mag de routine het eigen rapport niet overschrijven —
-    anders spreken dashboard en koelplan-baseline de gemelde stand tegen. Een melding
+    anders spreken dashboard en scenario-baseline de gemelde stand tegen. Een melding
     van vóór het venster (gistermiddag) telt niet: dan geldt gewoon het dagritme."""
     huis = {"routines": {"nursery_stair": {"state": "dicht", "from_h": 19, "to_h": 8}}}
     t0 = datetime(2026, 8, 13, 22, 0, tzinfo=TZ)          # avond, in het venster

@@ -672,7 +672,7 @@
       "state": "dicht",
       "from_h": 19,
       "to_h": 8,
-      "_waarom": "bewonersbevestiging aug 2026: de deur is 's nachts vrijwel altijd dicht. Zeldzame uitzondering: kamer ruwweg >23° en buiten koeler → deur toch open; precies die interventie rekenen de stapel/all-open-scenario's van de nachtvoorspelling en het koelplan door (scenario-overrides winnen van de routine), en een expliciete melding in de meldmodal wint óók (apply_routines' log-wint-regel)."
+      "_waarom": "bewonersbevestiging aug 2026: de deur is 's nachts vrijwel altijd dicht. Zeldzame uitzondering: kamer ruwweg >23° en buiten koeler → deur toch open; precies die interventie rekenen de stapel/all-open-scenario's van de nachtvoorspelling door (scenario-overrides winnen van de routine), en een expliciete melding in de meldmodal wint óók (apply_routines' log-wint-regel)."
     }
   }
 }

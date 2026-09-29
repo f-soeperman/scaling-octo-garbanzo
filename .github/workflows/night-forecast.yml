@@ -33,6 +33,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          # GitHub's scheduler vertraagt crons soms uren. Een 19:15-fallback die pas
+          # ná middernacht vuurt (gezien: 00:30) viel met een middernacht-venster in
+          # een "nieuwe dag" zonder runs en stuurde het avondbericht nog een keer.
+          # Vóór het doelmoment (18:45) is een schedule-run dus altijd een verlate
+          # cron van gisteren — overslaan.
+          nowm=$(( 10#$(TZ=Europe/Amsterdam date +%H) * 60 + 10#$(TZ=Europe/Amsterdam date +%M) ))
+          if [ "$nowm" -lt 1125 ]; then
+            echo "handled=1" >> "$GITHUB_OUTPUT"
+            echo "Verlate fallback-cron (vóór 18:45 lokaal) — sla over."
+            exit 0
+          fi
           since=$(TZ=Europe/Amsterdam date -d "today 00:00" +%s)
           others=$(gh run list --workflow night-forecast.yml -L 40 \
             --json databaseId,createdAt,conclusion \

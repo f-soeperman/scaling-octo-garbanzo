@@ -220,11 +220,6 @@ jobs:
               dispatch night-forecast.yml
             fi
 
-            # Koelplan — 21:15 (welke ramen/deuren open vannacht)
-            if [ "$nowm" -ge 1275 ] && ! handled_since cooldown-notify.yml "$day_start"; then
-              dispatch cooldown-notify.yml
-            fi
-
             # Weekjournaal — zondag 20:00
             if [ "$(TZ=Europe/Amsterdam date +%u)" = "7" ] && [ "$nowm" -ge 1200 ] \
                && ! handled_since weekjournaal.yml "$day_start"; then

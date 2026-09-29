@@ -508,7 +508,7 @@ def build_timeline(house: dict, weather: dict, log: list[dict], now: datetime,
 
 # Empirische onzekerheidsband (docs/js/uncertainty.json, wekelijks ververst door
 # twin-eval.yml): p10/p90 van (voorspeld − gemeten) per (kamer, horizon-uur). Twee
-# consumenten citeren er één regel uit (de nachtvoorspelling en het koelplan), dus de
+# consumenten lezen hem (de nachtvoorspelling en de dashboardband), dus de
 # loader + celkeuze wonen hier — een puntschatting suggereert een precisie die het
 # model niet heeft. Ontbreekt het bestand → None, en de berichten zwijgen erover.
 UNCERTAINTY_PATH = os.getenv("UNCERTAINTY_PATH", "docs/js/uncertainty.json")
@@ -579,7 +579,7 @@ def apply_routines(timeline: list[dict], house: dict, from_t: datetime | None = 
     **Een expliciete melding ín het lopende routinevenster wint van de routine**
     (`log` meegeven): routines dekken wat níemand meldt, maar op de zeldzame avond dat
     de bewoner de deur wél openzet en dat meldt, mag de routine het eigen rapport niet
-    overschrijven — anders spreken dashboard en koelplan-baseline de gemelde stand
+    overschrijven — anders spreken dashboard en scenario-baseline de gemelde stand
     tegen (dezelfde klasse inconsistentie als de chip-vs-statustekst-bugs van P6).
     Een melding van vóór het venster (bv. gistermiddag) telt niet — dan geldt gewoon
     het dagritme. `log=None` → routine wint altijd (oude gedrag).

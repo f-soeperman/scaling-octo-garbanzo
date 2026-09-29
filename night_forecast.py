@@ -364,7 +364,7 @@ def main(now: datetime | None = None) -> None:
     night_max = max(stats["open"]["max"], stats["dicht"]["max"], stats["all_open"]["max"])
     # Marge rond het 07:00-getal uit de empirische band (ontbreekt het bestand of de
     # mark → geen regel; fail open zoals altijd). Loader + celkeuze wonen in vent_io —
-    # het koelplan (Project 14) citeert dezelfde band.
+    # de 12u-vooruitblik op het dashboard gebruikt dezelfde band.
     h07 = (now + timedelta(days=1)).replace(hour=7, minute=0, second=0, microsecond=0)
     band_07 = vio.band_for(closed_stats["marks"].get(7),
                            (h07 - now).total_seconds() / 3600.0,
