@@ -43,3 +43,9 @@ mowing_state.json
 # dezelfde reden naar de artefact-gist i.p.v. onder docs/.
 data/twin2_history/*.json
 docs/night_verify.json
+
+# Sep 2026: de GARDENA-bodemsensorreeks (Project 16) toont elke bewateringsbeurt
+# als vochtsprong zonder regen — automatische sessies én handmatige beurten.
+# De maand-shards leven daarom als gardena_history_<YYYY-MM>.json in de privé
+# Gist (GIST_ID, zie gardena_control.py); de lokale terugval hoort niet in git.
+data/gardena_history/*.json

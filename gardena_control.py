@@ -35,6 +35,7 @@ groen draait vóórdat de secrets bestaan.
 
 import contextlib
 import functools
+import glob
 import io
 import json
 import math
@@ -46,6 +47,7 @@ import requests
 
 import artefact_io
 import gardena_api as ga
+import gist_io
 from notify import run_guarded, sanitize_error, send_telegram
 from shared_const import TZ, past_local_time, utc_now_iso
 from soil_model import IRRIGATION_RATES as RATES
@@ -69,7 +71,8 @@ SENSOR_STALE_H = 3
 BATTERY_LOW_PCT = 15
 ALERT_COOLDOWN_H = {"stuck_open": 6, "zero_delivery": 6, "schedule_active": 6,
                     "rate_limited": 6, "api_error": 6, "weekly_cap": 6,
-                    "gateway_offline": 24, "sensor_stale": 24, "battery_low": 24}
+                    "gateway_offline": 24, "sensor_stale": 24, "battery_low": 24,
+                    "sensor_archive": 24}
 
 # ── Gist-bestanden (één schrijver per bestand, zie CLAUDE.md Project 16) ─────
 CONFIG_FILE = "gardena_config.json"        # schrijver: bootstrap (eenmalig)
@@ -77,11 +80,16 @@ FLAGS_FILE = "garden_automation.json"      # schrijver: browser (dashboard)
 STATE_FILE = "gardena_state.json"          # schrijver: deze action
 IRRIGATIONS_FILE = "irrigations.json"      # gedeeld met de dashboard-modal
 
-# Sensor-archief: maand-shards, zelfde patroon als data/station_history.
-HISTORY_DIR = os.getenv("GARDENA_HISTORY_DIR", "data/gardena_history")
+# Sensor-archief: maand-shards `gardena_history_<YYYY-MM>.json` in de privé
+# GIST_ID-gist (zie de sectie "Sensor-archief" verderop voor het waarom). De
+# lokale dir is alleen nog de terugval voor tests/bootstrap (env-override
+# GARDENA_HISTORY_DIR) en de bron van de eenmalige migratie.
+_HISTORY_DIR_DEFAULT = "data/gardena_history"
+HISTORY_DIR = os.getenv("GARDENA_HISTORY_DIR", _HISTORY_DIR_DEFAULT)
+HISTORY_GIST_PREFIX = "gardena_history_"
 SHARD_SCHEMA = 1
-# Whitelist — alléén sensor- en sensorbatterij-velden komen in het publieke
-# archief; nooit kraandata, ids of vlagstanden (test bewaakt dit).
+# Whitelist — alléén sensor- en sensorbatterij-velden komen in het archief;
+# nooit kraandata, ids of vlagstanden (test bewaakt dit).
 # "light" is bij de privacy-assessment (aug 2026) geschrapt: het veld was in de
 # praktijk altijd null, en zou zodra de sensor het wél rapporteert een directe
 # buitenactiviteits-proxy in publieke git zetten.
@@ -571,7 +579,32 @@ def build_health(snap: dict, config: dict, now: datetime) -> dict:
     return health
 
 
-# ── Sensor-archief (maand-shards, station_accuracy-patroon) ──────────────────
+# ── Sensor-archief (maand-shards in de privé Gist) ───────────────────────────
+#
+# Tot sep 2026 stonden de shards gecommit onder data/gardena_history/. De
+# veld-whitelist hield kraandata eruit, maar de vochtreeks zelf verraadt elke
+# bewateringsbeurt: een vochtsprong zonder regen ís een beurt. Daarmee lagen de
+# automatische sessies (die stdout juist vormvast verzwijgt) én de handmatige
+# beurten (een gedateerde handeling) alsnog in publieke git. Zelfde klasse als
+# de twin2-kamerreeksen, dus zelfde oplossing: `gardena_history_<YYYY-MM>.json`
+# in de privé GIST_ID-gist, geschreven door uitsluitend deze action (mee in de
+# state-PATCH), met een zelf-uitvoerende migratie van de gecommitte maanden.
+# De lokale dir blijft de terugval voor tests/bootstrap (gitignored).
+
+def _history_gist_active() -> bool:
+    """Gist-modus alleen op het onaangepaste default-pad mét creds — een
+    dir-override (env of gemonkeypatchte HISTORY_DIR) wint altijd, zodat een
+    test of offline tool nooit stilletjes naar de echte Gist schrijft.
+    Zelfde regel als vent_io._history_gist_active."""
+    if HISTORY_DIR != _HISTORY_DIR_DEFAULT:
+        return False
+    return bool(os.environ.get("GIST_ID")
+                and (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")))
+
+
+def _history_name(month: str) -> str:
+    return f"{HISTORY_GIST_PREFIX}{month}.json"
+
 
 def sensor_row(snap: dict, config: dict):
     sensor = (snap.get("sensors") or {}).get(config.get("sensor_id"))
@@ -594,27 +627,44 @@ def _shard_path(month: str) -> str:
     return os.path.join(HISTORY_DIR, f"{month}.json")
 
 
+def _empty_shard(month: str) -> dict:
+    return {"schema": SHARD_SCHEMA, "month": month,
+            "source": "gardena smart sensor", "rows": []}
+
+
+def _read_gist_shard(month: str):
+    """De Gist-maand als dict, of None als het bestand er (nog) niet is.
+    Bewust gist_io.read_file (raist bij netwerkfouten, volgt de raw_url bij
+    truncatie) en geen graceful default: een lege basis voor een
+    read-modify-write zou de maand bij een hikje overschrijven met één rij."""
+    gist_id, token = _gist_env()
+    content = gist_io.read_file(gist_id, _history_name(month), token=token)
+    if content is None:
+        return None
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        return None
+
+
 def load_shard(month: str) -> dict:
+    if _history_gist_active():
+        return _read_gist_shard(month) or _empty_shard(month)
     try:
         with open(_shard_path(month), encoding="utf-8") as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError):
-        return {"schema": SHARD_SCHEMA, "month": month,
-                "source": "gardena smart sensor", "rows": []}
+        return _empty_shard(month)
 
 
-def append_sensor_rows(rows) -> tuple:
+def merge_sensor_rows(shard: dict, rows) -> tuple:
     """Idempotent op de sensor-timestamp `t` (de sensor meldt zich elke
     30–60 min, dus ≤1 verse rij per run); herhaalde observaties werken de
-    bestaande rij bij i.p.v. te stapelen. Geeft (nieuw, bijgewerkt) terug."""
-    by_month = {}
+    bestaande rij bij i.p.v. te stapelen. Muteert `shard`, geeft
+    (nieuw, bijgewerkt) terug."""
     fresh = updated = 0
+    index = {row["t"]: row for row in shard["rows"]}
     for r in rows:
-        month = r["t"][:7]
-        if month not in by_month:
-            by_month[month] = load_shard(month)
-        shard = by_month[month]
-        index = {row["t"]: row for row in shard["rows"]}
         row = {"t": r["t"], **{k: r.get(k) for k in SENSOR_FIELDS}}
         if r["t"] in index:
             if index[r["t"]] != row:
@@ -622,13 +672,80 @@ def append_sensor_rows(rows) -> tuple:
                 updated += 1
         else:
             shard["rows"].append(row)
+            index[r["t"]] = row
             fresh += 1
-    os.makedirs(HISTORY_DIR, exist_ok=True)
-    for shard in by_month.values():
-        shard["rows"].sort(key=lambda row: row["t"])
-        with open(_shard_path(shard["month"]), "w", encoding="utf-8") as f:
-            json.dump(shard, f, ensure_ascii=False, separators=(",", ":"))
+    shard["rows"].sort(key=lambda row: row["t"])
     return fresh, updated
+
+
+def append_sensor_rows(rows) -> dict:
+    """Voeg verse sensorrijen toe aan hun maand-shard(s).
+
+    Gist-modus: geeft {gist-bestandsnaam: json} terug; de aanroeper zet dat in
+    de state-PATCH van deze run (één schrijfmoment per run). Lokale terugval:
+    schrijft de bestanden zelf en geeft {} terug."""
+    by_month = {}
+    for r in rows:
+        month = r["t"][:7]
+        if month not in by_month:
+            by_month[month] = load_shard(month)
+        merge_sensor_rows(by_month[month], [r])
+    bodies = {month: json.dumps(shard, ensure_ascii=False, separators=(",", ":"))
+              for month, shard in by_month.items()}
+    if _history_gist_active():
+        return {_history_name(month): body for month, body in bodies.items()}
+    os.makedirs(HISTORY_DIR, exist_ok=True)
+    for month, body in bodies.items():
+        with open(_shard_path(month), "w", encoding="utf-8") as f:
+            f.write(body)
+    return {}
+
+
+def migrate_sensor_shards() -> int:
+    """Eenmalige, zelf-uitvoerende migratie: staan er nog lokale (gecommitte)
+    maand-shards terwijl de Gist-modus actief is, verhuis ze dan unie-gemerged
+    naar de privé Gist en verwijder de lokale bestanden — pas ná een read-back
+    die bevestigt dat élke rij in de Gist-kopie staat. De workflow commit de
+    verwijdering daarna mee. Idempotent; elke faalroute raist en laat de
+    lokale bestanden staan, zodat de volgende run herkanst. Zelfde opzet als
+    vent_io.migrate_history_shards. Geeft #gemigreerde maandbestanden."""
+    if not _history_gist_active():
+        return 0
+    local, paths = {}, []
+    for path in sorted(glob.glob(os.path.join(HISTORY_DIR, "*.json"))):
+        try:
+            with open(path, encoding="utf-8") as f:
+                shard = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue   # onleesbaar → niet migreren én niet verwijderen
+        local[shard.get("month") or os.path.basename(path)[:-len(".json")]] = shard
+        paths.append(path)
+    if not local:
+        return 0
+
+    to_write = {}
+    for month, shard in local.items():
+        merged = _read_gist_shard(month) or _empty_shard(month)
+        # Unie per `t`; de Gist-kopie (verse appends) wint bij overlap, dus
+        # alleen rijen die de Gist nog niet kent komen erbij.
+        have = {row["t"] for row in merged.get("rows") or []}
+        merged.setdefault("rows", [])
+        merged["rows"].extend(row for row in shard.get("rows") or []
+                              if row.get("t") and row["t"] not in have)
+        merged["rows"].sort(key=lambda row: row["t"])
+        to_write[_history_name(month)] = json.dumps(
+            merged, ensure_ascii=False, separators=(",", ":"))
+    gist_id, token = _gist_env()
+    gist_io.write_files(gist_id, to_write, token=token, timeout=30)
+
+    for month, shard in local.items():
+        after = _read_gist_shard(month) or {}
+        have = {row.get("t") for row in after.get("rows") or []}
+        if not {row["t"] for row in shard.get("rows") or [] if row.get("t")} <= have:
+            raise RuntimeError("read-back mist sensorrijen — lokale shards blijven staan")
+    for path in paths:
+        os.remove(path)
+    return len(paths)
 
 
 # ── Berichtteksten (privé-chat; neutrale bewoordingen) ───────────────────────
@@ -678,6 +795,8 @@ ALERT_TEXT = {
     "sensor_stale": "⚠️ Bewatering-automaat: de bodemsensor heeft al uren niets "
                     "gemeld — batterij/bereik controleren.",
     "battery_low": "⚠️ Bewatering-automaat: batterij bijna leeg ({detail}).",
+    "sensor_archive": "⚠️ Bewatering-automaat: het sensor-archief in de Gist kon "
+                      "niet bijgewerkt worden — de volgende run probeert opnieuw.",
 }
 
 
@@ -869,17 +988,34 @@ def _run(now: datetime, app_key: str, app_secret: str, report) -> None:
     if lows and alert_due(state, "battery_low", now):
         notify(report, ALERT_TEXT["battery_low"].format(detail=", ".join(lows)))
 
-    # 5. Sensor-archief (publieke shards — alleen de gewhiteliste sensorvelden).
+    # 5. Sensor-archief (privé Gist — alleen de gewhiteliste sensorvelden). Een
+    # haperend archief mag de state-PATCH nooit tegenhouden: fout → privé-alert
+    # (cooldown), de rij van dit uur vervalt, de volgende run gaat gewoon door.
+    # Geen eigen logregel per uitkomst — de stdout blijft vormvast.
+    def archive_alert(e: Exception) -> None:
+        if alert_due(state, "sensor_archive", now):
+            send_private(ALERT_TEXT["sensor_archive"] + f"\n({sanitize_error(e)})")
+
+    archive_files = {}
     row = sensor_row(snap, config)
-    if row and report is None:
-        append_sensor_rows([row])
+    if report is None:
+        try:
+            migrate_sensor_shards()
+        except Exception as e:
+            archive_alert(e)
+        if row:
+            try:
+                archive_files = append_sensor_rows([row])
+            except Exception as e:
+                archive_alert(e)
     print("[gardena] archief bijgewerkt")
 
     # 6. Dashboard-info + één atomaire Gist-PATCH (state + evt. registraties).
     state["next"] = {zone: compute_next(zone, flags, soil) for zone in ZONES}
     state["last_updated"] = utc_now_iso()
     if report is None:
-        files = {STATE_FILE: json.dumps(state, ensure_ascii=False, indent=1)}
+        files = {STATE_FILE: json.dumps(state, ensure_ascii=False, indent=1),
+                 **archive_files}
         if pending:
             # Verse read vlak vóór de merge: de modal kan intussen handmatige
             # beurten hebben toegevoegd en de merge is additief.

@@ -23,7 +23,7 @@ on:
         default: '2'
 
 # Eén run tegelijk: twee runs zouden allebei kraan-commando's kunnen sturen
-# en tegelijk de sensor-shards committen.
+# en tegelijk dezelfde sensor-maand in de Gist bijwerken.
 concurrency:
   group: gardena-control
   cancel-in-progress: false
@@ -67,10 +67,9 @@ jobs:
       contents: write
     timeout-minutes: 15
     steps:
-      # Op de branch-tip: deze job leest zijn eigen gecommitte sensor-shards
-      # én docs/data.json van de uurlijkse bodem-run terug, terwijl de
-      # window/vent-loops de hele dag door naar main committen. Zelfde pin en
-      # zelfde reden als daily-check.yml.
+      # Op de branch-tip: de eenmalige shard-migratie (zie hieronder) moet de
+      # actuele boom zien, terwijl de window/vent-loops de hele dag door naar
+      # main committen. Zelfde pin en zelfde reden als daily-check.yml.
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.ref_name }}
@@ -102,11 +101,15 @@ jobs:
         # probeert sowieso opnieuw.
         run: python gardena_control.py
 
-      - name: Commit sensor archive
+      # Het sensor-archief leeft sinds sep 2026 in de privé Gist
+      # (gardena_history_<YYYY-MM>.json) — de vochtreeks toont elke
+      # bewateringsbeurt. Deze stap publiceert alleen nog de verwijdering die
+      # de zelf-uitvoerende migratie in gardena_control.py doet; daarna is hij
+      # een no-op (de lokale terugval is gitignored).
+      - name: Commit sensor archive migration
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # De map bestaat pas na de eerste run mét werkende sensor.
           if [ -d data/gardena_history ]; then
             git add data/gardena_history
           fi
