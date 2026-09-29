@@ -13,14 +13,24 @@ import stat
 import subprocess
 
 import pytest
-import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
 def _guard_script(workflow: str) -> str:
-    wf = yaml.safe_load((ROOT / ".github/workflows" / workflow).read_text())
-    return wf["jobs"]["guard"]["steps"][0]["run"]
+    """Het `run: |`-blok van de guard-job, zonder YAML-parser (pyyaml staat
+    bewust niet in de CI-requirements): de eerste `run: |` ná `  guard:`, tot
+    de inspringing terugvalt."""
+    lines = (ROOT / ".github/workflows" / workflow).read_text().splitlines()
+    start = next(i for i, ln in enumerate(lines) if ln.rstrip() == "  guard:")
+    run = next(i for i in range(start, len(lines)) if lines[i].strip() == "run: |")
+    indent = len(lines[run]) - len(lines[run].lstrip()) + 2
+    body = []
+    for ln in lines[run + 1:]:
+        if ln.strip() and len(ln) - len(ln.lstrip()) < indent:
+            break
+        body.append(ln[indent:])
+    return "\n".join(body)
 
 
 def _run_guard(tmp_path, workflow: str, hhmm: str) -> bool:
