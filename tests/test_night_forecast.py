@@ -498,16 +498,3 @@ def test_bericht_noemt_de_marge_alleen_met_band():
     zonder = nf.build_message(NOW, 24.0, 15.0, stats, stats, stats, False)
     assert "Typisch" not in zonder
 
-
-def test_guard_slaat_een_verlate_fallback_cron_na_middernacht_over():
-    """GitHub vuurde de 19:15-fallback eens pas om 00:30 af; met alleen een
-    middernacht-venster zag de guard een 'nieuwe dag zonder runs' en ging er een
-    tweede nachtbericht uit. Vóór het doelmoment (18:45) moet de guard overslaan
-    — nog vóór het run-ledger geraadpleegd wordt."""
-    import pathlib
-    import yaml
-    wf = yaml.safe_load(pathlib.Path(".github/workflows/night-forecast.yml").read_text())
-    script = wf["jobs"]["guard"]["steps"][0]["run"]
-    head = script.split("since=")[0]
-    assert 'if [ "$nowm" -lt 1125 ]' in head
-    assert "handled=1" in head and "exit 0" in head

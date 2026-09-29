@@ -62,6 +62,17 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           nowm=$(( 10#$(TZ=Europe/Amsterdam date +%H) * 60 + 10#$(TZ=Europe/Amsterdam date +%M) ))
+          # GitHub's scheduler vertraagt crons soms uren. Een avond-cron die pas
+          # ná middernacht vuurt zou hier als ochtend-slot tellen (en een
+          # ochtendbericht om 00:30 sturen); een ochtend-cron die na 12:00 vuurt
+          # als avond-slot met een venster in de toekomst. Buiten de twee
+          # slotvensters (08:00–12:00, 20:00–24:00) is een schedule-run dus altijd
+          # een verlate cron — overslaan.
+          if [ "$nowm" -lt 480 ] || { [ "$nowm" -ge 720 ] && [ "$nowm" -lt 1200 ]; }; then
+            echo "handled=1" >> "$GITHUB_OUTPUT"
+            echo "Verlate fallback-cron (buiten de zandbak-slots) — sla over."
+            exit 0
+          fi
           if [ "$nowm" -lt 720 ]; then
             since=$(TZ=Europe/Amsterdam date -d "today 00:00" +%s)   # ochtend-slot
           else

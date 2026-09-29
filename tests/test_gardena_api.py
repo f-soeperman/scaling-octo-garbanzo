@@ -135,3 +135,58 @@ def test_http_fout_wordt_typed_error(monkeypatch):
     with pytest.raises(ga.GardenaApiError) as exc:
         ga.fetch_location("tok", "key", "loc-1")
     assert exc.value.status == 429
+
+
+class _Status:
+    def __init__(self, status):
+        self.status_code = status
+        self.ok = status < 400
+
+    def json(self):
+        return {"data": {"id": "loc-1"}, "access_token": "tok"}
+
+
+def test_snapshot_herkanst_een_gateway_504(monkeypatch):
+    """GARDENA gaf in sep 2026 op meerdere ochtenden een 504; de leesactie
+    herkanst die (met sleep), en slaagt als de gateway herstelt."""
+    seq = iter([_Status(504), _Status(200)])
+    sleeps = []
+    monkeypatch.setattr(ga.time, "sleep", sleeps.append)
+    monkeypatch.setattr(ga.requests, "get", lambda *a, **k: next(seq))
+    assert ga.fetch_location("tok", "key", "loc-1") == {"data": {"id": "loc-1"},
+                                                          "access_token": "tok"}
+    assert sleeps == [ga.GATEWAY_RETRY_DELAYS[0]]
+
+
+def test_blijvende_504_wordt_na_de_herkansingen_een_typed_error(monkeypatch):
+    calls = []
+    monkeypatch.setattr(ga.time, "sleep", lambda s: None)
+    monkeypatch.setattr(ga.requests, "post",
+                        lambda *a, **k: calls.append(1) or _Status(504))
+    with pytest.raises(ga.GardenaApiError) as exc:
+        ga.mint_token("key", "secret")
+    assert exc.value.status == 504
+    assert len(calls) == 1 + len(ga.GATEWAY_RETRY_DELAYS)
+
+
+@pytest.mark.parametrize("status", [429, 500])
+def test_quotum_en_andere_statussen_worden_niet_herkanst(monkeypatch, status):
+    calls = []
+    monkeypatch.setattr(ga.time, "sleep", lambda s: pytest.fail("mag niet wachten"))
+    monkeypatch.setattr(ga.requests, "get",
+                        lambda *a, **k: calls.append(1) or _Status(status))
+    with pytest.raises(ga.GardenaApiError):
+        ga.fetch_location("tok", "key", "loc-1")
+    assert len(calls) == 1
+
+
+def test_kraancommando_herkanst_een_504_nooit(monkeypatch):
+    """Een 504 zegt niet dat het commando níet is uitgevoerd — opnieuw sturen
+    zou een START kunnen verdubbelen. De volgende snapshot verifieert."""
+    calls = []
+    monkeypatch.setattr(ga.time, "sleep", lambda s: pytest.fail("mag niet wachten"))
+    monkeypatch.setattr(ga.requests, "put",
+                        lambda *a, **k: calls.append(1) or _Status(504))
+    with pytest.raises(ga.GardenaApiError):
+        ga.start_valve("tok", "key", "sid", 600)
+    assert len(calls) == 1

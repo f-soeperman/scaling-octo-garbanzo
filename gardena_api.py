@@ -8,8 +8,9 @@ Quota-regels (hard, zie CLAUDE.md Project 16): het GARDENA-API-budget is
 ~3000 calls/maand (≈1 per 15 min gemiddeld; overschrijding = 429 + ~24u
 lock-out). Daarom: één `GET /locations/{id}` per run als enige leesactie,
 nooit een verificatie-GET na een commando (de volgende uurlijkse snapshot
-verifieert), en retries alléén op transiënte netwerkfouten — nooit op een
-HTTP-status.
+verifieert), en retries alléén op transiënte fouten: netwerkfouten, en voor
+de twee leesacties (token + snapshot) ook een gateway-hapering (502/503/504).
+Nooit op 429 of andere statussen, en nooit op een kraan-commando.
 
 Credentials reizen in headers (Authorization/X-Api-Key), nooit in de URL —
 een requests-exceptie kan dus geen secret lekken. Foutmeldingen gaan bij de
@@ -29,6 +30,16 @@ API_BASE = "https://api.smart.gardena.dev/v2"
 # maakt het erger) en 4xx/5xx worden niet beter van meteen nóg een poging.
 RETRY_DELAYS = (3, 8)
 
+# Gateway-haperingen (502/503/504) aan GARDENA's kant: in sep 2026 gezien als een
+# 504 op een paar ochtenden per week, telkens rond 08:00–09:00 lokaal en bij de
+# volgende uurlijkse run weer weg. Alleen de token-mint en de snapshot-GET
+# herkansen erop — beide idempotent, en twee extra calls op zo'n ochtend vallen
+# weg tegen het maandbudget. Een kraan-commando NIET: een 504 zegt niet dat het
+# commando niet is uitgevoerd, en de volgende run verifieert via de snapshot.
+# Ruimer gespreid dan RETRY_DELAYS: een overbelaste gateway herstelt niet in 3 s.
+GATEWAY_STATUSES = frozenset({502, 503, 504})
+GATEWAY_RETRY_DELAYS = (15, 45)
+
 TIMEOUT = 20
 
 
@@ -41,12 +52,14 @@ class GardenaApiError(Exception):
         self.status = status
 
 
-def _request(method, url: str, **kwargs):
+def _request(method, url: str, *, retry_gateway: bool = False, **kwargs):
     """`method` (requests.get/post/put) met retry op transiënte netwerkfouten
-    en een `GardenaApiError` op elke niet-2xx-status."""
+    en een `GardenaApiError` op elke niet-2xx-status. `retry_gateway` herkanst
+    daarnaast 502/503/504 (alleen voor idempotente leesacties, zie boven)."""
     kwargs.setdefault("timeout", TIMEOUT)
     last_err: Exception | None = None
-    for delay in (0, *RETRY_DELAYS):
+    delays = (0, *(GATEWAY_RETRY_DELAYS if retry_gateway else RETRY_DELAYS))
+    for i, delay in enumerate(delays):
         if delay:
             time.sleep(delay)
         try:
@@ -55,7 +68,11 @@ def _request(method, url: str, **kwargs):
             last_err = e
             continue
         if not r.ok:
-            raise GardenaApiError(r.status_code, f"HTTP {r.status_code} op {url.split('?')[0]}")
+            last_err = GardenaApiError(r.status_code,
+                                       f"HTTP {r.status_code} op {url.split('?')[0]}")
+            if retry_gateway and r.status_code in GATEWAY_STATUSES and i < len(delays) - 1:
+                continue
+            raise last_err
         return r
     raise last_err
 
@@ -66,6 +83,7 @@ def mint_token(app_key: str, app_secret: str) -> str:
     r = _request(
         requests.post,
         AUTH_URL,
+        retry_gateway=True,
         data={"grant_type": "client_credentials",
               "client_id": app_key, "client_secret": app_secret},
         headers={"Accept": "application/json"},
@@ -91,7 +109,7 @@ def fetch_location(token: str, app_key: str, location_id: str) -> dict:
     """De ene leesactie per run: het volledige JSON:API-document met alle
     devices + services (VALVE/SENSOR/COMMON/…) van de locatie."""
     r = _request(requests.get, f"{API_BASE}/locations/{location_id}",
-                 headers=_api_headers(token, app_key))
+                 retry_gateway=True, headers=_api_headers(token, app_key))
     return r.json()
 
 
