@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'none';
+  script-src 'self' https://cdn.jsdelivr.net;
+  style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+  font-src https://fonts.gstatic.com;
+  img-src 'self' data:;
+  connect-src 'self' https://api.github.com;
+  frame-ancestors 'none';
+  base-uri 'none';
+  form-action 'none';
+">
+<title>Potje · Pineapple Under The Sea</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" crossorigin="anonymous">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js" integrity="sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG" crossorigin="anonymous"></script>
+<link rel="stylesheet" href="css/shared.css?v=2">
+  <style>
+    /* Categoriekleuren: gevalideerd met de dataviz-validator op #f3ecd9
+       (lichtheid, chroma, CVD-scheiding, contrast — alle PASS). Gespiegeld in
+       js/potje.js (WHERE_COLORS); status nooit op kleur alleen: elk vak draagt
+       ook een icoon + woord. */
+    :root { --c-wc: #3a8a4a; --c-potje: #2f62b0; --c-ongeluk: #c94b2a; --c-geprobeerd: #9a6cc4; }
+    h1 { font-size: clamp(40px, 5.5vw, 72px); line-height: 0.95; margin: 8px 0 4px; font-weight: 500; letter-spacing: -0.02em; font-style: italic; }
+    .subtitle { font-size: 13px; font-style: italic; color: var(--ink-soft); max-width: 520px; margin-top: 4px; }
+
+    /* ── Registratie ───────────────────────────────────────── */
+    .log-card { margin: 18px 40px 0; }
+    .pick { width: 100%; border-collapse: separate; border-spacing: 8px; table-layout: fixed; }
+    .pick th { font-family: "JetBrains Mono", monospace; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-soft); font-weight: 600; text-align: center; padding: 2px; }
+    .pick th.row-h { text-align: left; font-family: "Cormorant Garamond", Georgia, serif; font-size: 22px; letter-spacing: 0; text-transform: none; color: var(--ink); font-style: italic; width: 22%; }
+    .cell { width: 100%; min-height: 76px; border: 2px solid #2a241b33; background: #fffaf0; cursor: pointer; font-size: 30px; line-height: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; transition: transform 0.08s, background 0.12s; color: var(--ink); }
+    .cell small { font-family: "JetBrains Mono", monospace; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); }
+    .cell:active { transform: scale(0.96); }
+    .cell.on { border-color: var(--c); background: var(--c); color: #fff; }
+    .cell.on small { color: #fff; }
+    .when { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 14px 8px 0; }
+    .chip { padding: 10px 14px; min-height: 44px; font-family: "JetBrains Mono", monospace; font-size: 12px; background: transparent; border: 1px solid #2a241b44; cursor: pointer; color: var(--ink-soft); }
+    .chip.active { background: var(--ink); color: var(--parchment); border-color: var(--ink); }
+    .when input[type=time] { min-height: 44px; font-family: "JetBrains Mono", monospace; font-size: 15px; background: transparent; border: 1px solid #2a241b44; padding: 6px 8px; color: var(--ink); }
+    .save { width: calc(100% - 16px); margin: 14px 8px 0; min-height: 60px; font-size: 14px; }
+    .save:disabled { opacity: 0.4; cursor: not-allowed; }
+    #save-status { margin: 8px; font-size: 13px; font-style: italic; color: var(--ink-soft); min-height: 1em; }
+    .today-list { margin: 6px 8px 0; font-family: "JetBrains Mono", monospace; font-size: 12px; }
+    .today-list .row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px dashed #2a241b22; }
+    .today-list .rm { cursor: pointer; color: var(--clay); background: none; border: none; font-size: 16px; min-width: 44px; min-height: 36px; }
+
+    /* ── Analyse ───────────────────────────────────────────── */
+    .grid-2 { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+    .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; }
+    .tile .big-num { font-family: "JetBrains Mono", monospace; font-size: 34px; font-weight: 600; line-height: 1.1; }
+    .tile .sub { font-size: 13px; font-style: italic; color: var(--ink-soft); margin-top: 2px; }
+    .chart-box { position: relative; height: 260px; margin-top: 8px; }
+    .legend { display: flex; flex-wrap: wrap; gap: 14px; font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--ink-soft); margin-top: 6px; }
+    .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+    .timeline { position: relative; margin-top: 10px; }
+    .lane { position: relative; height: 34px; border-bottom: 1px dashed #2a241b22; }
+    .lane-label { position: absolute; left: 0; top: 8px; font-family: "JetBrains Mono", monospace; font-size: 10px; color: var(--ink-soft); width: 46px; }
+    .lane-track { position: absolute; left: 50px; right: 6px; top: 0; bottom: 0; }
+    .dot { position: absolute; top: 8px; width: 18px; height: 18px; margin-left: -9px; border-radius: 50%; border: 2px solid var(--parchment); }
+    .dot.try { background: transparent !important; border: 3px solid var(--c-geprobeerd); }
+    .rem { position: absolute; top: 2px; bottom: 2px; width: 2px; margin-left: -1px; background: var(--ink); opacity: 0.5; }
+    .axis { position: relative; height: 18px; margin-left: 50px; margin-right: 6px; font-family: "JetBrains Mono", monospace; font-size: 10px; color: var(--ink-soft); }
+    .axis span { position: absolute; transform: translateX(-50%); }
+    .insight { font-size: 15px; margin-top: 10px; line-height: 1.45; }
+    table.data { width: 100%; border-collapse: collapse; font-family: "JetBrains Mono", monospace; font-size: 12px; margin-top: 6px; }
+    table.data th, table.data td { text-align: left; padding: 6px 8px; border-bottom: 1px dashed #2a241b22; }
+    table.data th { color: var(--ink-soft); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; }
+    .range { display: flex; gap: 8px; align-items: center; padding: 18px 40px 0; flex-wrap: wrap; }
+    @media (max-width: 680px) {
+      header { padding: 24px 16px 12px; }
+      .pad, .grid, .range { padding-left: 16px; padding-right: 16px; }
+      .banner { margin: 8px 16px; }
+      .log-card { margin: 14px 8px 0; padding: 14px 6px; }
+      .pick { border-spacing: 5px; }
+      .pick thead { display: none; }   /* elk vak draagt zijn eigen label */
+      .pick th.row-h { font-size: 17px; width: 20%; }
+      .cell { min-height: 68px; font-size: 26px; }
+      .cell small { font-size: 9px; letter-spacing: 0; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="title-row">
+    <div>
+      <div class="corner-mark" id="folio-mark"></div>
+      <h1>Potje</h1>
+      <div class="subtitle">Zindelijkheidstraining — tik aan wat er gebeurde en sla op. 90 minuten na het laatste plasje (30 na een poging) volgt een herinnering in de groep, tussen 07:00 en 19:00.</div>
+    </div>
+    <div style="text-align:right;">
+      <div class="corner-mark">Vandaag</div>
+      <div class="num date-big" id="today-date"></div>
+      <div style="margin-top:8px;display:flex;gap:14px;justify-content:flex-end;flex-wrap:wrap;"><a class="link" href="index.html">Bodem</a><a class="link" href="mowing.html">Gazon</a><a class="link" href="vent.html">Ventilatie</a></div>
+    </div>
+  </div>
+  <div class="hairline-bold"></div>
+</header>
+
+<section style="padding:14px 40px 0;display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+  <button class="btn btn-secondary" id="refresh-btn">↻ Refresh</button>
+  <button class="btn btn-secondary" id="account-btn" title="Gist/token koppelen of wijzigen">🔑 Account</button>
+  <span id="source-label" style="font-size:11px;color:var(--ink-soft);font-style:italic;"></span>
+</section>
+
+<div id="banner-slot"></div>
+
+<div id="app" hidden>
+  <div class="specimen-card log-card">
+    <div class="corner-mark">Registreren</div>
+    <table class="pick" id="pick">
+      <thead>
+        <tr><th></th><th>WC</th><th>Potje</th><th>Ongelukje</th><th>Geprobeerd</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th class="row-h" scope="row">💧 Plassen</th>
+          <td><button class="cell" data-kind="plas" data-where="wc" aria-pressed="false">🚽<small>wc</small></button></td>
+          <td><button class="cell" data-kind="plas" data-where="potje" aria-pressed="false">🪣<small>potje</small></button></td>
+          <td><button class="cell" data-kind="plas" data-where="ongeluk" aria-pressed="false">💦<small>ongelukje</small></button></td>
+          <td><button class="cell" data-kind="plas" data-where="geprobeerd" aria-pressed="false">🤞<small>geprobeerd</small></button></td>
+        </tr>
+        <tr>
+          <th class="row-h" scope="row">💩 Poepen</th>
+          <td><button class="cell" data-kind="poep" data-where="wc" aria-pressed="false">🚽<small>wc</small></button></td>
+          <td><button class="cell" data-kind="poep" data-where="potje" aria-pressed="false">🪣<small>potje</small></button></td>
+          <td><button class="cell" data-kind="poep" data-where="ongeluk" aria-pressed="false">💦<small>ongelukje</small></button></td>
+          <td><button class="cell" data-kind="poep" data-where="geprobeerd" aria-pressed="false">🤞<small>geprobeerd</small></button></td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="when" id="when">
+      <span class="rule-label" style="margin-right:4px;">Wanneer</span>
+      <button class="chip active" data-ago="0">Nu</button>
+      <button class="chip" data-ago="5">−5 min</button>
+      <button class="chip" data-ago="15">−15 min</button>
+      <button class="chip" data-ago="30">−30 min</button>
+      <input type="time" id="when-time" aria-label="Ander tijdstip vandaag">
+    </div>
+    <button class="btn save" id="save-btn" disabled>Opslaan</button>
+    <div id="save-status" role="status"></div>
+    <div class="rule-label" style="margin:10px 8px 0;">Vandaag geregistreerd</div>
+    <div class="today-list" id="today-list"></div>
+  </div>
+
+  <div class="range">
+    <span class="rule-label">Analyse over</span>
+    <button class="chip" data-days="7">7 dagen</button>
+    <button class="chip active" data-days="14">14 dagen</button>
+    <button class="chip" data-days="30">30 dagen</button>
+  </div>
+
+  <div class="grid">
+    <div class="tiles" id="tiles"></div>
+  </div>
+
+  <div class="grid">
+    <div class="specimen-card">
+      <div class="corner-mark">Vandaag</div>
+      <div class="card-title">Tijdlijn</div>
+      <div id="timeline"></div>
+      <div class="legend" id="legend-tl"></div>
+    </div>
+  </div>
+
+  <div class="grid grid-2">
+    <div class="specimen-card">
+      <div class="corner-mark">Plassen per dag</div>
+      <div class="card-title">Waar ging het plasje heen?</div>
+      <div class="legend" id="legend-days"></div>
+      <div class="chart-box"><canvas id="chart-days"></canvas></div>
+    </div>
+    <div class="specimen-card">
+      <div class="corner-mark">Trend</div>
+      <div class="card-title">Droog-percentage</div>
+      <div class="sub" style="font-size:13px;font-style:italic;color:var(--ink-soft);">Plasjes op wc of potje als deel van alle plasjes (ongelukjes meegeteld, pogingen niet). Lijn = 3-daags gemiddelde.</div>
+      <div class="chart-box"><canvas id="chart-rate"></canvas></div>
+    </div>
+  </div>
+
+  <div class="grid grid-2">
+    <div class="specimen-card">
+      <div class="corner-mark">Tijdstip</div>
+      <div class="card-title">Wanneer gaat het mis?</div>
+      <div class="legend" id="legend-hours"></div>
+      <div class="chart-box"><canvas id="chart-hours"></canvas></div>
+    </div>
+    <div class="specimen-card">
+      <div class="corner-mark">Ritme</div>
+      <div class="card-title">Hoe lang houdt hij het droog?</div>
+      <div class="legend" id="legend-gap"></div>
+      <div class="chart-box"><canvas id="chart-gap"></canvas></div>
+      <div class="insight" id="gap-insight"></div>
+    </div>
+  </div>
+
+  <div class="grid grid-2">
+    <div class="specimen-card">
+      <div class="corner-mark">Herinneringen</div>
+      <div class="card-title">Helpt de herinnering?</div>
+      <div id="reminders"></div>
+    </div>
+    <div class="specimen-card">
+      <div class="corner-mark">Poepen</div>
+      <div class="card-title">Poep-overzicht</div>
+      <div id="poop"></div>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <div class="rule-label" style="margin-bottom:6px;">Privé</div>
+  De registraties staan in je eigen privé Gist en zijn alleen zichtbaar met een gekoppeld account. Nergens in de publieke repo of de Actions-logs staat wanneer er iets gebeurde.
+</footer>
+
+<script src="js/theme.js"></script>
+<script src="js/shared.js?v=3"></script>
+<script src="js/potje.js?v=1"></script>
+</body>
+</html>

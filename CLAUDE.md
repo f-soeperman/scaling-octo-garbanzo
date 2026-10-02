@@ -96,7 +96,7 @@ git-historie staan; volledig verwijderen kan alleen met een nieuwe history-squas
 
 ---
 
-This repo contains thirteen independent automation pipelines (P1–P7, P9–P11, P13, P15, P16 — the numbering keeps historical gaps: Projects 8 and 12 were replaced by Project 13 in aug 2026, Project 14 (koelplan) is retired sep 2026), all running on GitHub Actions (most notify via Telegram; Project 7's Telegram is optional, Project 13 sends only an operational anomaly nudge — no advice messages, **Project 15 is dashboard-only** — geen Telegram-advies, alleen de crash-alert, and **Project 16 meldt uitsluitend privé** — start/stop/afwijkingen naar de privé-chat, nooit de groep). They share Telegram/WU/Gist secrets and a few **deliberate read-only** data hand-offs (Project 5 reads Project 1's `data.json`; Project 13 reads Project 6's `window_data.json`; Projects 9/10 reuse Project 13's pure modules (`vent_physics`/`vent_io`, P10 also `vent_forecast`) read-only; Project 11 aggregates the published artefacts of 1/5/7/13; Project 16 reads Project 1's `data.json` and is the only *second writer* of the irrigations-Gist), but are otherwise separate. The daily jobs are fired at their local target time by the **Timing Orchestrator** (`.github/workflows/orchestrator.yml`, a self-driven 15-min klok-loop); each project keeps a ~30–60 min later fallback cron + a dedup guard-job. **Projects 1, 5 en 16 draaien uurlijks** (dedup-venster = het lopende klokuur i.p.v. de dag; 1 en 5 sinds aug 2026) zodat hun dashboards met de dag meebewegen; hun *berichten* schalen niet mee — die vallen op één moment per dag, beslist door het script zelf (zie "Meldmoment" bij Project 1).
+This repo contains fourteen independent automation pipelines (P1–P7, P9–P11, P13, P15–P17 — the numbering keeps historical gaps: Projects 8 and 12 were replaced by Project 13 in aug 2026, Project 14 (koelplan) is retired sep 2026), all running on GitHub Actions (most notify via Telegram; Project 7's Telegram is optional, Project 13 sends only an operational anomaly nudge — no advice messages, **Project 15 is dashboard-only** — geen Telegram-advies, alleen de crash-alert, and **Project 16 meldt uitsluitend privé** — start/stop/afwijkingen naar de privé-chat, nooit de groep, and **Project 17 (potje)** stuurt alleen plas-herinneringen naar de groep vanuit een eigen 5-minutenloop). They share Telegram/WU/Gist secrets and a few **deliberate read-only** data hand-offs (Project 5 reads Project 1's `data.json`; Project 13 reads Project 6's `window_data.json`; Projects 9/10 reuse Project 13's pure modules (`vent_physics`/`vent_io`, P10 also `vent_forecast`) read-only; Project 11 aggregates the published artefacts of 1/5/7/13; Project 16 reads Project 1's `data.json` and is the only *second writer* of the irrigations-Gist), but are otherwise separate. The daily jobs are fired at their local target time by the **Timing Orchestrator** (`.github/workflows/orchestrator.yml`, a self-driven 15-min klok-loop); each project keeps a ~30–60 min later fallback cron + a dedup guard-job. **Projects 1, 5 en 16 draaien uurlijks** (dedup-venster = het lopende klokuur i.p.v. de dag; 1 en 5 sinds aug 2026) zodat hun dashboards met de dag meebewegen; hun *berichten* schalen niet mee — die vallen op één moment per dag, beslist door het script zelf (zie "Meldmoment" bij Project 1).
 
 ---
 
@@ -1242,6 +1242,36 @@ Leest Project 1's `docs/data.json` read-only (het beslissingscriterium) en **sch
 
 ---
 
+## Project 17: Potje (zindelijkheidstraining)
+
+**Goal:** Plas- en poepmomenten van de peuter met één tik registreren (tabel plassen/poepen × wc/potje/ongelukje/geprobeerd), een analysedashboard eronder, en een Telegram-herinnering in de **groep** zodra het tijd is om te laten proberen.
+
+### Files
+- `docs/potje.html` + `docs/js/potje.js` — registratie + analyse, **alleen met gekoppeld account** (GIST_ID + token; zonder koppeling alleen een privé-melding). Schrijft `potty_log.json` met een verse read vlak vóór de PATCH (twee telefoons tegelijk). Bewust géén workflow-dispatch bij opslaan (zie de privacyregel bij Project 1's modal).
+- `potty_reminder.py` — de herinneringsrunner (zuivere beslisfuncties + `run`), `run_guarded` met `fail_threshold=6`.
+- `.github/workflows/potty-reminder.yml` — self-driven loop, 60 iteraties op de 5-minutengrens (~5u), cron-kicks `2,22,42` als restart (het window-notify-patroon), concurrency `potty-reminder`, `contents: read`, checkout gepind op de branch-tip. Commit niets.
+
+### Gist-bestanden (in de `GIST_ID`-Gist) — één schrijver per bestand
+- `potty_log.json` — schrijver: de browser. `{"events": [{"id", "t": ISO met offset, "kind": "plas|poep", "where": "wc|potje|ongeluk|geprobeerd"}]}`.
+- `potty_state.json` — schrijver: de action. `{"reminders": [{"t", "anchor": event-id, "kind": "plas|poging|herhaal"}]}` (afgekapt op `MAX_REMINDER_LOG`); het dashboard leest 'm voor "helpt de herinnering?".
+
+### Herinneringsregels (bewonersbesluiten okt 2026 — do not casually retune)
+- Anker = de laatste **plas**-registratie van vandaag (lokale datum). Echt plasje (wc/potje/ongelukje) → herinnering na `INTERVAL_PEE_MIN` **90**; "geprobeerd" → na `INTERVAL_TRY_MIN` **30**; daarna precies **één** herhaling `INTERVAL_REPEAT_MIN` 30 min na een onbeantwoorde herinnering. Poep telt niet mee.
+- Alleen in `[DAY_START_H 07:00, DAY_END_H 19:00)`. Alleen registraties van vándaag tellen, dus de eerste herinnering van de ochtend komt pas na de eerste registratie. Een moment dat in de nacht viel gaat om 07:00 uit als het niet meer dan `STALE_MIN` 60 te laat is; anders vervalt het stil (ook na loop-uitval).
+- State wordt vóór het bericht geschreven: een kapotte Gist-schrijf mag niet elke 5 minuten hetzelfde bericht opleveren.
+- `docs/js/potje.js` spiegelt de constanten voor de tegel "volgende herinnering"; `tests/test_potty_reminder.py` bewaakt dat ze gelijk blijven.
+
+### Analyse (client-side, periode 7/14/30 dagen)
+Tegels (laatste plasje, volgende herinnering, droog vandaag, droog-% met de vorige periode ernaast, droge reeks), een tijdlijn van vandaag (incl. herinneringen), plassen per dag (gestapeld per uitkomst), het droog-percentage (wc+potje ÷ alle echte plasjes, pogingen niet meegeteld) met een 3-daags gemiddelde, ongelukjes per uur van de dag, de intervalverdeling sinds het vorige plasje (gelukt vs ongelukje, plus een hint als de ongelukjes structureel vóór het 90-minutenmoment vallen), de reactie op herinneringen (binnen 30 min) en een poep-overzicht. Categoriekleuren zijn met de dataviz-validator geijkt op `#f3ecd9`.
+
+### Privacy
+Een plas-/poeplogboek met tijdstempels is gedragsdata (dagritme, en een dag zonder registraties leest als afwezigheid). Daarom: logboek + herinneringslog alleen in de privé Gist, nooit in git of `docs/`; de loop draait constant, ook 's nachts; de stdout is **vormvast** (`potje: controle klaar`, de `[telegram] ✓ verzonden`-regel wordt onderdrukt, het gardena-patroon), en een schrijffout ná een sendbeslissing gaat als privé-alert weg i.p.v. als FATAL in het publieke log. `DRY_RUN=1` schrijft niets en stuurt een eventuele herinnering met `[dry-run]` naar de privé-chat. Berichten noemen geen naam. Muted in de stille modus.
+
+### Relation to other projects
+Volledig onafhankelijk. Hergebruikt `GIST_ID`/`GIST_TOKEN`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_GROUP_ID` (herinnering) en `TELEGRAM_CHAT_ID` (alerts). Geen nieuwe secrets.
+
+---
+
 ## Shared modules: `wu_bias.py`, `om_bias.py`, `notify.py`, `gist_io.py`, `artefact_io.py`, `http_util.py`, `shared_const.py`
 
 Seven small cross-project Python modules (everything else is self-contained):
@@ -1285,7 +1315,7 @@ Seven small cross-project Python modules (everything else is self-contained):
   `{"quiet": bool, "since": ISO, "cleared_at": ISO}`. Adviesberichten geven per call site
   `muted_in_quiet=True` mee (weerbericht, zandbak, maai-, bodem-, raam-advies + dagplan +
   urgente sluitingen, zonwering, nachtvoorspelling, tweeling-nudges,
-  verwarmingsexperiment); bij actieve stilte wordt niet verstuurd maar is het gedrag voor
+  verwarmingsexperiment, potje-herinneringen); bij actieve stilte wordt niet verstuurd maar is het gedrag voor
   aanroeper én stdout **exact** dat van een geslaagde verzending (zelfde
   `[telegram] ✓ verzonden`, return True) — elke meld-state stempelt as-if-sent en géén
   publiek spoor (commit, artefact, log) verschilt van een gewone dag. Dat is de
@@ -1350,9 +1380,9 @@ Seven small cross-project Python modules (everything else is self-contained):
 ## Shared secrets (GitHub Actions)
 - `WU_STATION_ID`, `WU_API_KEY` — Weather Underground (soil project + window advisor)
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — soil, sandbox, heating, mowing + window advisor (raam-advies + operational alerts, privé-chat) + vent twin (Project 13: anomalie-nudge + crash-alert, privé-chat)
-- `TELEGRAM_CHAT_GROUP_ID` — weather briefing + night forecast + het dagplan van de raam-adviseur (group chat)
+- `TELEGRAM_CHAT_GROUP_ID` — weather briefing + night forecast + het dagplan van de raam-adviseur + de potje-herinneringen (Project 17) (group chat)
 - `WU_NEIGHBOUR_IDS` — komma-gescheiden buur-PWS-id's voor de coherentie-toets (Project 7, route A); locatiegegevens, dus nooit in de repo
-- `GIST_ID`, `GIST_TOKEN` — soil project (irrigation log) + mowing advisor (mow log, same Gist) + vent twin (Project 13: opening log `house_openings.json` read-only from Python, plus het action-geschreven openingen-archief `house_openings_<YYYY-MM>.json` én — sinds de privacy-assessment aug 2026 — de twin2-maand-shards `twin2_history_<YYYY-MM>.json`, action-geschreven, read-only voor twin-eval/ml-dataset/tools) + de stille modus (`notify_prefs.json`, browser-geschreven, door álle melders read-only gelezen) + bewatering-automaat (Project 16: `gardena_config.json`, `garden_automation.json`, `gardena_state.json`, de sensor-shards `gardena_history_<YYYY-MM>.json` + tweede schrijver van `irrigations.json`, same Gist); `GIST_TOKEN` also used by the window advisor
+- `GIST_ID`, `GIST_TOKEN` — soil project (irrigation log) + mowing advisor (mow log, same Gist) + vent twin (Project 13: opening log `house_openings.json` read-only from Python, plus het action-geschreven openingen-archief `house_openings_<YYYY-MM>.json` én — sinds de privacy-assessment aug 2026 — de twin2-maand-shards `twin2_history_<YYYY-MM>.json`, action-geschreven, read-only voor twin-eval/ml-dataset/tools) + de stille modus (`notify_prefs.json`, browser-geschreven, door álle melders read-only gelezen) + bewatering-automaat (Project 16: `gardena_config.json`, `garden_automation.json`, `gardena_state.json`, de sensor-shards `gardena_history_<YYYY-MM>.json` + tweede schrijver van `irrigations.json`, same Gist) + zindelijkheidstraining (Project 17: `potty_log.json` browser-geschreven, `potty_state.json` action-geschreven); `GIST_TOKEN` also used by the window advisor
 - `GARDENA_APP_KEY`, `GARDENA_APP_SECRET` — Husqvarna Developer Portal-applicatie (Project 16); key = OAuth client_id = X-Api-Key, secret = client_secret
 - `ARTEFACT_GIST_ID` — de privé artefact-gist voor `data.json`/`mowing_data.json` (privatisering aug 2026, zie `artefact_io.py`), sinds de tweede ronde ook `vent_data.json`/`vent_forecast.json`/`vent_learned.json` (Project 13 — het dashboard zélf is nu token+artefact-gist-gated) en sinds de privacy-sweep óók `window_data.json` (Project 6, met `window.html`/`grafiek.html` gegated) en `mowing_state.json` (Project 5), plus het on-demand rapport `gardena_sensor_eval.txt/.json` (Project 16, geschreven door `gardena-sensor-eval.yml`); auth via het bestaande `GIST_TOKEN`. Zolang het secret niet bestaat draait alles in de lokale-bestand-terugval
 - `TADO_GIST_ID` — **separate secret Gist** for the window advisor: rotating tado refresh token (`tado_token.json`) + per-room advice state, meldgeheugen en dagbudget (`window_state.json`)

@@ -1,0 +1,69 @@
+name: Potje Reminder
+
+on:
+  schedule:
+    # Zelfde opzet als de raam-adviseur: de schedule is alleen een restart-kick.
+    # Elke run is een ~5u-loop die elke 5 minuten potty_reminder.py draait; de
+    # concurrency-guard houdt een kick vast tot de lopende loop klaar is.
+    # Bewust een constante cadans, ook 's nachts: een loop die aan- en uitgaat
+    # met het logboek zou in de publieke Actions-lijst laten zien wanneer er
+    # geregistreerd wordt. Het script zelf zwijgt buiten 07:00–19:00.
+    - cron: "2,22,42 * * * *"
+      timezone: "Europe/Amsterdam"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Eén controle, niets schrijven; een herinnering gaat met [dry-run] naar de privé-chat"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: potty-reminder
+  cancel-in-progress: false
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    # 60 iteraties × 5 min ≈ 5u; ruim onder de 6u-limiet.
+    timeout-minutes: 330
+    steps:
+      # Branch-tip: een kick die uren door de concurrency-guard is vastgehouden
+      # moet de actuele code draaien (zelfde pin als de andere loops).
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run reminder (5-minute loop)
+        env:
+          GIST_ID:                ${{ secrets.GIST_ID }}
+          GIST_TOKEN:             ${{ secrets.GIST_TOKEN }}
+          TELEGRAM_BOT_TOKEN:     ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          # Crash-/schrijfalerts en dry-runs → privé-chat; de herinnering → groep.
+          TELEGRAM_CHAT_ID:       ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_GROUP_ID: ${{ secrets.TELEGRAM_CHAT_GROUP_ID }}
+          DRY_RUN:                ${{ inputs.dry_run && '1' || '' }}
+        run: |
+          if [ "${DRY_RUN}" = "1" ]; then
+            python potty_reminder.py
+            exit 0
+          fi
+          ITERS=60
+          for i in $(seq 1 "${ITERS}"); do
+            python potty_reminder.py || echo "::warning::potty_reminder.py failed this iteration, continuing"
+            if [ "${i}" -lt "${ITERS}" ]; then
+              now=$(date -u +%s)
+              next=$(( (now / 300 + 1) * 300 ))   # volgende 5-minutengrens
+              sleep $(( next - now ))
+            fi
+          done
