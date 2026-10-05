@@ -183,3 +183,31 @@ def test_quiet_fail_open_zonder_gist_creds(quiet_env, monkeypatch):
     monkeypatch.delenv("GH_TOKEN", raising=False)
     assert notify.send_telegram("advies", muted_in_quiet=True) is True
     assert len(posts) == 1
+
+
+def test_send_telegram_message_geeft_message_id(quiet_env, monkeypatch):
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"ok": True, "result": {"message_id": 99}}
+    monkeypatch.setattr(notify.requests, "post", lambda *a, **k: _Resp())
+    _set_prefs(monkeypatch, {"quiet": False})
+    assert notify.send_telegram_message("x") == 99
+    assert notify.send_telegram("x") is True
+
+
+def test_send_telegram_message_stil_geeft_geen_id(quiet_env, monkeypatch):
+    _set_prefs(monkeypatch, {"quiet": True})
+    assert notify.send_telegram_message("x", muted_in_quiet=True) is True
+
+
+@pytest.mark.parametrize("code,expected", [(200, "ok"), (429, "retry"), (502, "retry"),
+                                           (400, "gone")])
+def test_edit_telegram_status(monkeypatch, code, expected):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+
+    class _Resp:
+        status_code = code
+    monkeypatch.setattr(notify.requests, "post", lambda *a, **k: _Resp())
+    assert notify.edit_telegram("c", 5, "tekst") == expected

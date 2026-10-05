@@ -1253,12 +1253,13 @@ Leest Project 1's `docs/data.json` read-only (het beslissingscriterium) en **sch
 
 ### Gist-bestanden (in de `GIST_ID`-Gist) — één schrijver per bestand
 - `potty_log.json` — schrijver: de browser. `{"events": [{"id", "t": ISO met offset, "kind": "plas|poep", "where": "wc|potje|ongeluk|geprobeerd"}]}`.
-- `potty_state.json` — schrijver: de action. `{"reminders": [{"t", "anchor": event-id, "kind": "plas|poging|herhaal"}]}` (afgekapt op `MAX_REMINDER_LOG`); het dashboard leest 'm voor "helpt de herinnering?".
+- `potty_state.json` — schrijver: de action. `{"reminders": [{"t", "anchor": event-id, "kind": "plas|poging|herhaal", "msg_id"?, "text"?, "acked"?}]}` (afgekapt op `MAX_REMINDER_LOG`; `text` alleen zolang het bericht van vandaag nog niet is afgevinkt); het dashboard leest 'm voor "helpt de herinnering?".
 
 ### Herinneringsregels (bewonersbesluiten okt 2026 — do not casually retune)
 - Anker = de laatste **plas**-registratie van vandaag (lokale datum). Echt plasje (wc/potje/ongelukje) → herinnering na `INTERVAL_PEE_MIN` **90**; "geprobeerd" → na `INTERVAL_TRY_MIN` **30**; daarna precies **één** herhaling `INTERVAL_REPEAT_MIN` 30 min na een onbeantwoorde herinnering. Poep telt niet mee.
 - Alleen in `[DAY_START_H 07:00, DAY_END_H 19:00)`. Alleen registraties van vándaag tellen, dus de eerste herinnering van de ochtend komt pas na de eerste registratie. Een moment dat in de nacht viel gaat om 07:00 uit als het niet meer dan `STALE_MIN` 60 te laat is; anders vervalt het stil (ook na loop-uitval).
 - State wordt vóór het bericht geschreven: een kapotte Gist-schrijf mag niet elke 5 minuten hetzelfde bericht opleveren.
+- **Afvinken i.p.v. een extra bericht (okt 2026):** komt er ná een herinnering een plasregistratie binnen (elke uitkomst, óók "geprobeerd"; poep niet), dan bewerkt de loop dat groepsbericht (`notify.edit_telegram` → `editMessageText`, geeft geen nieuwe notificatie): "✅" ervoor + "Geregistreerd om HH:MM (waar)". Een herhaling en de herinnering ervóór vinken samen af. Alleen berichten van vandaag; een edit die op netwerk/429/5xx strandt probeert de volgende iteratie opnieuw, een niet-meer-bewerkbaar bericht telt als klaar. De `message_id` komt uit `notify.send_telegram_message` en wordt ná het versturen in een tweede state-schrijf vastgelegd (mislukt die, dan krijgt alleen dat bericht geen vinkje); in de stille modus is er geen id en dus niets af te vinken. Het afvinkpad raist en print nooit.
 - `docs/js/potje.js` spiegelt de constanten voor de tegel "volgende herinnering"; `tests/test_potty_reminder.py` bewaakt dat ze gelijk blijven.
 
 ### Analyse (client-side, periode 7/14/30 dagen)

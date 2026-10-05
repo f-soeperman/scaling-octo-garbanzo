@@ -164,10 +164,25 @@ def env(monkeypatch):
     monkeypatch.setenv("TELEGRAM_CHAT_GROUP_ID", "group")
     monkeypatch.delenv("DRY_RUN", raising=False)
     sent = []
-    monkeypatch.setattr(pr, "send_telegram",
-                        lambda text, **kw: (print("[telegram] ✓ verzonden"),
-                                            sent.append((text, kw)))[-1] is None)
+
+    def fake_send(text, **kw):
+        print("[telegram] ✓ verzonden")
+        sent.append((text, kw))
+        return 4242 + len(sent)   # message_id
+    monkeypatch.setattr(pr, "send_telegram_message", fake_send)
     return sent
+
+
+@pytest.fixture
+def edits(monkeypatch):
+    calls = []
+
+    def fake_edit(chat_id, message_id, text, **kw):
+        print("[telegram] bewerkt")   # moet door de redirect weggevangen worden
+        calls.append((chat_id, message_id, text))
+        return "ok"
+    monkeypatch.setattr(pr, "edit_telegram", fake_edit)
+    return calls
 
 
 def _run(monkeypatch, capsys, gist, now):
@@ -221,6 +236,95 @@ def test_dry_run_schrijft_niets(env, monkeypatch, capsys):
 def test_zonder_gist_een_noop(env, monkeypatch, capsys):
     monkeypatch.delenv("GIST_ID")
     assert _run(monkeypatch, capsys, FakeGist({}), at(11, 30)) == "potje: controle klaar\n"
+
+
+# ── Afvinken na een registratie ──────────────────────────────────────────────
+
+def test_registratie_na_herinnering_vinkt_het_bericht_af(env, edits, monkeypatch, capsys):
+    log = {"events": [ev(at(10, 0))]}
+    gist = FakeGist({pr.LOG_FILE: json.dumps(log)})
+    _run(monkeypatch, capsys, gist, at(11, 30))
+    rem = json.loads(gist.files[pr.STATE_FILE])["reminders"][-1]
+    assert rem["msg_id"] == 4243 and "Tijd om te plassen" in rem["text"]
+
+    # Nog niets geregistreerd → geen edit.
+    _run(monkeypatch, capsys, gist, at(11, 35))
+    assert edits == []
+
+    log["events"].append(ev(at(11, 40), "potje"))
+    gist.files[pr.LOG_FILE] = json.dumps(log)
+    out = _run(monkeypatch, capsys, gist, at(11, 45))
+    (chat, mid, text), = edits
+    assert chat == "group" and mid == 4243
+    assert text.startswith("✅ 🚽") and "11:40 (op het potje)" in text
+    assert out == "potje: controle klaar\n"
+    assert len(env) == 1, "afvinken mag geen nieuw bericht opleveren"
+    rem = json.loads(gist.files[pr.STATE_FILE])["reminders"][-1]
+    assert rem["acked"].startswith("2026-10-02T11:40") and "text" not in rem
+
+    _run(monkeypatch, capsys, gist, at(11, 50))
+    assert len(edits) == 1, "niet dubbel afvinken"
+
+
+def test_poging_vinkt_herinnering_én_herhaling_af():
+    es = events(ev(at(10, 0)))
+    s = pr.record_reminder({}, pr.decide(es, {}, at(11, 30)), at(11, 30))
+    s = pr.attach_message(s, 1, "eerste")
+    s = pr.record_reminder(s, pr.decide(es, s, at(12, 0)), at(12, 0))
+    s = pr.attach_message(s, 2, "herhaling")
+    es = events(ev(at(10, 0)), ev(at(12, 10), "geprobeerd"))
+    todo = pr.pending_acks(es, s, at(12, 15))
+    assert [i for i, _ in todo] == [0, 1]
+    s = pr.mark_acked(s, todo)
+    assert pr.pending_acks(es, s, at(12, 20)) == []
+
+
+def test_poep_of_registratie_van_vóór_de_herinnering_vinkt_niet_af():
+    es = events(ev(at(10, 0)))
+    s = pr.attach_message(pr.record_reminder({}, pr.decide(es, {}, at(11, 30)), at(11, 30)),
+                          1, "x")
+    es = events(ev(at(10, 0)), ev(at(11, 40), kind="poep"))
+    assert pr.pending_acks(es, s, at(11, 45)) == []
+
+
+def test_berichten_van_gisteren_worden_niet_meer_afgevinkt():
+    es = events(ev(at(10, 0, day=1)))
+    s = pr.record_reminder({}, pr.decide(es, {}, at(11, 30, day=1)), at(11, 30, day=1))
+    s = pr.attach_message(s, 1, "x")
+    es = events(ev(at(10, 0, day=1)), ev(at(8, 0, day=2)))
+    assert pr.pending_acks(es, s, at(8, 5, day=2)) == []
+    # …en hun tekst valt bij de volgende herinnering uit de state.
+    s = pr.record_reminder(s, pr.decide(es, s, at(9, 30, day=2)), at(9, 30, day=2))
+    assert "text" not in s["reminders"][0] and s["reminders"][0]["msg_id"] == 1
+
+
+def test_mislukte_edit_probeert_later_opnieuw(env, monkeypatch, capsys):
+    status = ["retry"]
+    calls = []
+    monkeypatch.setattr(pr, "edit_telegram",
+                        lambda *a, **k: calls.append(a) or status[0])
+    log = {"events": [ev(at(10, 0)), ev(at(11, 40))]}
+    state = pr.attach_message(
+        pr.record_reminder({}, pr.decide(events(ev(at(10, 0))), {}, at(11, 30)), at(11, 30)),
+        7, "x")
+    gist = FakeGist({pr.LOG_FILE: json.dumps(log), pr.STATE_FILE: json.dumps(state)})
+    _run(monkeypatch, capsys, gist, at(11, 45))
+    assert gist.writes == []
+    status[0] = "ok"
+    _run(monkeypatch, capsys, gist, at(11, 50))
+    assert len(calls) == 2 and "acked" in json.loads(gist.files[pr.STATE_FILE])["reminders"][0]
+
+
+def test_afvinkfout_raist_niet_en_print_niets(env, monkeypatch, capsys):
+    def boom(*a, **k):
+        raise RuntimeError("stuk")
+    monkeypatch.setattr(pr, "edit_telegram", boom)
+    state = pr.attach_message(
+        pr.record_reminder({}, pr.decide(events(ev(at(10, 0))), {}, at(11, 30)), at(11, 30)),
+        7, "x")
+    gist = FakeGist({pr.LOG_FILE: json.dumps({"events": [ev(at(10, 0)), ev(at(11, 40))]}),
+                     pr.STATE_FILE: json.dumps(state)})
+    assert _run(monkeypatch, capsys, gist, at(11, 45)) == "potje: controle klaar\n"
 
 
 # ── Browser en runner rekenen met dezelfde constanten ────────────────────────

@@ -32,6 +32,7 @@ import time
 import requests
 
 TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
+TELEGRAM_EDIT_API = "https://api.telegram.org/bot{token}/editMessageText"
 
 RETRY_DELAYS = (2, 4)  # seconds between attempts on transient failures
 
@@ -124,7 +125,29 @@ def send_telegram(
     timeout: int = 20,
     muted_in_quiet: bool = False,
 ) -> bool:
+    """Send a Telegram message — zie :func:`send_telegram_message`."""
+    return bool(send_telegram_message(
+        text, token=token, chat_id=chat_id, parse_mode=parse_mode,
+        disable_preview=disable_preview, timeout=timeout,
+        muted_in_quiet=muted_in_quiet))
+
+
+def send_telegram_message(
+    text: str,
+    *,
+    token: str | None = None,
+    chat_id: str | None = None,
+    parse_mode: str = "HTML",
+    disable_preview: bool = True,
+    timeout: int = 20,
+    muted_in_quiet: bool = False,
+) -> int | bool:
     """Send a Telegram message.
+
+    Als :func:`send_telegram`, maar geeft bij een echte verzending de
+    ``message_id`` terug (een int, altijd truthy) zodat de aanroeper het bericht
+    later met :func:`edit_telegram` kan bijwerken. ``True`` = als verzonden
+    behandeld maar zonder id (stille modus, of een antwoord zonder id).
 
     Returns ``True`` on success, ``False`` on missing credentials or any send
     error. Never raises.
@@ -158,7 +181,7 @@ def send_telegram(
             )
             if r.status_code == 200:
                 print("[telegram] ✓ verzonden")
-                return True
+                return _message_id(r) or True
             # 429/5xx zijn transient → retry; overige 4xx (bad request,
             # verkeerd chat_id) worden niet beter van een retry.
             transient = r.status_code == 429 or r.status_code >= 500
@@ -173,6 +196,44 @@ def send_telegram(
         if attempt < len(RETRY_DELAYS):
             time.sleep(RETRY_DELAYS[attempt])
     return False
+
+
+def _message_id(resp) -> int | None:
+    try:
+        mid = resp.json()["result"]["message_id"]
+    except Exception:
+        return None
+    return mid if isinstance(mid, int) and mid > 0 else None
+
+
+def edit_telegram(
+    chat_id: str,
+    message_id: int,
+    text: str,
+    *,
+    token: str | None = None,
+    parse_mode: str = "HTML",
+    timeout: int = 20,
+) -> str:
+    """Bewerk een eerder verstuurd bericht (geen nieuwe notificatie bij de
+    ontvanger). Eén poging, print niets, raist nooit. Geeft ``"ok"``,
+    ``"retry"`` (netwerk/429/5xx — later opnieuw) of ``"gone"`` (overige 4xx:
+    bericht weg, te oud of al gelijk — opnieuw proberen helpt niet)."""
+    token = token or os.getenv("TELEGRAM_BOT_TOKEN")
+    if not token or not chat_id or not message_id:
+        return "gone"
+    try:
+        r = requests.post(
+            TELEGRAM_EDIT_API.format(token=token),
+            json={"chat_id": chat_id, "message_id": message_id, "text": text,
+                  "parse_mode": parse_mode, "disable_web_page_preview": True},
+            timeout=timeout,
+        )
+    except Exception:
+        return "retry"
+    if r.status_code == 200:
+        return "ok"
+    return "retry" if r.status_code == 429 or r.status_code >= 500 else "gone"
 
 
 def _counter_path(name: str, counter_file: str | None) -> str:

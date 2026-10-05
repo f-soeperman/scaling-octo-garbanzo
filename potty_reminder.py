@@ -9,6 +9,10 @@ Telegram-bericht naar de groep zodra het tijd is om te laten proberen:
 - **30 min** na een poging die niets opleverde ("geprobeerd");
 - **één herhaling** 30 min na een herinnering waar nog niets op volgde.
 
+Komt er ná een herinnering een plasje of poging binnen, dan krijgt dat
+bericht achteraf een vinkje (`editMessageText`: "✅" + wie-wat-wanneer eronder)
+— zo ziet de rest van de groep dat het al geregeld is, zonder extra bericht.
+
 Alleen tussen `DAY_START_H` (07:00) en `DAY_END_H` (19:00) — daarbuiten slaapt
 hij — en alleen op basis van registraties van vandaag: de eerste herinnering
 van de ochtend komt dus pas na de eerste registratie. Een herinnering die meer
@@ -38,7 +42,7 @@ import os
 from datetime import datetime, timedelta
 
 import gist_io
-from notify import run_guarded, sanitize_error, send_telegram
+from notify import edit_telegram, run_guarded, sanitize_error, send_telegram_message
 from shared_const import TZ
 
 LOG_FILE = "potty_log.json"
@@ -163,21 +167,81 @@ def build_message(decision: dict, state: dict, now: datetime) -> str:
 
 
 def record_reminder(state: dict, decision: dict, now: datetime) -> dict:
-    """Nieuwe state met de herinnering erbij (niet-muterend)."""
-    reminders = [r for r in state.get("reminders") or [] if isinstance(r, dict)]
+    """Nieuwe state met de herinnering erbij (niet-muterend). De berichttekst
+    van eerdere dagen valt weg — die is alleen nodig om vandaag af te vinken."""
+    today = now.astimezone(TZ).date()
+    reminders = [r if _is_today(r, today) else {k: v for k, v in r.items() if k != "text"}
+                 for r in state.get("reminders") or [] if isinstance(r, dict)]
     reminders.append({"t": now.astimezone(TZ).isoformat(timespec="seconds"),
                       "anchor": anchor_key(decision["anchor"]),
                       "kind": decision["kind"]})
     return {**state, "reminders": reminders[-MAX_REMINDER_LOG:]}
 
 
+def attach_message(state: dict, message_id: int, text: str) -> dict:
+    """Koppel het verstuurde bericht aan de laatste herinnering (niet-muterend),
+    zodat `pending_acks` het later kan afvinken."""
+    reminders = [dict(r) for r in state.get("reminders") or [] if isinstance(r, dict)]
+    if reminders:
+        reminders[-1].update({"msg_id": message_id, "text": text})
+    return {**state, "reminders": reminders}
+
+
+# ── Afvinken ─────────────────────────────────────────────────────────────────
+
+ACK_WHERE = {"wc": "op de wc", "potje": "op het potje",
+             "ongeluk": "ongelukje", "geprobeerd": "poging"}
+
+
+def _is_today(reminder: dict, today) -> bool:
+    try:
+        return datetime.fromisoformat(str(reminder.get("t"))).astimezone(TZ).date() == today
+    except ValueError:
+        return False
+
+
+def pending_acks(events: list[dict], state: dict, now: datetime) -> list[tuple[int, dict]]:
+    """(index in `reminders`, plas-event) voor elk nog niet afgevinkt bericht van
+    vandaag waarná een plasje of poging is geregistreerd. Een herhaling en de
+    herinnering ervóór vinken dus samen af op dezelfde registratie."""
+    today = now.astimezone(TZ).date()
+    pees = sorted((e for e in events if e["kind"] == "plas" and e["dt"] <= now),
+                  key=lambda e: e["dt"])
+    out = []
+    for i, r in enumerate(state.get("reminders") or []):
+        if (not isinstance(r, dict) or r.get("acked") or not r.get("msg_id")
+                or not r.get("text") or not _is_today(r, today)):
+            continue
+        sent_at = datetime.fromisoformat(str(r["t"]))
+        hit = next((e for e in pees if e["dt"] > sent_at), None)
+        if hit is not None:
+            out.append((i, hit))
+    return out
+
+
+def ack_text(text: str, event: dict) -> str:
+    return (f"✅ {text}\n<i>Geregistreerd om {_hhmm(event['dt'])} "
+            f"({ACK_WHERE.get(event['where'], event['where'])}).</i>")
+
+
+def mark_acked(state: dict, done: list[tuple[int, dict]]) -> dict:
+    """Niet-muterend: afgevinkte herinneringen krijgen `acked` (tijd van de
+    registratie) en verliezen hun `text`."""
+    reminders = [dict(r) if isinstance(r, dict) else r for r in state.get("reminders") or []]
+    for i, e in done:
+        reminders[i].pop("text", None)
+        reminders[i]["acked"] = e["dt"].astimezone(TZ).isoformat(timespec="seconds")
+    return {**state, "reminders": reminders}
+
+
 # ── I/O ──────────────────────────────────────────────────────────────────────
 
-def _quiet_send(text: str, chat_id: str | None, muted: bool) -> bool:
+def _quiet_send(text: str, chat_id: str | None, muted: bool) -> int | bool:
     """Telegram met onderdrukte stdout — de verzonden-regel zou in het publieke
-    log verraden dát er een herinnering uitging (vormvaste log, gardena-patroon)."""
+    log verraden dát er een herinnering uitging (vormvaste log, gardena-patroon).
+    Geeft de message_id terug bij een echte verzending (zie notify)."""
     with contextlib.redirect_stdout(io.StringIO()):
-        return send_telegram(text, chat_id=chat_id, muted_in_quiet=muted)
+        return send_telegram_message(text, chat_id=chat_id, muted_in_quiet=muted)
 
 
 def _loads(content: str | None) -> dict:
@@ -199,6 +263,8 @@ def run(now: datetime | None = None) -> None:
         files = gist_io.read_files(gist_id, token=token)
         events = parse_events(_loads(files.get(LOG_FILE)))
         state = _loads(files.get(STATE_FILE))
+        if not dry:
+            state = _ack(gist_id, token, events, state, now)
         decision = decide(events, state, now)
         if decision is not None:
             text = build_message(decision, state, now)
@@ -215,16 +281,51 @@ def _act(gist_id, token, state, decision, text, now) -> None:
     (een FATAL alleen op send-iteraties is zelf een publiek signaal)."""
     try:
         new_state = record_reminder(state, decision, now)
-        gist_io.write_files(gist_id, {STATE_FILE: json.dumps(new_state, ensure_ascii=False,
-                                                              indent=1)}, token=token)
+        gist_io.write_files(gist_id, {STATE_FILE: _dump(new_state)}, token=token)
     except Exception as e:
         _quiet_send(f"⚠ <b>Potje-herinnering</b>: state niet opgeslagen, "
                     f"herinnering overgeslagen.\n<code>{html.escape(sanitize_error(e))}</code>",
                     None, muted=False)
         return
     group = os.getenv("TELEGRAM_CHAT_GROUP_ID")
-    if group:   # geen stille terugval naar de privé-chat (zelfde keuze als het dagplan)
-        _quiet_send(text, group, muted=True)
+    if not group:   # geen stille terugval naar de privé-chat (zelfde keuze als het dagplan)
+        return
+    mid = _quiet_send(text, group, muted=True)
+    if type(mid) is int:   # bool is ook een int: alleen een échte message_id
+        # Mislukt dit, dan krijgt alleen dit bericht later geen vinkje.
+        with contextlib.suppress(Exception):
+            gist_io.write_files(gist_id, {STATE_FILE: _dump(attach_message(new_state, mid, text))},
+                                token=token)
+
+
+def _ack(gist_id, token, events, state, now) -> dict:
+    """Vink herinneringen af waar inmiddels een registratie op volgde. Raist
+    nooit en print niets: een fout hier zou in het publieke log dateren dát er
+    vandaag geregistreerd is. Een mislukte edit (netwerk) probeert de volgende
+    iteratie opnieuw; een bericht dat niet meer te bewerken is telt als klaar."""
+    group = os.getenv("TELEGRAM_CHAT_GROUP_ID")
+    try:
+        todo = pending_acks(events, state, now)
+        if not group or not todo:
+            return state
+        done = []
+        for i, e in todo:
+            r = state["reminders"][i]
+            with contextlib.redirect_stdout(io.StringIO()):
+                status = edit_telegram(group, r["msg_id"], ack_text(r["text"], e))
+            if status != "retry":
+                done.append((i, e))
+        if not done:
+            return state
+        new_state = mark_acked(state, done)
+        gist_io.write_files(gist_id, {STATE_FILE: _dump(new_state)}, token=token)
+        return new_state
+    except Exception:
+        return state
+
+
+def _dump(state: dict) -> str:
+    return json.dumps(state, ensure_ascii=False, indent=1)
 
 
 def main():
