@@ -1,0 +1,13 @@
+{
+  "experiment": "morning_recovery",
+  "weeks": [
+    {
+      "week": "2026-W41",
+      "arm": "hard",
+      "switched_at": "2026-10-05",
+      "analyse_from": "2026-10-07",
+      "analyse_through": "2026-10-12"
+    }
+  ],
+  "last_updated": "2026-10-05T21:31:38.616363+00:00"
+}
