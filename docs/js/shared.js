@@ -168,10 +168,8 @@ async function artefactReadJSON(filename, fallbackUrl) {
     const r = await fetch(`https://api.github.com/gists/${CONFIG.artefactGistId}`,
       { headers: { Authorization: `token ${CONFIG.githubToken}` }, cache: "no-store" });
     if (r.ok) {
-      const f = (await r.json()).files?.[filename];
-      // Artefacten blijven ruim onder de ~1 MB-truncatiegrens van de Gist-API;
-      // mocht dat ooit schuiven, dan is f.truncated het signaal.
-      if (f?.content) return JSON.parse(f.content);
+      const content = await gistFileText((await r.json()).files?.[filename]);
+      if (content) return JSON.parse(content);
     }
     // Gist geconfigureerd maar (tijdelijk) onbereikbaar → probeer het lokale pad.
   }
@@ -186,7 +184,24 @@ async function gistReadFileContent(filename, fallback = null) {
     { headers: { Authorization: `token ${CONFIG.githubToken}` } });
   if (!r.ok) throw new Error(`Gist fetch: HTTP ${r.status}`);
   const j = await r.json();
-  return j.files?.[filename]?.content ?? fallback;
+  return (await gistFileText(j.files?.[filename])) ?? fallback;
+}
+
+// Content van één Gist-file-record, mét truncation-afhandeling (spiegel van
+// gist_io._file_content). De Gist-API kapt `content` niet alleen af boven ~1 MB
+// per bestand, maar ook zodra de héle gist-respons te groot wordt — dan staat
+// een klein bestand er met `truncated: true` en lege/halve content in. Stil
+// terugvallen op "ontbreekt" zou bij een read-modify-write het hele logboek
+// overschrijven, dus: volg `raw_url`, en lukt dat niet, gooi een fout.
+async function gistFileText(f) {
+  if (!f) return null;
+  if (!f.truncated) return f.content ?? null;
+  if (!f.raw_url) throw new Error(`${f.filename || "Gist-bestand"} is afgekapt en heeft geen raw_url`);
+  // raw_url bevat de revisie-sha (dus al vers) en is voor een geheime gist zonder
+  // token leesbaar — geen Authorization-header, die zou een CORS-preflight vergen.
+  const r = await fetch(f.raw_url, { cache: "no-store" });
+  if (!r.ok) throw new Error(`Gist raw fetch (${f.filename}): HTTP ${r.status}`);
+  return r.text();
 }
 
 async function gistWriteFile(filename, content) {

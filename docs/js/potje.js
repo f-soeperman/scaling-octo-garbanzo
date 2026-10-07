@@ -77,11 +77,12 @@ async function fetchGistFiles() {
     { headers: { Authorization: `token ${CONFIG.githubToken}` }, cache: "no-store" });
   if (!r.ok) throw new Error(`Gist fetch: HTTP ${r.status}`);
   const files = (await r.json()).files || {};
-  // Boven ~1 MB kapt de API `content` af; dat duurt jaren, maar liever een
-  // duidelijke fout dan een halve lijst die bij opslaan de rest wegschrijft.
-  if (files[LOG_FILE]?.truncated) throw new Error("potty_log.json is te groot geworden voor de Gist-API");
-  const parse = (f) => { try { return f?.content ? JSON.parse(f.content) : {}; } catch { return {}; } };
-  return { log: parse(files[LOG_FILE]), state: parse(files[STATE_FILE]) };
+  // De gist deelt de respons met grote shard-bestanden, dus de API kapt ook een
+  // klein logboek af; gistFileText volgt dan raw_url (en gooit liever een fout
+  // dan een halve lijst terug te geven die bij opslaan de rest wegschrijft).
+  const [logText, stateText] = await Promise.all([gistFileText(files[LOG_FILE]), gistFileText(files[STATE_FILE])]);
+  const parse = (t) => { try { return t ? JSON.parse(t) : {}; } catch { return {}; } };
+  return { log: parse(logText), state: parse(stateText) };
 }
 
 function parseEvents(log) {
