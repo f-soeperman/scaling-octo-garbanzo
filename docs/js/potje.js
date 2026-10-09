@@ -26,6 +26,22 @@ const RULES = {
 // Hoe lang na een herinnering een registratie nog als "reactie" telt.
 const RESPONSE_WINDOW_MIN = 30;
 
+// Analyse-drempels (bewonersbesluiten okt 2026). Een dag telt pas mee met
+// minstens MIN_PEES_PER_DAY echte plasjes: wie het niet bijhoudt (oppas) levert
+// anders een "droge dag" met één geslaagd plasje, of een schijnbaar uren lange
+// droge pauze. Geldt voor álle analyses behalve "vandaag".
+const MIN_PEES_PER_DAY = 3;
+const MIN_N = 3;            // minder waarnemingen in een tijdblok/risicogroep → niet op sturen
+const BLOCK_H = 2;          // tijdblokken van 2 uur
+const TARGET_DRY = 0.9;     // ritme: interval waarbij hij in 90% van de keren droog blijft
+// Afbouwsignaal: over de laatste TAPER_DAYS tellende dagen ≥90% droog én
+// ≥50% zelf aangegeven → voorstel om het interval met TAPER_STEP_MIN te verlengen.
+const TAPER_DAYS = 7;
+const TAPER_DRY = 0.9;
+const TAPER_SELF = 0.5;
+const TAPER_STEP_MIN = 15;
+const SELF_COLOR = COLORS.rain;
+
 const WHERES = ["wc", "potje", "ongeluk", "geprobeerd"];
 const WHERE_LABEL = { wc: "wc", potje: "potje", ongeluk: "ongelukje", geprobeerd: "geprobeerd" };
 const WHERE_ICON = { wc: "🚽", potje: "🪣", ongeluk: "💦", geprobeerd: "🤞" };
@@ -35,7 +51,7 @@ const WHERE_COLORS = { wc: "#3a8a4a", potje: "#2f62b0", ongeluk: "#c94b2a", gepr
 const SUCCESS = new Set(["wc", "potje"]);
 const REAL_PEE = new Set(["wc", "potje", "ongeluk"]);
 
-const ui = { selected: { plas: null, poep: null }, ago: 0, days: 14, charts: {} };
+const ui = { selected: { plas: null, poep: null }, self: false, ago: 0, days: 14, charts: {}, counted: new Set(), countedList: [] };
 let store = { events: [], state: {} };
 
 document.getElementById("folio-mark").textContent = `Terroir de Utrecht · Est. ${new Date().getFullYear()} · Potje`;
@@ -128,7 +144,12 @@ document.getElementById("pick").addEventListener("click", (ev) => {
   syncPick();
 });
 
+document.getElementById("self-btn").addEventListener("click", () => { ui.self = !ui.self; syncPick(); });
+
 function syncPick() {
+  const sb = document.getElementById("self-btn");
+  sb.classList.toggle("active", ui.self);
+  sb.setAttribute("aria-pressed", ui.self ? "true" : "false");
   document.querySelectorAll("#pick .cell").forEach((b) => {
     const on = ui.selected[b.dataset.kind] === b.dataset.where;
     b.classList.toggle("on", on);
@@ -170,7 +191,7 @@ document.getElementById("save-btn").addEventListener("click", async () => {
   if (t.getTime() > Date.now() + 60000) { status.textContent = "Dat tijdstip ligt in de toekomst."; return; }
   const fresh = Object.entries(ui.selected)
     .filter(([, where]) => where)
-    .map(([kind, where]) => ({ id: newId(), t: isoLocal(t), kind, where }));
+    .map(([kind, where]) => ({ id: newId(), t: isoLocal(t), kind, where, ...(ui.self ? { self: true } : {}) }));
   const btn = document.getElementById("save-btn");
   btn.disabled = true;
   status.textContent = "Opslaan…";
@@ -181,8 +202,9 @@ document.getElementById("save-btn").addEventListener("click", async () => {
     const events = Array.isArray(log.events) ? log.events : [];
     events.push(...fresh);
     await gistWriteFile(LOG_FILE, JSON.stringify({ events }, null, 1));
-    status.textContent = "✓ Opgeslagen: " + fresh.map((e) => `${KIND_ICON[e.kind]} ${WHERE_LABEL[e.where]}`).join(" + ") + ` om ${hhmm(t)}`;
+    status.textContent = "✓ Opgeslagen: " + fresh.map((e) => `${KIND_ICON[e.kind]} ${WHERE_LABEL[e.where]}`).join(" + ") + (ui.self ? " · 🙋 zelf aangegeven" : "") + ` om ${hhmm(t)}`;
     ui.selected = { plas: null, poep: null };
+    ui.self = false;
     ui.ago = 0;
     document.getElementById("when-time").value = "";
     syncWhen();
@@ -260,19 +282,47 @@ function periodDays(n, endOffset = 0) {
   return out;
 }
 
+const realPee = (e) => e.kind === "plas" && REAL_PEE.has(e.where);
+
 function dryRate(evs) {
-  const real = evs.filter((e) => e.kind === "plas" && REAL_PEE.has(e.where));
+  const real = evs.filter(realPee);
   if (!real.length) return null;
   return real.filter((e) => SUCCESS.has(e.where)).length / real.length;
 }
 
+function selfRate(evs) {
+  const real = evs.filter(realPee);
+  if (!real.length) return null;
+  return real.filter((e) => e.self).length / real.length;
+}
+
+// Dagen met minstens MIN_PEES_PER_DAY echte plasjes (over het hele logboek,
+// zodat "de laatste 3/7 tellende dagen" ook vóór de gekozen periode kan kijken).
+function computeCounted() {
+  const n = {};
+  for (const e of store.events) if (realPee(e)) n[dayKey(e.dt)] = (n[dayKey(e.dt)] || 0) + 1;
+  ui.countedList = Object.keys(n).filter((k) => n[k] >= MIN_PEES_PER_DAY).sort();
+  ui.counted = new Set(ui.countedList);
+}
+
+// Events op de tellende dagen uit `keys`.
+function countedEvents(keys) {
+  const s = new Set(keys.filter((k) => ui.counted.has(k)));
+  return store.events.filter((e) => s.has(dayKey(e.dt)));
+}
+
+const pct = (r) => (r === null ? null : Math.round(r * 100));
+
 function renderAll() {
+  computeCounted();
   renderToday();
   renderTiles();
   renderTimeline();
   renderDayCharts();
+  renderTaper();
   renderHours();
   renderGaps();
+  renderAccidents();
   renderReminders();
   renderPoop();
 }
@@ -283,7 +333,7 @@ function renderToday() {
   const el = document.getElementById("today-list");
   if (!list.length) { el.innerHTML = `<div style="color:var(--ink-soft);font-style:italic;padding:6px 0;">Nog niets vandaag.</div>`; return; }
   el.innerHTML = list.map((e) =>
-    `<div class="row"><span>${hhmm(e.dt)} · ${KIND_ICON[e.kind]} ${WHERE_ICON[e.where]} ${WHERE_LABEL[e.where]}</span>` +
+    `<div class="row"><span>${hhmm(e.dt)} · ${KIND_ICON[e.kind]} ${WHERE_ICON[e.where]} ${WHERE_LABEL[e.where]}${e.self ? " · 🙋 zelf" : ""}</span>` +
     `<button class="rm" data-id="${String(e.id || "").replace(/[^\w-]/g, "")}" aria-label="Verwijderen" title="Verwijderen">✕</button></div>`
   ).join("");
 }
@@ -297,18 +347,20 @@ function renderTiles() {
   const now = new Date();
   const today = dayKey(now);
   const todays = store.events.filter((e) => dayKey(e.dt) === today);
-  const lastPee = [...todays].reverse().find((e) => e.kind === "plas" && REAL_PEE.has(e.where));
-  const realToday = todays.filter((e) => e.kind === "plas" && REAL_PEE.has(e.where));
+  const lastPee = [...todays].reverse().find(realPee);
+  const realToday = todays.filter(realPee);
   const okToday = realToday.filter((e) => SUCCESS.has(e.where)).length;
 
-  const inRange = (keys) => { const s = new Set(keys); return store.events.filter((e) => s.has(dayKey(e.dt))); };
-  const cur = dryRate(inRange(periodDays(ui.days)));
-  const prev = dryRate(inRange(periodDays(ui.days, ui.days)));
-  let trend = "geen vergelijking";
-  if (cur !== null && prev !== null) {
+  const curKeys = periodDays(ui.days), prevKeys = periodDays(ui.days, ui.days);
+  const nCur = curKeys.filter((k) => ui.counted.has(k)).length;
+  const curEv = countedEvents(curKeys), prevEv = countedEvents(prevKeys);
+  const versus = (cur, prev) => {
+    if (cur === null || prev === null) return "geen vergelijking";
     const d = Math.round((cur - prev) * 100);
-    trend = `${d >= 0 ? "▲" : "▼"} ${Math.abs(d)} pt t.o.v. de ${ui.days} dagen ervoor`;
-  }
+    return `${d >= 0 ? "▲" : "▼"} ${Math.abs(d)} pt t.o.v. de ${ui.days} dagen ervoor`;
+  };
+  const cur = dryRate(curEv), curSelf = selfRate(curEv);
+  const counts = `${nCur} van ${ui.days} dagen tellen mee`;
 
   const [remBig, remSub] = reminderText(now);
   document.getElementById("tiles").innerHTML = [
@@ -317,25 +369,19 @@ function renderTiles() {
     tile("Volgende herinnering", remBig, remSub),
     tile("Droog vandaag", realToday.length ? `${okToday}/${realToday.length}` : "—",
       realToday.length ? `${Math.round(okToday / realToday.length * 100)}% op wc of potje` : "nog geen plasjes"),
-    tile(`Droog · ${ui.days} dagen`, cur === null ? "—" : `${Math.round(cur * 100)}%`, trend),
-    tile("Droge reeks", `${dryStreak()}`, "dagen op rij zonder plas-ongelukje"),
+    tile(`Droog · ${ui.days} dagen`, cur === null ? "—" : `${pct(cur)}%`, `${versus(cur, dryRate(prevEv))} · ${counts}`),
+    tile(`Zelf aangegeven · ${ui.days} dagen`, curSelf === null ? "—" : `${pct(curSelf)}%`, `${versus(curSelf, selfRate(prevEv))} · ${counts}`),
+    tile("Droge reeks", `${dryStreak()}`, `tellende dagen op rij zonder ongelukje`),
   ].join("");
 }
 
-// Dagen op rij (terug vanaf vandaag) met registraties maar zonder plas-ongelukje.
-// Een dag zonder enige registratie telt niet mee en breekt de reeks niet.
+// Tellende dagen op rij (terug vanaf vandaag) zonder plas-ongelukje. Een dag
+// die niet meetelt (te weinig plasjes geregistreerd) breekt de reeks niet.
 function dryStreak() {
-  const byDay = {};
-  for (const e of store.events) (byDay[dayKey(e.dt)] ||= []).push(e);
   let streak = 0;
-  const d = new Date(); d.setHours(12, 0, 0, 0);
-  for (let i = 0; i < 365; i++) {
-    const evs = byDay[dayKey(d)];
-    if (evs) {
-      if (evs.some((e) => e.kind === "plas" && e.where === "ongeluk")) break;
-      streak++;
-    }
-    d.setDate(d.getDate() - 1);
+  for (const k of [...ui.countedList].reverse()) {
+    if (store.events.some((e) => dayKey(e.dt) === k && e.kind === "plas" && e.where === "ongeluk")) break;
+    streak++;
   }
   return streak;
 }
@@ -354,8 +400,8 @@ function renderTimeline() {
   const rems = (store.state.reminders || []).map((r) => new Date(r.t)).filter((d) => !isNaN(d) && dayKey(d) === today);
   const lane = (kind, label) => {
     const dots = todays.filter((e) => e.kind === kind).map((e) =>
-      `<div class="dot ${e.where === "geprobeerd" ? "try" : ""}" style="left:${pos(e.dt)}%;background:${WHERE_COLORS[e.where]}" ` +
-      `title="${hhmm(e.dt)} · ${WHERE_LABEL[e.where]}"></div>`).join("");
+      `<div class="dot ${e.where === "geprobeerd" ? "try" : ""} ${e.self ? "self" : ""}" style="left:${pos(e.dt)}%;background:${WHERE_COLORS[e.where]}" ` +
+      `title="${hhmm(e.dt)} · ${WHERE_LABEL[e.where]}${e.self ? " · zelf aangegeven" : ""}"></div>`).join("");
     const ticks = kind === "plas" ? rems.map((d) => `<div class="rem" style="left:${pos(d)}%" title="herinnering ${hhmm(d)}"></div>`).join("") : "";
     return `<div class="lane"><div class="lane-label">${label}</div><div class="lane-track">${ticks}${dots}</div></div>`;
   };
@@ -368,6 +414,7 @@ function renderTimeline() {
     `<div class="axis">${axis}</div>`;
   document.getElementById("legend-tl").innerHTML =
     WHERES.map((k) => `<span><i style="background:${WHERE_COLORS[k]}"></i>${WHERE_LABEL[k]}</span>`).join("") +
+    `<span><i style="background:transparent;border-radius:50%;box-shadow:0 0 0 2px var(--ink)"></i>🙋 zelf aangegeven</span>` +
     `<span><i style="background:var(--ink);opacity:.5;width:2px"></i>herinnering</span>` +
     `<span><i style="background:var(--clay);width:2px"></i>nu</span>`;
 }
@@ -400,98 +447,237 @@ function renderDayCharts() {
     },
   });
 
-  const daily = keys.map((k) => {
-    const r = dryRate(pees.filter((e) => dayKey(e.dt) === k));
-    return r === null ? null : Math.round(r * 100);
+  // Per tellende dag + gemiddelde over de laatste 3 tellende dagen (ook als
+  // die vóór de periode liggen). Niet-tellende dagen krijgen geen punt.
+  const perDay = (fn) => keys.map((k) => (ui.counted.has(k) ? pct(fn(countedEvents([k]))) : null));
+  const rolling = (fn) => keys.map((k) => {
+    const idx = ui.countedList.indexOf(k);
+    if (idx < 0) return null;
+    return pct(fn(countedEvents(ui.countedList.slice(Math.max(0, idx - 2), idx + 1))));
   });
-  const rolling = keys.map((_, i) => {
-    const win = keys.slice(Math.max(0, i - 2), i + 1);
-    const r = dryRate(pees.filter((e) => win.includes(dayKey(e.dt))));
-    return r === null ? null : Math.round(r * 100);
-  });
+  document.getElementById("legend-rate").innerHTML =
+    `<span><i style="background:${COLORS.moss}"></i>droog (doorgetrokken)</span>` +
+    `<span><i style="background:${SELF_COLOR}"></i>🙋 zelf aangegeven (gestippeld)</span>`;
   chart("chart-rate", {
     type: "line",
     data: {
       labels,
       datasets: [
-        { label: "3-daags", data: rolling, borderColor: COLORS.moss, borderWidth: 2, pointRadius: 0, tension: 0.3, spanGaps: true },
-        { label: "per dag", data: daily, borderColor: COLORS.moss, backgroundColor: COLORS.parchment, showLine: false, pointRadius: 4, pointBorderWidth: 2 },
+        { label: "droog · 3 dagen", data: rolling(dryRate), borderColor: COLORS.moss, borderWidth: 2, pointRadius: 0, tension: 0.3, spanGaps: true },
+        { label: "droog · dag", data: perDay(dryRate), borderColor: COLORS.moss, backgroundColor: COLORS.parchment, showLine: false, pointRadius: 4, pointBorderWidth: 2 },
+        { label: "zelf · 3 dagen", data: rolling(selfRate), borderColor: SELF_COLOR, borderWidth: 2, borderDash: [6, 4], pointRadius: 0, tension: 0.3, spanGaps: true },
+        { label: "zelf · dag", data: perDay(selfRate), borderColor: SELF_COLOR, backgroundColor: COLORS.parchment, showLine: false, pointRadius: 3, pointStyle: "rect", pointBorderWidth: 2 },
       ],
     },
     options: {
       maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
-      plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${c.parsed.y ?? "—"}%` } } },
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${c.parsed.y ?? "telt niet mee"}${c.parsed.y === null ? "" : "%"}` } } },
       scales: { x: AXIS, y: { min: 0, max: 100, ...AXIS, ticks: { ...AXIS.ticks, callback: (v) => v + "%" } } },
     },
   });
 }
 
+// Afbouwsignaal: de beslissing "kunnen we het interval verlengen?". Kijkt naar
+// de laatste TAPER_DAYS tellende dagen, los van de gekozen periode.
+function renderTaper() {
+  const el = document.getElementById("taper");
+  const last = ui.countedList.slice(-TAPER_DAYS);
+  if (last.length < TAPER_DAYS) {
+    el.innerHTML = `<b>Afbouwsignaal:</b> nog ${TAPER_DAYS - last.length} tellende dag(en) nodig (dagen met minstens ${MIN_PEES_PER_DAY} plasjes) voor een oordeel.`;
+    return;
+  }
+  const evs = countedEvents(last);
+  const dry = dryRate(evs), self = selfRate(evs);
+  const head = `<b>Afbouwsignaal</b> — laatste ${TAPER_DAYS} tellende dagen: ${pct(dry)}% droog, ${pct(self)}% zelf aangegeven. `;
+  if (dry >= TAPER_DRY && self >= TAPER_SELF) {
+    el.innerHTML = head + `Beide drempels gehaald: je kunt overwegen het interval te verlengen van ${RULES.INTERVAL_PEE_MIN} naar <b>${RULES.INTERVAL_PEE_MIN + TAPER_STEP_MIN} min</b>.`;
+    return;
+  }
+  const missing = [];
+  if (dry < TAPER_DRY) missing.push(`droog naar ≥${pct(TAPER_DRY)}%`);
+  if (self < TAPER_SELF) missing.push(`zelf aangegeven naar ≥${pct(TAPER_SELF)}%`);
+  el.innerHTML = head + `Nog niet verlengen: ${missing.join(" en ")}.`;
+}
+
+// Welk deel van de plasjes in elk blok van 2 uur een ongelukje was. Absolute
+// aantallen zeggen weinig (op drukke uren gebeurt gewoon meer), de verhouding wel.
 function renderHours() {
-  const keys = new Set(periodDays(ui.days));
-  const hours = [];
-  for (let h = 6; h <= 20; h++) hours.push(h);
-  const pees = store.events.filter((e) => e.kind === "plas" && keys.has(dayKey(e.dt)));
-  const sets = ["wc", "potje", "ongeluk"];
-  legend("legend-hours", sets);
+  const pees = countedEvents(periodDays(ui.days)).filter(realPee);
+  const blockOf = (e) => Math.floor(e.dt.getHours() / BLOCK_H) * BLOCK_H;
+  const present = pees.map(blockOf);
+  const lo = Math.min(6, ...present), hi = Math.max(18, ...present);
+  const blocks = [];
+  for (let b = lo; b <= hi; b += BLOCK_H) {
+    const inB = pees.filter((e) => blockOf(e) === b);
+    const acc = inB.filter((e) => e.where === "ongeluk").length;
+    blocks.push({ b, n: inB.length, acc, rate: inB.length ? Math.round(acc / inB.length * 100) : null });
+  }
+  const span = (b) => `${pad(b)}–${pad((b + BLOCK_H) % 24)}`;
   chart("chart-hours", {
     type: "bar",
     data: {
-      labels: hours.map((h) => pad(h) + "u"),
-      datasets: sets.map((w) => ({ label: WHERE_LABEL[w], data: hours.map((h) => pees.filter((e) => e.where === w && e.dt.getHours() === h).length), backgroundColor: WHERE_COLORS[w], ...BAR })),
+      labels: blocks.map((x) => [span(x.b), x.n ? `${x.acc}/${x.n}` : "—"]),
+      datasets: [{
+        label: "ongelukje",
+        data: blocks.map((x) => x.rate),
+        backgroundColor: blocks.map((x) => (x.n >= MIN_N ? WHERE_COLORS.ongeluk : WHERE_COLORS.ongeluk + "4d")),
+        ...BAR, maxBarThickness: 40,
+      }],
     },
     options: {
-      maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
-      plugins: { legend: { display: false } },
-      scales: { x: { stacked: true, ...AXIS }, y: { stacked: true, beginAtZero: true, ...AXIS, ticks: { ...AXIS.ticks, precision: 0 } } },
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: {
+          title: (c) => `${span(blocks[c[0].dataIndex].b)} uur`,
+          label: (c) => { const x = blocks[c.dataIndex]; return `${x.rate}% ongelukje (${x.acc} van ${x.n})${x.n < MIN_N ? " · te weinig data" : ""}`; },
+        } },
+      },
+      scales: {
+        x: { ...AXIS, ticks: { ...AXIS.ticks, maxRotation: 0, autoSkip: false, font: { family: "JetBrains Mono", size: 9 } } },
+        y: { min: 0, max: 100, ...AXIS, ticks: { ...AXIS.ticks, callback: (v) => v + "%" } },
+      },
     },
   });
+  const solid = blocks.filter((x) => x.n >= MIN_N);
+  const el = document.getElementById("hours-insight");
+  if (!solid.length) { el.innerHTML = "Nog te weinig plasjes per blok voor een uitspraak."; return; }
+  const worst = solid.reduce((a, x) => (x.rate > a.rate ? x : a));
+  el.innerHTML = worst.acc
+    ? `Meeste kans op een ongelukje: <b>${span(worst.b)}</b> (${worst.rate}%, ${worst.acc} van ${worst.n}). Dat is het moment om extra op te letten.`
+    : `Geen ongelukjes in de blokken met genoeg plasjes.`;
 }
 
-// Minuten sinds het vorige echte plasje (zelfde dag), per uitkomst. Antwoordt
-// op "is 90 minuten het goede interval?": vallen de ongelukjes vóór 90 min,
-// dan komt de herinnering structureel te laat.
-function renderGaps() {
-  const keys = new Set(periodDays(ui.days));
-  const real = store.events.filter((e) => e.kind === "plas" && REAL_PEE.has(e.where));
-  const gaps = { ok: [], acc: [] };
+// Tussenpozen tussen opeenvolgende echte plasjes op dezelfde tellende dag.
+// Een ongelukje is de "gebeurtenis"; een gelukt plasje is gecensureerd: hij was
+// toen nog droog, maar werd erop gezet — hoe lang hij het nog had volgehouden
+// weten we niet. Pogingen ("geprobeerd") breken een tussenpoos niet.
+function peeIntervals(keys) {
+  const ks = new Set(keys.filter((k) => ui.counted.has(k)));
+  const real = store.events.filter(realPee);
+  const out = [];
   for (let i = 1; i < real.length; i++) {
     const a = real[i - 1], b = real[i];
-    if (!keys.has(dayKey(b.dt)) || dayKey(a.dt) !== dayKey(b.dt)) continue;
-    (SUCCESS.has(b.where) ? gaps.ok : gaps.acc).push(minutesBetween(a.dt, b.dt));
+    if (!ks.has(dayKey(b.dt)) || dayKey(a.dt) !== dayKey(b.dt)) continue;
+    out.push({ min: minutesBetween(a.dt, b.dt), event: b.where === "ongeluk" });
   }
-  const edges = [0, 30, 60, 90, 120, 150, 180];
-  const labels = edges.map((e, i) => i < edges.length - 1 ? `${e}–${edges[i + 1]}` : `${e}+`);
-  const bin = (xs) => edges.map((e, i) => xs.filter((x) => x >= e && (i === edges.length - 1 || x < edges[i + 1])).length);
+  return out;
+}
+
+// Kaplan-Meier: kans dat hij na t minuten nog droog is. De curve stopt waar
+// minder dan MIN_N tussenpozen nog "in beeld" zijn — daarna is het ruis.
+function kaplanMeier(ivs) {
+  const sorted = [...ivs].sort((a, b) => a.min - b.min);
+  let atRisk = sorted.length, S = 1, end = 0, t90 = null;
+  const points = [{ x: 0, y: 100, n: atRisk }];
+  for (let i = 0; i < sorted.length;) {
+    if (atRisk < MIN_N) break;
+    const t = sorted[i].min;
+    let d = 0, c = 0;
+    while (i < sorted.length && sorted[i].min === t) { sorted[i].event ? d++ : c++; i++; }
+    if (d) {
+      S *= 1 - d / atRisk;
+      points.push({ x: t, y: S * 100, n: atRisk });
+      if (t90 === null && S < TARGET_DRY) t90 = t;
+    }
+    end = t;
+    atRisk -= d + c;
+  }
+  points.push({ x: end, y: S * 100, n: atRisk });
+  return { points, end, t90, S };
+}
+
+function renderGaps() {
+  const ivs = peeIntervals(periodDays(ui.days));
+  const km = kaplanMeier(ivs);
+  const xMax = Math.max(120, Math.ceil((km.end + 15) / 30) * 30);
+  const ref = { borderColor: COLORS.inkSoft, borderWidth: 1, borderDash: [4, 4], pointRadius: 0, fill: false };
   document.getElementById("legend-gap").innerHTML =
-    `<span><i style="background:${WHERE_COLORS.potje}"></i>gelukt (wc/potje)</span>` +
-    `<span><i style="background:${WHERE_COLORS.ongeluk}"></i>ongelukje</span>`;
+    `<span><i style="background:${COLORS.moss}"></i>kans nog droog</span>` +
+    `<span><i style="background:${COLORS.inkSoft};height:2px"></i>doel ${pct(TARGET_DRY)}% · herinnering ${RULES.INTERVAL_PEE_MIN} min</span>`;
   chart("chart-gap", {
-    type: "bar",
+    type: "line",
     data: {
-      labels,
       datasets: [
-        { label: "gelukt", data: bin(gaps.ok), backgroundColor: WHERE_COLORS.potje, ...BAR },
-        { label: "ongelukje", data: bin(gaps.acc), backgroundColor: WHERE_COLORS.ongeluk, ...BAR },
+        { label: "kans nog droog", data: km.points, borderColor: COLORS.moss, backgroundColor: COLORS.moss + "22", borderWidth: 2.5, stepped: true, pointRadius: 0, fill: "origin" },
+        { label: "_doel", data: [{ x: 0, y: TARGET_DRY * 100 }, { x: xMax, y: TARGET_DRY * 100 }], ...ref },
+        { label: "_herinnering", data: [{ x: RULES.INTERVAL_PEE_MIN, y: 0 }, { x: RULES.INTERVAL_PEE_MIN, y: 100 }], ...ref },
       ],
     },
     options: {
-      maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
-      plugins: { legend: { display: false }, tooltip: { callbacks: { title: (c) => `${c[0].label} min na het vorige plasje` } } },
-      scales: { x: { ...AXIS, title: { display: true, text: "minuten sinds vorig plasje", color: COLORS.inkSoft, font: { family: "JetBrains Mono", size: 10 } } }, y: { beginAtZero: true, ...AXIS, ticks: { ...AXIS.ticks, precision: 0 } } },
+      maintainAspectRatio: false, interaction: { mode: "nearest", intersect: false, axis: "x" },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          filter: (c) => !c.dataset.label.startsWith("_"),
+          callbacks: {
+            title: (c) => `${Math.round(c[0].parsed.x)} min na het vorige plasje`,
+            label: (c) => `${Math.round(c.parsed.y)}% nog droog (${c.raw.n} tussenpozen in beeld)`,
+          },
+        },
+      },
+      scales: {
+        x: { type: "linear", min: 0, max: xMax, ...AXIS, ticks: { ...AXIS.ticks, stepSize: 30 },
+          title: { display: true, text: "minuten sinds vorig plasje", color: COLORS.inkSoft, font: { family: "JetBrains Mono", size: 10 } } },
+        y: { min: 0, max: 100, ...AXIS, ticks: { ...AXIS.ticks, callback: (v) => v + "%" } },
+      },
     },
   });
-  const mOk = median(gaps.ok), mAcc = median(gaps.acc);
-  let txt = "";
-  if (mOk !== null) txt += `Geslaagde plasjes kwamen mediaan <b>${Math.round(mOk)} min</b> na het vorige. `;
-  if (mAcc !== null) txt += `Ongelukjes mediaan na <b>${Math.round(mAcc)} min</b>. `;
-  if (gaps.acc.length >= 3 && mAcc < RULES.INTERVAL_PEE_MIN) {
-    txt += `De meeste ongelukjes vallen vóór de herinnering (${RULES.INTERVAL_PEE_MIN} min) — een korter interval, bijvoorbeeld ~${Math.max(30, Math.round((mAcc - 10) / 15) * 15)} min, kan helpen.`;
-  } else if (gaps.acc.length >= 3) {
-    txt += `De ongelukjes vallen ná het herinneringsmoment — het interval lijkt goed; let vooral op of er na de herinnering ook echt geprobeerd wordt.`;
-  } else if (!txt) {
-    txt = "Nog te weinig plasjes op één dag om het ritme te zien.";
+
+  const el = document.getElementById("gap-insight");
+  const nAcc = ivs.filter((x) => x.event).length;
+  if (ivs.length < MIN_N) { el.innerHTML = "Nog te weinig tussenpozen (op dagen met minstens 3 plasjes) om het ritme te zien."; return; }
+  const base = `Op basis van ${ivs.length} tussenpozen, waarvan ${nAcc} eindigden in een ongelukje. `;
+  const cur = RULES.INTERVAL_PEE_MIN;
+  if (km.t90 !== null) {
+    const rec = Math.max(30, Math.floor(km.t90 / 15) * 15);
+    const cmp = rec < cur ? `korter dan de huidige ${cur} min — overweeg de herinnering te vervroegen.`
+      : rec > cur ? `de huidige ${cur} min zit daar ruim binnen.`
+        : `gelijk aan de huidige ${cur} min.`;
+    el.innerHTML = base + `Na <b>${Math.round(km.t90)} min</b> zakt de kans op droog onder de ${pct(TARGET_DRY)}%. ` +
+      `Voor ${pct(TARGET_DRY)}% droog past een interval van ~<b>${rec} min</b> — ${cmp}`;
+  } else {
+    el.innerHTML = base + `Tot <b>${Math.round(km.end)} min</b> blijft hij in minstens ${pct(TARGET_DRY)}% van de keren droog` +
+      (km.end >= cur ? ` — de huidige ${cur} min past. ` : `. `) +
+      `Daarboven weten we nog te weinig: hij wordt er meestal eerder op gezet.`;
   }
-  document.getElementById("gap-insight").innerHTML = txt;
+}
+
+// Ongelukjes gesplitst op wat eraan voorafging: viel het vóór de eerste
+// herinnering (interval te lang) of ná een herinnering (die niet of niet op
+// tijd werd opgevolgd)? Dat zijn twee verschillende knoppen om aan te draaien.
+function renderAccidents() {
+  const ks = new Set(periodDays(ui.days).filter((k) => ui.counted.has(k)));
+  const real = store.events.filter(realPee);
+  const rems = (store.state.reminders || []).map((r) => new Date(r.t)).filter((d) => !isNaN(d));
+  const before = [], after = [];
+  let first = 0;
+  real.forEach((b, i) => {
+    if (b.where !== "ongeluk" || !ks.has(dayKey(b.dt))) return;
+    const a = i > 0 && dayKey(real[i - 1].dt) === dayKey(b.dt) ? real[i - 1] : null;
+    if (!a) { first++; return; }
+    const rem = rems.filter((r) => r > a.dt && r <= b.dt).sort((x, y) => x - y)[0];
+    if (rem) after.push(minutesBetween(rem, b.dt));
+    else before.push(minutesBetween(a.dt, b.dt));
+  });
+  const el = document.getElementById("accidents");
+  const total = before.length + after.length + first;
+  if (!total) { el.innerHTML = `<p class="insight" style="font-style:italic;color:var(--ink-soft)">Geen ongelukjes op de tellende dagen in deze periode.</p>`; return; }
+  const med = (xs) => (xs.length ? `${Math.round(median(xs))} min` : "—");
+  let txt = "";
+  if (before.length + after.length >= MIN_N) {
+    txt = before.length > after.length
+      ? "Vooral <b>vóór</b> de herinnering: het interval is aan de lange kant."
+      : after.length > before.length
+        ? "Vooral <b>ná</b> een herinnering: het interval klopt, het opvolgen van de herinnering is het aandachtspunt."
+        : "Gemengd beeld: evenveel vóór als ná de herinnering.";
+  }
+  el.innerHTML =
+    `<table class="data"><thead><tr><th>Wanneer</th><th>Aantal</th><th>Mediaan</th></tr></thead><tbody>` +
+    `<tr><td>⏳ vóór de herinnering</td><td>${before.length}</td><td>${med(before)} na vorig plasje</td></tr>` +
+    `<tr><td>🔔 ná een herinnering</td><td>${after.length}</td><td>${med(after)} na de herinnering</td></tr>` +
+    `<tr><td>🌅 eerste van de dag</td><td>${first}</td><td>—</td></tr>` +
+    `</tbody></table>` + (txt ? `<p class="insight">${txt}</p>` : "");
 }
 
 function renderReminders() {

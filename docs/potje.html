@@ -62,6 +62,11 @@
     .lane-track { position: absolute; left: 50px; right: 6px; top: 0; bottom: 0; }
     .dot { position: absolute; top: 8px; width: 18px; height: 18px; margin-left: -9px; border-radius: 50%; border: 2px solid var(--parchment); }
     .dot.try { background: transparent !important; border: 3px solid var(--c-geprobeerd); }
+    /* Zelf aangegeven: een donkere ring om de stip — vorm, niet alleen kleur. */
+    .dot.self { box-shadow: 0 0 0 2px var(--ink); }
+    .self-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 8px 0; }
+    .self-row .hint { font-size: 13px; font-style: italic; color: var(--ink-soft); }
+    .card-sub { font-size: 13px; font-style: italic; color: var(--ink-soft); }
     .rem { position: absolute; top: 2px; bottom: 2px; width: 2px; margin-left: -1px; background: var(--ink); opacity: 0.5; }
     .axis { position: relative; height: 18px; margin-left: 50px; margin-right: 6px; font-family: "JetBrains Mono", monospace; font-size: 10px; color: var(--ink-soft); }
     .axis span { position: absolute; transform: translateX(-50%); }
@@ -133,6 +138,10 @@
         </tr>
       </tbody>
     </table>
+    <div class="self-row">
+      <button class="chip" id="self-btn" aria-pressed="false">🙋 zelf aangegeven</button>
+      <span class="hint">aanzetten als hij zelf zei dat hij moest</span>
+    </div>
     <div class="when" id="when">
       <span class="rule-label" style="margin-right:4px;">Wanneer</span>
       <button class="chip active" data-ago="0">Nu</button>
@@ -176,9 +185,11 @@
     </div>
     <div class="specimen-card">
       <div class="corner-mark">Trend</div>
-      <div class="card-title">Droog-percentage</div>
-      <div class="sub" style="font-size:13px;font-style:italic;color:var(--ink-soft);">Plasjes op wc of potje als deel van alle plasjes (ongelukjes meegeteld, pogingen niet). Lijn = 3-daags gemiddelde.</div>
+      <div class="card-title">Droog &amp; zelf aangegeven</div>
+      <div class="card-sub">Droog = plasjes op wc of potje als deel van alle plasjes (ongelukjes meegeteld, pogingen niet). Zelf = deel dat hij zelf aangaf. Alleen dagen met minstens 3 plasjes tellen mee; lijn = gemiddelde over de laatste 3 tellende dagen.</div>
+      <div class="legend" id="legend-rate"></div>
       <div class="chart-box"><canvas id="chart-rate"></canvas></div>
+      <div class="insight" id="taper"></div>
     </div>
   </div>
 
@@ -186,15 +197,19 @@
     <div class="specimen-card">
       <div class="corner-mark">Tijdstip</div>
       <div class="card-title">Wanneer gaat het mis?</div>
-      <div class="legend" id="legend-hours"></div>
+      <div class="card-sub">Per blok van 2 uur: welk deel van de plasjes een ongelukje was. Onder elk blok: ongelukjes/plasjes. Vaag = minder dan 3 plasjes in dat blok, te weinig om op te sturen.</div>
       <div class="chart-box"><canvas id="chart-hours"></canvas></div>
+      <div class="insight" id="hours-insight"></div>
     </div>
     <div class="specimen-card">
       <div class="corner-mark">Ritme</div>
       <div class="card-title">Hoe lang houdt hij het droog?</div>
+      <div class="card-sub">Kans dat hij na X minuten sinds het vorige plasje nog droog is. Alleen een ongelukje laat de lijn zakken; een gelukt plasje telt als "tot hier droog" — hij werd er toen op gezet, hoe lang hij het nog had volgehouden weten we niet.</div>
       <div class="legend" id="legend-gap"></div>
       <div class="chart-box"><canvas id="chart-gap"></canvas></div>
       <div class="insight" id="gap-insight"></div>
+      <div class="rule-label" style="margin-top:14px;">Ongelukjes: vóór of ná de herinnering?</div>
+      <div id="accidents"></div>
     </div>
   </div>
 
@@ -219,6 +234,6 @@
 
 <script src="js/theme.js"></script>
 <script src="js/shared.js?v=4"></script>
-<script src="js/potje.js?v=2"></script>
+<script src="js/potje.js?v=3"></script>
 </body>
 </html>

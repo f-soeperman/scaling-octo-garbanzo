@@ -35,6 +35,16 @@ def test_herinnering_90_min_na_een_plasje():
     assert d and d["kind"] == "plas"
 
 
+def test_zelf_aangegeven_veld_verandert_de_herinnering_niet():
+    """Het dashboard zet `self: true` op een registratie (okt 2026); dat is
+    alleen analyse-informatie en moet het anker en het interval laten staan."""
+    e = ev(at(10, 0))
+    e["self"] = True
+    d = pr.decide(events(e), {}, at(11, 30))
+    assert d and d["kind"] == "plas"
+    assert pr.decide(events(e), {}, at(11, 25)) is None
+
+
 @pytest.mark.parametrize("where", ["wc", "potje", "ongeluk"])
 def test_elk_echt_plasje_zet_de_klok(where):
     d = pr.decide(events(ev(at(10, 0), where)), {}, at(11, 30))
