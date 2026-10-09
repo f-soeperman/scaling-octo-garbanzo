@@ -5,6 +5,8 @@ on:
     # Zelfde opzet als de raam-adviseur: de schedule is alleen een restart-kick.
     # Elke run is een ~5u-loop die elke 5 minuten potty_reminder.py draait; de
     # concurrency-guard houdt een kick vast tot de lopende loop klaar is.
+    # De loop dispatcht aan het eind zelf zijn opvolger; de cron is daarnaast
+    # alleen nog het vangnet (GitHub liet overdag kicks tot ~2,5u vallen).
     # Bewust een constante cadans, ook 's nachts: een loop die aan- en uitgaat
     # met het logboek zou in de publieke Actions-lijst laten zien wanneer er
     # geregistreerd wordt. Het script zelf zwijgt buiten 07:00–19:00.
@@ -17,7 +19,10 @@ on:
         type: boolean
         default: false
 
+# actions:write alleen om aan het eind de opvolger te dispatchen (zie de
+# laatste stap); de loop zelf leest alleen.
 permissions:
+  actions: write
   contents: read
 
 concurrency:
@@ -67,3 +72,18 @@ jobs:
               sleep $(( next - now ))
             fi
           done
+
+      # Opvolger meteen klaarzetten: hij wacht in de concurrency-groep tot deze
+      # run klaar is en neemt dan direct over, zonder op een (vaak vallende)
+      # cron-kick te wachten. Komt er intussen toch een kick binnen, dan
+      # vervangt die de wachtende run — er draait er nooit meer dan één.
+      # Alleen op main en niet bij een dry-run, anders ketent een testdispatch
+      # zichzelf eindeloos door. Alleen na een geslaagde run: faalt de setup,
+      # dan mag de keten niet in een strakke herhaling van mislukte runs lopen.
+      - name: Dispatch successor loop
+        if: ${{ success() && !inputs.dry_run && github.ref_name == 'main' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run potty-reminder.yml --ref main \
+            || echo "::warning::opvolger dispatchen mislukt — de cron-kick neemt over"
