@@ -341,3 +341,17 @@ def test_js_constanten_spiegelen_python(name):
 
 def test_workflow_pint_de_checkout(assert_checkout_pinned):
     assert_checkout_pinned("potty-reminder.yml")
+
+
+def test_loop_dispatcht_zijn_opvolger():
+    """De cron-kicks vallen overdag tot uren weg; de loop zet zelf zijn opvolger klaar.
+    Alleen op main en niet bij een dry-run, anders ketent een testdispatch eindeloos."""
+    wf = open(os.path.join(_ROOT, ".github", "workflows", "potty-reminder.yml"),
+              encoding="utf-8").read()
+    assert re.search(r"^  actions: write$", wf, re.M)
+    stap = wf[wf.index("- name: Dispatch successor loop"):]
+    guard = re.search(r"if: \$\{\{(.*)\}\}", stap).group(1)
+    assert "success()" in guard
+    assert "!inputs.dry_run" in guard
+    assert "github.ref_name == 'main'" in guard
+    assert "gh workflow run potty-reminder.yml --ref main" in stap

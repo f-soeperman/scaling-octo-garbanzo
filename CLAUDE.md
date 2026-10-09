@@ -1249,7 +1249,7 @@ Leest Project 1's `docs/data.json` read-only (het beslissingscriterium) en **sch
 ### Files
 - `docs/potje.html` + `docs/js/potje.js` — registratie + analyse, **alleen met gekoppeld account** (GIST_ID + token; zonder koppeling alleen een privé-melding). Schrijft `potty_log.json` met een verse read vlak vóór de PATCH (twee telefoons tegelijk). Bewust géén workflow-dispatch bij opslaan (zie de privacyregel bij Project 1's modal).
 - `potty_reminder.py` — de herinneringsrunner (zuivere beslisfuncties + `run`), `run_guarded` met `fail_threshold=6`.
-- `.github/workflows/potty-reminder.yml` — self-driven loop, 60 iteraties op de 5-minutengrens (~5u), cron-kicks `2,22,42` als restart (het window-notify-patroon), concurrency `potty-reminder`, `contents: read`, checkout gepind op de branch-tip. Commit niets.
+- `.github/workflows/potty-reminder.yml` — self-driven loop, 60 iteraties op de 5-minutengrens (~5u), cron-kicks `2,22,42` als vangnet, concurrency `potty-reminder`, `contents: read` + `actions: write`, checkout gepind op de branch-tip. Commit niets. **Dispatcht aan het eind zelf zijn opvolger** (okt 2026, alleen op main en niet bij een dry-run): GitHub liet overdag cron-kicks tot ~2,5u vallen, en in zo'n gat ging geen herinnering uit. De opvolger wacht in de concurrency-groep en neemt direct over.
 
 ### Gist-bestanden (in de `GIST_ID`-Gist) — één schrijver per bestand
 - `potty_log.json` — schrijver: de browser. `{"events": [{"id", "t": ISO met offset, "kind": "plas|poep", "where": "wc|potje|ongeluk|geprobeerd"}]}`.
