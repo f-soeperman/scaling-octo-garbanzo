@@ -72,9 +72,6 @@ jobs:
           WU_API_KEY:             ${{ secrets.WU_API_KEY }}
           TELEGRAM_BOT_TOKEN:     ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:       ${{ secrets.TELEGRAM_CHAT_ID }}
-          # Alleen het dagplan gaat naar de groep; het per-kamer-advies en de
-          # operationele alerts blijven op de privé-chat hierboven.
-          TELEGRAM_CHAT_GROUP_ID: ${{ secrets.TELEGRAM_CHAT_GROUP_ID }}
           # Optionele brug gepubliceerde kamernaam → tado-zonenaam (privacy:
           # een persoonsnaam als zonenaam blijft zo uit de publieke repo).
           TADO_ZONE_ALIASES:      ${{ secrets.TADO_ZONE_ALIASES }}
