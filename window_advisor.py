@@ -159,7 +159,7 @@ OPEN_MSG_MAX_AGE_H = 2.0  # uur — een open-kandidaat die al langer dan dit ope
                           # grotendeels verdampt is. Vangt de gevallen die de cooldown niet
                           # dekt (bijv. een open die bij de flip nog op de duur-poort strandde).
 PLAN_HOUR = 8             # de eerste niet-onderdrukte run op/ná dit lokale uur stuurt het
-                          # dagplan naar de groep. "Eerste run ná" en niet "om 08:00": de
+                          # dagplan naar de privé-chat. "Eerste run ná" en niet "om 08:00": de
                           # workflow is een self-driven kwartierlus die elke ~5u herstart.
 MAX_PLAN_WINDOWS = 3      # hoeveel open-vensters het dagplan per kamer noemt. De vooruitblik
                           # loopt PREDICT_HORIZON_H (18u) vooruit; alles daarbinnen opsommen
@@ -1452,7 +1452,7 @@ def plan_window_text(w: dict) -> str:
 
 
 def day_plan_message(plan: list[dict], dmax: float | None, now: datetime) -> str:
-    """Het dagplan-bericht (naar de groep): per kamer wanneer het raam open kan én wanneer
+    """Het dagplan-bericht (naar de privé-chat): per kamer wanneer het raam open kan én wanneer
     het weer dicht moet, inclusief de kamers waarvoor vandaag niets te openen valt."""
     kop = f"🪟 *Raamplan* — {format_date_nl(now.date())}"
     if dmax is not None:
@@ -1913,28 +1913,22 @@ def main():
 
     state["rooms"] = new_rooms
 
-    # Dagplan (naar de groep): één keer per dag, op de eerste niet-onderdrukte run op of
-    # ná PLAN_HOUR. Idempotent via day.plan_sent, want de kwartierlus herstart elke ~5u.
+    # Dagplan (naar de privé-chat, sinds okt 2026 — daarvóór de groep): één keer per dag,
+    # op de eerste niet-onderdrukte run op of ná PLAN_HOUR. Idempotent via day.plan_sent,
+    # want de kwartierlus herstart elke ~5u.
     day = roll_day(state, now.date().isoformat())
     if not day["plan_sent"] and now.hour >= PLAN_HOUR:
         plan = build_day_plan(dash_rooms, now, state)
         plan_msg = day_plan_message(plan, dmax, now)
-        groep = os.getenv("TELEGRAM_CHAT_GROUP_ID")
         if dry:
             # Berichttekst alleen onder DRY_RUN printen — kamer-voor-kamer plannen horen
             # niet in het publieke Actions-log.
             print(plan_msg)
             print("DRY_RUN=1, dagplan niet verzonden.")
-        elif not groep:
-            # Zónder expliciete groep-id zou send_telegram terugvallen op de privé-chat
-            # (notify.py: `chat_id or os.getenv("TELEGRAM_CHAT_ID")`). Het dagplan hoort
-            # juist naar de groep, dus liever overslaan dan stilletjes misleveren.
-            print("[dagplan] TELEGRAM_CHAT_GROUP_ID ontbreekt → dagplan overgeslagen.")
         else:
-            send_telegram(plan_msg, chat_id=groep, parse_mode="Markdown",
-                          muted_in_quiet=True)
+            send_telegram(plan_msg, parse_mode="Markdown", muted_in_quiet=True)
             day["plan_sent"] = True
-            print("[dagplan] Verzonden naar de groep.")
+            print("[dagplan] Verzonden.")
 
     if not entries:
         print("[bericht] Niets te melden.")
@@ -1951,8 +1945,7 @@ def main():
         print("DRY_RUN=1, niet verzonden (cooldown niet gestart).")
     else:
         # Het per-kamer-advies gaat naar de privé-chat (TELEGRAM_CHAT_ID, de
-        # send_telegram default), net als de operationele alerts. Alleen het dagplan
-        # hierboven gaat naar de groep.
+        # send_telegram default), net als het dagplan hierboven en de operationele alerts.
         send_telegram(message, parse_mode="Markdown", muted_in_quiet=True)
         state["last_notification"] = now.isoformat()
         for room, decision in entries:
