@@ -5,7 +5,7 @@ in de privé `GIST_ID`-gist. Deze runner draait in een eigen loop elke 5 minuten
 (`.github/workflows/potty-reminder.yml`), leest het logboek en stuurt een
 Telegram-bericht naar de groep zodra het tijd is om te laten proberen:
 
-- **90 min** na het laatste plasje (wc, potje óf ongelukje);
+- **105 min** na het laatste plasje (wc, potje óf ongelukje);
 - **30 min** na een poging die niets opleverde ("geprobeerd");
 - **één herhaling** 30 min na een herinnering waar nog niets op volgde.
 
@@ -49,7 +49,7 @@ LOG_FILE = "potty_log.json"
 STATE_FILE = "potty_state.json"
 
 # ── Tunables (gespiegeld in docs/js/potje.js — een test bewaakt dat) ─────────
-INTERVAL_PEE_MIN = 90      # na een plasje (wc/potje/ongelukje)
+INTERVAL_PEE_MIN = 105     # na een plasje (wc/potje/ongelukje)
 INTERVAL_TRY_MIN = 30      # na een poging zonder resultaat
 INTERVAL_REPEAT_MIN = 30   # herhaling na een onbeantwoorde herinnering
 MAX_REMINDERS_PER_ANCHOR = 2   # eerste herinnering + één herhaling

@@ -14,7 +14,7 @@ const STATE_FILE = "potty_state.json";
 // deze waarden gelijk blijven (anders voorspelt de tegel een ander moment dan
 // de herinnering die echt uitgaat).
 const RULES = {
-  INTERVAL_PEE_MIN: 90,
+  INTERVAL_PEE_MIN: 105,
   INTERVAL_TRY_MIN: 30,
   INTERVAL_REPEAT_MIN: 30,
   MAX_REMINDERS_PER_ANCHOR: 2,
