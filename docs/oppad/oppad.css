@@ -1,0 +1,202 @@
+/* Op pad! — tokens from the design brief. One light theme: the kid screens
+   are flat colour fields by design, so there is no dark mode. */
+:root {
+  --ink: #1B1F3B;
+  --ink-soft: #4A4E66;
+  --paper: #FFF6E5;
+  --white: #FFFFFF;
+  --cruise: #9FD8C2;
+  --ready: #FFC628;
+  --now: #FF7A3D;
+  --kid-font: 'Fredoka', system-ui, sans-serif;
+  --parent-font: 'Atkinson Hyperlegible', system-ui, sans-serif;
+}
+
+[hidden] { display: none !important; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--parent-font);
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+button { font: inherit; color: inherit; cursor: pointer; }
+
+.view {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom));
+}
+
+/* ── 1. Main (ouder) ─────────────────────────────────────────────── */
+.main { gap: 20px; max-width: 520px; margin: 0 auto; }
+.main-top { display: flex; align-items: center; justify-content: space-between; padding-top: 16px; }
+.brand { font-family: var(--kid-font); font-weight: 700; font-size: 26px; letter-spacing: 0.5px; }
+.round-btn {
+  width: 44px; height: 44px; border-radius: 22px; border: 2px solid var(--ink);
+  background: transparent; display: flex; align-items: center; justify-content: center;
+}
+.main h1 { margin: 0; font-family: var(--kid-font); font-weight: 600; font-size: 38px; line-height: 1.1; }
+
+.search { position: relative; display: flex; flex-direction: column; gap: 8px; }
+.field-label, .section-label { font-size: 15px; font-weight: 700; }
+.section-label { color: var(--ink-soft); }
+.search-box {
+  display: flex; align-items: center; gap: 10px; background: var(--white);
+  border: 2px solid var(--ink); border-radius: 18px; padding: 0 16px; height: 60px;
+}
+.search-box input {
+  border: 0; outline: none; font: inherit; font-size: 18px; flex: 1; min-width: 0;
+  background: transparent; color: var(--ink);
+}
+.search-box input::placeholder { color: #6B6F85; }
+.search-box input::-webkit-search-cancel-button { display: none; }
+.suggestions {
+  list-style: none; margin: 0; padding: 6px; position: absolute; top: 100%; left: 0; right: 0;
+  margin-top: 6px; background: var(--white); border: 2px solid var(--ink); border-radius: 18px;
+  z-index: 5; box-shadow: 0 8px 24px rgba(27, 31, 59, 0.15);
+}
+.suggestions li button {
+  display: block; width: 100%; text-align: left; border: 0; background: transparent;
+  padding: 12px; border-radius: 12px; font-size: 16px; min-height: 44px;
+}
+.suggestions li button:hover, .suggestions li button:focus-visible { background: var(--paper); }
+
+.chosen, .fav-form {
+  display: flex; align-items: center; gap: 12px; background: var(--white);
+  border-radius: 18px; padding: 12px 14px 12px 16px;
+}
+.chosen-text { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.chosen-kicker { font-size: 13px; color: var(--ink-soft); font-weight: 700; }
+#chosen-name { font-weight: 700; font-size: 17px; overflow-wrap: anywhere; }
+.fav-form input {
+  flex: 1; min-width: 0; font: inherit; font-size: 17px; border: 2px solid var(--ink);
+  border-radius: 12px; padding: 8px 10px; height: 44px;
+}
+.chip-btn {
+  border: 2px solid var(--ink); background: transparent; border-radius: 22px;
+  padding: 0 14px; height: 40px; font-weight: 700; white-space: nowrap;
+}
+
+.favs { display: flex; flex-direction: column; gap: 10px; }
+.fav-list { display: flex; flex-direction: column; gap: 10px; }
+.fav { display: flex; align-items: stretch; background: var(--white); border-radius: 18px; }
+.fav-pick {
+  display: flex; align-items: center; gap: 14px; flex: 1; min-width: 0; border: 0; background: transparent;
+  padding: 14px 16px; text-align: left; min-height: 64px; border-radius: 18px;
+}
+.fav-pick.active { box-shadow: inset 0 0 0 3px var(--ink); }
+.fav-avatar {
+  width: 40px; height: 40px; border-radius: 20px; flex: none; display: flex; align-items: center;
+  justify-content: center; font-family: var(--kid-font); font-weight: 700;
+}
+.fav-text { display: flex; flex-direction: column; min-width: 0; }
+.fav-name { font-weight: 700; font-size: 17px; }
+.fav-addr { font-size: 14px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fav-del {
+  border: 0; background: transparent; width: 48px; font-size: 22px; color: var(--ink-soft);
+  border-radius: 0 18px 18px 0;
+}
+
+.settings { display: flex; flex-direction: column; gap: 6px; background: var(--white); border-radius: 18px; padding: 10px 16px; }
+.toggle, .num {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  font-size: 16px; min-height: 44px;
+}
+.toggle input { width: 26px; height: 26px; accent-color: var(--ink); flex: none; }
+.num input {
+  width: 64px; height: 38px; font: inherit; font-size: 16px; text-align: right;
+  border: 2px solid var(--ink); border-radius: 10px; padding: 0 6px;
+}
+.num span { white-space: nowrap; }
+.hint { margin: 0; font-size: 14px; color: var(--ink-soft); line-height: 1.4; }
+.msg { margin: 0; padding: 12px 16px; border-radius: 14px; background: #FFE1D3; font-size: 15px; line-height: 1.4; }
+.spacer { flex: 1; }
+
+.go {
+  display: flex; align-items: center; justify-content: center; gap: 12px; height: 68px;
+  border-radius: 34px; background: var(--ink); color: var(--paper); border: 0;
+  font-family: var(--kid-font); font-weight: 600; font-size: 22px; flex: none;
+}
+.go:disabled { opacity: 0.4; cursor: default; }
+
+/* ── 2–5. Kid screens ────────────────────────────────────────────── */
+.kid {
+  font-family: var(--kid-font); align-items: center; gap: 16px; text-align: center;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  height: 100vh; height: 100dvh; overflow: hidden;
+}
+.cruise { background: var(--cruise); }
+.ready { background: var(--ready); }
+.now { background: var(--now); border: 14px solid var(--ink); gap: 12px; }
+.arrived { background: var(--paper); }
+
+.lights { display: flex; gap: 18px; padding: 14px 22px; background: var(--paper); border-radius: 40px; flex: none; }
+.lights span { width: 40px; height: 40px; border-radius: 20px; border: 5px solid var(--ink); }
+.lights span.on { background: var(--ink); }
+
+.art { flex: 1; min-height: 0; width: 100%; display: flex; align-items: center; justify-content: center; }
+.art svg { height: 100%; max-width: 100%; }
+.arrow-straight { max-height: 380px; }
+.arrow-bend { max-height: 300px; }
+.arrow-side { max-height: 262px; }
+.flag { max-height: 320px; }
+
+.figure { flex: none; height: 18vh; max-height: 146px; }
+.figure-big { height: 23vh; max-height: 197px; }
+.figure svg { height: 100%; width: auto; }
+
+/* Rechtsaf: the whole illustration mirrors, as in the brief. */
+.right .flip, .right .strip-icon { transform: scaleX(-1); }
+
+.kid-word { font-weight: 700; font-size: 48px; line-height: 1; flex: none; }
+.ready .kid-word { font-size: 44px; }
+.kid-word.big { font-size: 72px; letter-spacing: 1px; }
+.kid-sub { font-weight: 600; font-size: 22px; flex: none; }
+.arrived .kid-sub { font-weight: 500; }
+.arrived .go { align-self: stretch; }
+
+.stars { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; min-height: 48px; max-width: 100%; }
+.stars svg { width: 48px; height: 48px; }
+
+.strip {
+  display: flex; align-items: center; gap: 10px; background: var(--ink); color: var(--paper);
+  border-radius: 16px; padding: 12px 16px; font-family: var(--parent-font); font-size: 15px;
+  align-self: stretch; text-align: left; flex: none;
+}
+.strip-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.strip-eta { opacity: 0.85; white-space: nowrap; }
+.strip-icon { flex: none; }
+.wake-dot { width: 8px; height: 8px; border-radius: 4px; background: #6B6F85; flex: none; }
+.wake-dot.on { background: var(--cruise); }
+
+/* ── Touch lock ───────────────────────────────────────────────────── */
+.lock {
+  position: fixed; inset: 0; z-index: 50; touch-action: none;
+  /* Transparent: the child sees the screen, but no touch reaches it. */
+  background: transparent;
+}
+.lock-btn {
+  position: absolute; top: max(12px, env(safe-area-inset-top)); right: 12px;
+  width: 52px; height: 52px; border-radius: 26px; border: 0; padding: 0;
+  background: rgba(255, 246, 229, 0.85); display: flex; align-items: center; justify-content: center;
+  touch-action: none;
+}
+.lock-ring { position: absolute; inset: 4px; width: 44px; height: 44px; transform: rotate(-90deg); }
+.lock-ring circle {
+  fill: none; stroke: var(--ink); stroke-width: 3; stroke-dasharray: 119.4; stroke-dashoffset: 119.4;
+}
+.lock-btn.holding .lock-ring circle { stroke-dashoffset: 0; transition: stroke-dashoffset 3s linear; }
+
+.parent-bar {
+  position: fixed; left: 12px; right: 12px; top: max(12px, env(safe-area-inset-top)); z-index: 60;
+  display: flex; gap: 10px;
+}
+.parent-bar button {
+  flex: 1; height: 52px; border-radius: 26px; border: 2px solid var(--ink); background: var(--paper);
+  font-weight: 700; font-size: 17px;
+}
