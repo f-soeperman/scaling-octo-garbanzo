@@ -28,8 +28,8 @@ def events(*evs):
 
 # ── Beslissing ───────────────────────────────────────────────────────────────
 
-def test_herinnering_105_min_na_een_plasje():
-    es = events(ev(at(9, 45)))
+def test_herinnering_120_min_na_een_plasje():
+    es = events(ev(at(9, 30)))
     assert pr.decide(es, {}, at(11, 25)) is None
     d = pr.decide(es, {}, at(11, 30))
     assert d and d["kind"] == "plas"
@@ -38,7 +38,7 @@ def test_herinnering_105_min_na_een_plasje():
 def test_zelf_aangegeven_veld_verandert_de_herinnering_niet():
     """Het dashboard zet `self: true` op een registratie (okt 2026); dat is
     alleen analyse-informatie en moet het anker en het interval laten staan."""
-    e = ev(at(9, 45))
+    e = ev(at(9, 30))
     e["self"] = True
     d = pr.decide(events(e), {}, at(11, 30))
     assert d and d["kind"] == "plas"
@@ -47,25 +47,25 @@ def test_zelf_aangegeven_veld_verandert_de_herinnering_niet():
 
 @pytest.mark.parametrize("where", ["wc", "potje", "ongeluk"])
 def test_elk_echt_plasje_zet_de_klok(where):
-    d = pr.decide(events(ev(at(9, 45), where)), {}, at(11, 30))
+    d = pr.decide(events(ev(at(9, 30), where)), {}, at(11, 30))
     assert d and d["kind"] == "plas"
 
 
 def test_poging_geeft_herinnering_na_30_min():
-    es = events(ev(at(9, 45)), ev(at(10, 40), "geprobeerd"))
+    es = events(ev(at(9, 30)), ev(at(10, 40), "geprobeerd"))
     assert pr.decide(es, {}, at(11, 5)) is None
     d = pr.decide(es, {}, at(11, 10))
     assert d and d["kind"] == "poging"
 
 
 def test_poep_telt_niet_mee():
-    es = events(ev(at(9, 45)), ev(at(11, 0), kind="poep"))
+    es = events(ev(at(9, 30)), ev(at(11, 0), kind="poep"))
     d = pr.decide(es, {}, at(11, 30))
     assert d and d["anchor"]["kind"] == "plas"
 
 
 def test_één_herhaling_dan_stil():
-    es = events(ev(at(9, 45)))
+    es = events(ev(at(9, 30)))
     s = pr.record_reminder({}, pr.decide(es, {}, at(11, 30)), at(11, 30))
     assert pr.decide(es, s, at(11, 30)) is None          # niet dubbel
     assert pr.decide(es, s, at(11, 55)) is None
@@ -77,11 +77,11 @@ def test_één_herhaling_dan_stil():
 
 
 def test_nieuwe_registratie_reset_de_herinneringen():
-    es = events(ev(at(9, 45)))
+    es = events(ev(at(9, 30)))
     s = pr.record_reminder({}, pr.decide(es, {}, at(11, 30)), at(11, 30))
-    es = events(ev(at(9, 45)), ev(at(11, 40), "wc"))
+    es = events(ev(at(9, 30)), ev(at(11, 40), "wc"))
     assert pr.decide(es, s, at(12, 0)) is None
-    d = pr.decide(es, s, at(13, 25))
+    d = pr.decide(es, s, at(13, 40))
     assert d and d["kind"] == "plas"
 
 
@@ -105,14 +105,14 @@ def test_vroege_registratie_herinnert_om_zeven_uur():
 
 
 def test_te_late_herinnering_vervalt():
-    es = events(ev(at(9, 45)))
+    es = events(ev(at(9, 30)))
     assert pr.decide(es, {}, at(12, 31)) is None
 
 
 def test_toekomstige_registratie_is_geen_anker():
-    es = events(ev(at(9, 45)), ev(at(13, 0), "wc"))
+    es = events(ev(at(9, 30)), ev(at(13, 0), "wc"))
     d = pr.decide(es, {}, at(11, 30))
-    assert d and d["anchor"]["dt"] == at(9, 45)
+    assert d and d["anchor"]["dt"] == at(9, 30)
 
 
 def test_kapotte_regels_vallen_weg():
@@ -120,24 +120,24 @@ def test_kapotte_regels_vallen_weg():
         {"t": "geen-datum", "kind": "plas", "where": "wc"},
         {"t": at(10).isoformat(), "kind": "plas", "where": "bad"},
         "rommel",
-        ev(at(9, 45)),
+        ev(at(9, 30)),
     ]})
     assert len(es) == 1
 
 
 def test_dst_herfst_rekent_in_echte_minuten():
-    # Op de wisseldag (25 okt 2026) blijft het interval 105 echte minuten.
+    # Op de wisseldag (25 okt 2026) blijft het interval 120 echte minuten.
     anchor = datetime(2026, 10, 25, 9, 0, tzinfo=TZ)
     es = events(ev(anchor))
-    d = pr.next_reminder(es, {}, anchor + timedelta(minutes=110))
-    assert d["due"] - anchor == timedelta(minutes=105)
+    d = pr.next_reminder(es, {}, anchor + timedelta(minutes=125))
+    assert d["due"] - anchor == timedelta(minutes=120)
 
 
 def test_bericht_noemt_geen_naam_en_wel_het_tijdstip():
-    es = events(ev(at(9, 45), "wc"))
+    es = events(ev(at(9, 30), "wc"))
     d = pr.decide(es, {}, at(11, 30))
     msg = pr.build_message(d, {}, at(11, 30))
-    assert "09:45" in msg and "105 min" in msg
+    assert "09:30" in msg and "120 min" in msg
 
 
 # ── Runner: vormvaste stdout + volgorde state → bericht ──────────────────────
@@ -192,7 +192,7 @@ def _run(monkeypatch, capsys, gist, now):
 
 
 def test_stdout_is_gelijk_met_en_zonder_herinnering(env, monkeypatch, capsys):
-    log = json.dumps({"events": [ev(at(9, 45))]})
+    log = json.dumps({"events": [ev(at(9, 30))]})
     out_quiet = _run(monkeypatch, capsys, FakeGist({pr.LOG_FILE: log}), at(10, 30))
     gist = FakeGist({pr.LOG_FILE: log})
     out_send = _run(monkeypatch, capsys, gist, at(11, 30))
@@ -201,7 +201,7 @@ def test_stdout_is_gelijk_met_en_zonder_herinnering(env, monkeypatch, capsys):
 
 
 def test_herinnering_naar_de_groep_en_muted_in_quiet(env, monkeypatch, capsys):
-    gist = FakeGist({pr.LOG_FILE: json.dumps({"events": [ev(at(9, 45))]})})
+    gist = FakeGist({pr.LOG_FILE: json.dumps({"events": [ev(at(9, 30))]})})
     _run(monkeypatch, capsys, gist, at(11, 30))
     (text, kw), = env
     assert kw["chat_id"] == "group" and kw["muted_in_quiet"] is True
@@ -213,7 +213,7 @@ def test_herinnering_naar_de_groep_en_muted_in_quiet(env, monkeypatch, capsys):
 
 
 def test_schrijffout_stuurt_geen_herinnering_en_raist_niet(env, monkeypatch, capsys):
-    gist = FakeGist({pr.LOG_FILE: json.dumps({"events": [ev(at(9, 45))]})})
+    gist = FakeGist({pr.LOG_FILE: json.dumps({"events": [ev(at(9, 30))]})})
 
     def boom(*a, **k):
         raise RuntimeError("409")
@@ -226,7 +226,7 @@ def test_schrijffout_stuurt_geen_herinnering_en_raist_niet(env, monkeypatch, cap
 
 def test_dry_run_schrijft_niets(env, monkeypatch, capsys):
     monkeypatch.setenv("DRY_RUN", "1")
-    gist = FakeGist({pr.LOG_FILE: json.dumps({"events": [ev(at(9, 45))]})})
+    gist = FakeGist({pr.LOG_FILE: json.dumps({"events": [ev(at(9, 30))]})})
     _run(monkeypatch, capsys, gist, at(11, 30))
     assert gist.writes == []
     (text, kw), = env
@@ -241,7 +241,7 @@ def test_zonder_gist_een_noop(env, monkeypatch, capsys):
 # ── Afvinken na een registratie ──────────────────────────────────────────────
 
 def test_registratie_na_herinnering_vinkt_het_bericht_af(env, edits, monkeypatch, capsys):
-    log = {"events": [ev(at(9, 45))]}
+    log = {"events": [ev(at(9, 30))]}
     gist = FakeGist({pr.LOG_FILE: json.dumps(log)})
     _run(monkeypatch, capsys, gist, at(11, 30))
     rem = json.loads(gist.files[pr.STATE_FILE])["reminders"][-1]
@@ -267,12 +267,12 @@ def test_registratie_na_herinnering_vinkt_het_bericht_af(env, edits, monkeypatch
 
 
 def test_poging_vinkt_herinnering_én_herhaling_af():
-    es = events(ev(at(9, 45)))
+    es = events(ev(at(9, 30)))
     s = pr.record_reminder({}, pr.decide(es, {}, at(11, 30)), at(11, 30))
     s = pr.attach_message(s, 1, "eerste")
     s = pr.record_reminder(s, pr.decide(es, s, at(12, 0)), at(12, 0))
     s = pr.attach_message(s, 2, "herhaling")
-    es = events(ev(at(9, 45)), ev(at(12, 10), "geprobeerd"))
+    es = events(ev(at(9, 30)), ev(at(12, 10), "geprobeerd"))
     todo = pr.pending_acks(es, s, at(12, 15))
     assert [i for i, _ in todo] == [0, 1]
     s = pr.mark_acked(s, todo)
@@ -280,21 +280,21 @@ def test_poging_vinkt_herinnering_én_herhaling_af():
 
 
 def test_poep_of_registratie_van_vóór_de_herinnering_vinkt_niet_af():
-    es = events(ev(at(9, 45)))
+    es = events(ev(at(9, 30)))
     s = pr.attach_message(pr.record_reminder({}, pr.decide(es, {}, at(11, 30)), at(11, 30)),
                           1, "x")
-    es = events(ev(at(9, 45)), ev(at(11, 40), kind="poep"))
+    es = events(ev(at(9, 30)), ev(at(11, 40), kind="poep"))
     assert pr.pending_acks(es, s, at(11, 45)) == []
 
 
 def test_berichten_van_gisteren_worden_niet_meer_afgevinkt():
-    es = events(ev(at(9, 45, day=1)))
+    es = events(ev(at(9, 30, day=1)))
     s = pr.record_reminder({}, pr.decide(es, {}, at(11, 30, day=1)), at(11, 30, day=1))
     s = pr.attach_message(s, 1, "x")
-    es = events(ev(at(9, 45, day=1)), ev(at(8, 0, day=2)))
+    es = events(ev(at(9, 30, day=1)), ev(at(8, 0, day=2)))
     assert pr.pending_acks(es, s, at(8, 5, day=2)) == []
     # …en hun tekst valt bij de volgende herinnering uit de state.
-    s = pr.record_reminder(s, pr.decide(es, s, at(9, 45, day=2)), at(9, 45, day=2))
+    s = pr.record_reminder(s, pr.decide(es, s, at(10, 0, day=2)), at(10, 0, day=2))
     assert "text" not in s["reminders"][0] and s["reminders"][0]["msg_id"] == 1
 
 
@@ -303,9 +303,9 @@ def test_mislukte_edit_probeert_later_opnieuw(env, monkeypatch, capsys):
     calls = []
     monkeypatch.setattr(pr, "edit_telegram",
                         lambda *a, **k: calls.append(a) or status[0])
-    log = {"events": [ev(at(9, 45)), ev(at(11, 40))]}
+    log = {"events": [ev(at(9, 30)), ev(at(11, 40))]}
     state = pr.attach_message(
-        pr.record_reminder({}, pr.decide(events(ev(at(9, 45))), {}, at(11, 30)), at(11, 30)),
+        pr.record_reminder({}, pr.decide(events(ev(at(9, 30))), {}, at(11, 30)), at(11, 30)),
         7, "x")
     gist = FakeGist({pr.LOG_FILE: json.dumps(log), pr.STATE_FILE: json.dumps(state)})
     _run(monkeypatch, capsys, gist, at(11, 45))
@@ -320,9 +320,9 @@ def test_afvinkfout_raist_niet_en_print_niets(env, monkeypatch, capsys):
         raise RuntimeError("stuk")
     monkeypatch.setattr(pr, "edit_telegram", boom)
     state = pr.attach_message(
-        pr.record_reminder({}, pr.decide(events(ev(at(9, 45))), {}, at(11, 30)), at(11, 30)),
+        pr.record_reminder({}, pr.decide(events(ev(at(9, 30))), {}, at(11, 30)), at(11, 30)),
         7, "x")
-    gist = FakeGist({pr.LOG_FILE: json.dumps({"events": [ev(at(9, 45)), ev(at(11, 40))]}),
+    gist = FakeGist({pr.LOG_FILE: json.dumps({"events": [ev(at(9, 30)), ev(at(11, 40))]}),
                      pr.STATE_FILE: json.dumps(state)})
     assert _run(monkeypatch, capsys, gist, at(11, 45)) == "potje: controle klaar\n"
 
