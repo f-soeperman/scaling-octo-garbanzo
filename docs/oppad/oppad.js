@@ -8,6 +8,8 @@
   const $ = id => document.getElementById(id);
 
   const PDOK_URL = 'https://api.pdok.nl/bzk/locatieserver/search/v3_1/free';
+  const PHOTON_URL = 'https://photon.komoot.io/api/';
+  const NL_BBOX = '3.2,50.7,7.3,53.6';   // the whole country, west,south,east,north
   const VALHALLA_URL = 'https://valhalla1.openstreetmap.de/route';
   const FAV_COLORS = ['#FFC628', '#9FD8C2', '#FFB59A', '#BFD7FF'];
   const REROUTE_COOLDOWN_MS = 15000;
@@ -59,7 +61,10 @@
     });
   }
 
-  // ── main screen: address search (PDOK Locatieserver) ────────────────
+  // ── main screen: search — addresses (PDOK) + places (Photon/OSM) ───
+  // PDOK knows every Dutch address but no places (museums, playgrounds,
+  // shops); Photon searches OpenStreetMap by name. Both run in parallel and
+  // each fails soft, so one service down still leaves the other.
   let searchTimer = null, searchSeq = 0;
 
   function parsePoint(wkt) {
@@ -67,35 +72,61 @@
     return m ? { lon: parseFloat(m[1]), lat: parseFloat(m[2]) } : null;
   }
 
-  async function search(q) {
-    const seq = ++searchSeq;
+  async function searchAddresses(q) {
     const url = PDOK_URL + '?' + new URLSearchParams({
-      q, rows: '6', fl: 'weergavenaam,type,centroide_ll',
+      q, rows: '5', fl: 'weergavenaam,type,centroide_ll',
       fq: 'type:(adres OR weg OR postcode OR woonplaats)',
     });
-    try {
-      const res = await fetch(url);
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const data = await res.json();
-      if (seq !== searchSeq) return;
-      showSuggestions((data.response && data.response.docs) || []);
-    } catch (e) {
-      if (seq === searchSeq) showMsg('Adres zoeken lukt nu niet. Is er internet?');
-    }
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    return ((data.response && data.response.docs) || []).map(d => {
+      const pt = parsePoint(d.centroide_ll);
+      return pt && { name: d.weergavenaam, lat: pt.lat, lon: pt.lon };
+    }).filter(Boolean);
   }
 
-  function showSuggestions(docs) {
+  async function searchPlaces(q) {
+    const url = PHOTON_URL + '?' + new URLSearchParams({ q, limit: '5', bbox: NL_BBOX });
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    return (data.features || []).map(f => {
+      const p = f.properties || {}, c = f.geometry && f.geometry.coordinates;
+      if (!c || !p.name) return null;     // nameless hits are plain addresses: PDOK has those
+      const where = [p.street && [p.street, p.housenumber].filter(Boolean).join(' '), p.city]
+        .filter(Boolean).join(', ');
+      return { name: where ? p.name + ', ' + where : p.name, lat: c[1], lon: c[0] };
+    }).filter(Boolean);
+  }
+
+  async function search(q) {
+    const seq = ++searchSeq;
+    const [places, addrs] = await Promise.allSettled([searchPlaces(q), searchAddresses(q)]);
+    if (seq !== searchSeq) return;
+    if (places.status === 'rejected' && addrs.status === 'rejected') {
+      showMsg('Zoeken lukt nu niet. Is er internet?');
+      return;
+    }
+    hideMsg();
+    const seen = new Set();
+    const hits = [].concat(places.value || [], addrs.value || []).filter(h => {
+      const k = h.name.toLowerCase();
+      return seen.has(k) ? false : (seen.add(k), true);
+    });
+    showSuggestions(hits.slice(0, 8));
+  }
+
+  function showSuggestions(hits) {
     const list = $('suggestions');
     list.textContent = '';
-    for (const d of docs) {
-      const pt = parsePoint(d.centroide_ll);
-      if (!pt) continue;
+    for (const h of hits) {
       const li = document.createElement('li');
       const b = document.createElement('button');
       b.type = 'button';
-      b.textContent = d.weergavenaam;
+      b.textContent = h.name;
       b.addEventListener('click', () => {
-        choose({ name: d.weergavenaam, lat: pt.lat, lon: pt.lon });
+        choose(h);
         $('q').value = '';
         list.hidden = true;
       });
@@ -111,7 +142,7 @@
       clearTimeout(searchTimer);
       const v = q.value.trim();
       if (v.length < 3) { $('suggestions').hidden = true; return; }
-      searchTimer = setTimeout(() => search(v), 250);
+      searchTimer = setTimeout(() => search(v), 350);
     });
     q.addEventListener('keydown', e => {
       if (e.key === 'Enter') {

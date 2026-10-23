@@ -9,7 +9,7 @@
   style-src 'self' https://fonts.googleapis.com;
   font-src https://fonts.gstatic.com;
   img-src 'self' data:;
-  connect-src https://api.pdok.nl https://valhalla1.openstreetmap.de;
+  connect-src https://api.pdok.nl https://photon.komoot.io https://valhalla1.openstreetmap.de;
   manifest-src 'self';
   base-uri 'none';
   form-action 'none';
@@ -42,7 +42,7 @@
     <label for="q" class="field-label">Adres</label>
     <span class="search-box">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1B1F3B" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-4-4"></path></svg>
-      <input id="q" type="search" placeholder="Straat, plaats of postcode" autocomplete="off" enterkeyhint="search">
+      <input id="q" type="search" placeholder="Adres, plek of postcode" autocomplete="off" enterkeyhint="search">
     </span>
     <ul id="suggestions" class="suggestions" hidden></ul>
   </div>
@@ -210,6 +210,6 @@
 </div>
 
 <script src="nav.js?v=1"></script>
-<script src="oppad.js?v=1"></script>
+<script src="oppad.js?v=2"></script>
 </body>
 </html>
