@@ -1,0 +1,15 @@
+{
+  "name": "Op pad!",
+  "short_name": "Op pad!",
+  "description": "Fietsnavigatie voor de copiloot in de bakfiets",
+  "lang": "nl",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#FFF6E5",
+  "theme_color": "#FFF6E5",
+  "icons": [
+    {"src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}
+  ]
+}
