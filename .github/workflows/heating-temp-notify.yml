@@ -3,7 +3,8 @@ name: Verwarmingsexperiment (wekelijks)
 # Bestandsnaam bewust ongewijzigd (`heating-temp-notify.yml`): de orchestrator
 # dispatcht erop, de guard-job dedupt via `gh run list --workflow` op deze naam,
 # en de run-historie hangt eraan. Alleen de inhoud is van dagelijks nachtsetpoint
-# naar wekelijks ochtend-opstookexperiment gegaan.
+# naar een wekelijks verwarmingsexperiment gegaan (sinds nov 2026: nachtsetpoint
+# afkoelen vs warm houden; daarvóór ochtend-opstook early vs hard).
 
 on:
   schedule:

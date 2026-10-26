@@ -1,18 +1,23 @@
-"""Wekelijks verwarmingsexperiment: welke ochtend-opstookarm draait deze week.
+"""Wekelijks verwarmingsexperiment: welk nachtsetpoint draait deze week.
 
-Vervangt de dagelijkse willekeurige nachtsetpoint-suggestie. Twee redenen:
+De vraag (bewonersbesluit okt 2026): **wat kost het om het huis 's nachts warm
+te houden, vergeleken met het laten afkoelen?** Twee armen, wekelijks
+alternerend: `afkoelen` (nachtsetpoint 16 °C — het huis komt daar in de
+praktijk niet onder, dus het koelt vrij af) en `warm` (nachtsetpoint 19 °C).
 
-1. **Het nachtsetpoint is geen lever meer.** De UA van het hele huis naar
-   buiten is 163 W/K; lager dan 16 °C zetten kost niets omdat het setpoint
-   dan nooit bindt, en 1 K warmer aanhouden kost ~€32 per seizoen (150
-   nachten × 8 u, 92% ketelrendement, €1,45/m³). De enige realistische
-   uitkomst van dat experiment is de bevestiging dat je het niet omhoog moet
-   zetten — een eenrichtingsresultaat.
-2. **De ochtend-opstook is dat wél.** Een harde blast om 06:00 duwt aanvoer-
-   én retourtemperatuur omhoog en kan een condenserende ketel uit
-   condensatie trekken; een zachtere, vroegere ramp houdt de retour laag en
-   het rendement hoog. Dat is een echt effect van enkele procenten, het is
-   onzichtbaar zonder te meten, en de fysica geeft het antwoord niet al weg.
+**Waarom dit wél gemeten wordt.** Het experiment dat hier tot okt 2026 liep
+(`morning_recovery`, early start vs. harde start om 06:00) was gekozen op basis
+van een rekensom van buiten de repo: UA 163 W/K, "lager dan 16 °C bindt nooit",
+~€32 per graad warmer per seizoen (150 nachten × 8 u, 92% ketelrendement,
+€1,45/m³). Daaruit volgde "warm houden is per definitie duurder, dus niet het
+meten waard". De *richting* klopt fysisch vrijwel zeker, maar de *prijs* — en
+dáár gaat de afweging tegen comfort over — is nooit gemeten. Die rekensom is
+dus een hypothese die dit experiment toetst, geen uitkomst.
+
+**Early start staat in béíde armen aan.** Zo meet het verschil precies
+"afkoelen + weer opwarmen" tegen "warm houden", inclusief het (mogelijk minder
+zuinige) opwarmen in de ochtend — en verder niets. Als early start per arm zou
+verschillen, valt niet meer te zeggen waar een verschil vandaan komt.
 
 **Waarom wekelijks en niet in blokken van twee maanden.** Twee maandblokken
 verschillen per *seizoen*, niet per instelling: januari is kouder dan
@@ -27,8 +32,8 @@ de eerste schone ochtend.
 De armkeuze is **puur uit de datum afgeleid** (pariteit van het maandag-
 ordinaal), niet uit de state. Een gemiste maandag, een handmatige dispatch of
 de zomerstop kan de alternatie dus niet uit de pas laten lopen; de state is
-enkel het logboek voor de latere analyse (armen koppelen aan gasverbruik +
-graaddagen gebeurt buiten dit script).
+enkel het logboek voor de latere analyse (armen koppelen aan het gasverbruik
+uit tado Energy IQ + graaddagen gebeurt buiten dit script).
 """
 
 import json
@@ -38,25 +43,29 @@ from datetime import date, timedelta
 from notify import run_guarded, sanitize_error, send_telegram
 from shared_const import format_date_nl, local_today, utc_now_iso
 
-EXPERIMENT = "morning_recovery"
+EXPERIMENT = "night_setpoint"
 
-# Vaste starttijd van het comfortblok in de `hard`-arm.
-HARD_START = "06:00"
+# Het experiment dat tot deze maandag liep. Zijn weekregels blijven in het
+# logboek staan (getagd), zodat de historie niet verloren gaat.
+PREVIOUS_EXPERIMENT = "morning_recovery"
 
-# Het nachtsetpoint is in dit experiment een *constante*, geen variabele — als
-# het meeschommelt is de vergelijking geen zuivere vergelijking meer.
-NIGHT_SETPOINT = 16.0
+# Eerste maandag van dit experiment. Weken daarvóór hoorden bij
+# `morning_recovery`; een dispatch in zo'n week schrijft niets, anders
+# overschrijft hij de bestaande weekregel van het vorige experiment.
+EXPERIMENT_START = date(2026, 11, 2)
 
 ARMS = {
-    "early": {
-        "label": "slimme start",
-        "detail": "zet tado's early start (voorverwarmen) AAN voor de woonkamer — "
-        "de ketel mag zelf vroeger en zachter naar het comfortblok toe werken.",
+    "afkoelen": {
+        "label": "laten afkoelen",
+        "setpoint": 16.0,
+        "detail": "zet het nachtblok in het tado-schema op 16 °C — het huis "
+        "komt daar in de praktijk niet onder, dus het koelt vrij af.",
     },
-    "hard": {
-        "label": "harde start",
-        "detail": "zet tado's early start (voorverwarmen) UIT — het comfortblok "
-        f"begint hard om {HARD_START}.",
+    "warm": {
+        "label": "warm houden",
+        "setpoint": 19.0,
+        "detail": "zet het nachtblok in het tado-schema op 19 °C — het huis "
+        "wordt 's nachts op temperatuur gehouden.",
     },
 }
 
@@ -86,7 +95,10 @@ def arm_for_week(d: date) -> str:
     gegarandeerd met 1 op. Op het ISO-weeknummer zou een jaar met 53 weken
     twee gelijke armen achter elkaar geven op de jaargrens.
     """
-    return "early" if (monday_of(d).toordinal() // 7) % 2 == 0 else "hard"
+    # Fase zo gekozen dat de eerste week (`EXPERIMENT_START`) `afkoelen` is —
+    # dat is de stand van vóór het experiment, dus die week begint zonder
+    # omschakeling.
+    return "warm" if (monday_of(d).toordinal() // 7) % 2 == 0 else "afkoelen"
 
 
 def week_label(monday: date) -> str:
@@ -96,12 +108,12 @@ def week_label(monday: date) -> str:
 
 
 def analysis_window(monday: date) -> tuple[date, date]:
-    """(eerste, laatste) ochtend die voor deze arm meetelt.
+    """(eerste, laatste) dag die voor deze arm meetelt.
 
     De omschakeling gebeurt maandagavond; de settle-periode van 24 u loopt dan
-    tot dinsdagavond, dus dinsdagochtend valt af en woensdag is de eerste
-    schone ochtend. De arm loopt door tot het bericht van de vólgende maandag,
-    dus die maandagochtend telt nog mee.
+    tot dinsdagavond, dus dinsdag valt af en woensdag is de eerste schone dag.
+    De arm loopt door tot het bericht van de vólgende maandag, dus die
+    maandag telt nog mee.
     """
     return monday + timedelta(days=2), monday + timedelta(days=7)
 
@@ -111,7 +123,9 @@ def week_entry(monday: date, arm: str) -> dict:
     start, end = analysis_window(monday)
     return {
         "week": week_label(monday),
+        "experiment": EXPERIMENT,
         "arm": arm,
+        "night_setpoint": ARMS[arm]["setpoint"],
         "switched_at": monday.isoformat(),
         "analyse_from": start.isoformat(),
         "analyse_through": end.isoformat(),
@@ -140,22 +154,29 @@ def load_state() -> dict:
     except (json.JSONDecodeError, OSError) as e:
         print(f"[state] {path} onleesbaar ({sanitize_error(e)}), verder met leeg logboek")
         return defaults
+    # Weekregels van vóór de per-regel-tag horen bij het experiment dat toen
+    # bovenaan het bestand stond. Taggen vóórdat `record_week` die kop
+    # overschrijft — anders lezen de oude regels daarna als het nieuwe
+    # experiment.
+    owner = state.get("experiment", PREVIOUS_EXPERIMENT)
+    for w in state.setdefault("weeks", []):
+        w.setdefault("experiment", owner)
     state.setdefault("experiment", EXPERIMENT)
-    state.setdefault("weeks", [])
     return state
 
 
 def previous_arm(state: dict, monday: date) -> str | None:
     """De arm die vorige week draaide volgens het logboek, of `None`.
 
-    Bewust uit het logboek en niet uit `other_arm()`: bij een koude start (of
-    na de zomerstop) is er géén vorige week, en dan is "vorige week draaide de
-    harde start" een verzonnen bewering over een week die het experiment niet
-    gedraaid heeft.
+    Bewust uit het logboek en niet uit de pariteit: bij een koude start (of na
+    de zomerstop) is er géén vorige week, en dan is "vorige week draaide …" een
+    verzonnen bewering over een week die het experiment niet gedraaid heeft.
+    Alleen regels van dít experiment tellen: de laatste `morning_recovery`-week
+    is geen vorige arm van het nachtsetpoint-experiment.
     """
     label = week_label(monday - timedelta(days=7))
     for w in state.get("weeks", []):
-        if w.get("week") == label:
+        if w.get("week") == label and w.get("experiment") == EXPERIMENT:
             return w.get("arm")
     return None
 
@@ -188,7 +209,7 @@ def build_message(monday: date, arm: str, prev_arm: str | None) -> str:
     drop = monday + timedelta(days=1)
     this = ARMS[arm]
     vorige = (
-        f"Vorige week draaide de {ARMS[prev_arm]['label']}."
+        f"Vorige week: {ARMS[prev_arm]['label']} ({ARMS[prev_arm]['setpoint']:.0f} °C)."
         if prev_arm
         else "Eerste week van het experiment — vanaf nu wisselt het elke maandag."
     )
@@ -197,7 +218,7 @@ def build_message(monday: date, arm: str, prev_arm: str | None) -> str:
         [
             f"🔥 *Verwarmingsexperiment — week {week_label(monday)}*",
             "",
-            f"Deze week: *{this['label']}*",
+            f"Deze week: *{this['label']}* (nacht {this['setpoint']:.0f} °C)",
             f"→ {this['detail']}",
             "",
             vorige,
@@ -205,8 +226,10 @@ def build_message(monday: date, arm: str, prev_arm: str | None) -> str:
             f"{format_date_nl(drop)} valt af (het huis draagt na de omschakeling "
             "nog ~24 u zijn oude toestand mee).",
             "",
-            f"Nachtsetpoint blijft vast op {NIGHT_SETPOINT:.1f}°C — dat is niet "
-            "meer wat we testen.",
+            "Early start (voorverwarmen) blijft in béíde weken aan — alleen het "
+            "nachtsetpoint wisselt.",
+            "Tip: een gasmeterstand in tado (Energy IQ) op deze avond maakt de "
+            "week echt gemeten i.p.v. door tado verdeeld.",
         ]
     )
 
@@ -215,6 +238,10 @@ def main():
     today = local_today()
     monday = monday_of(today)
     arm = arm_for_week(today)
+
+    if monday < EXPERIMENT_START:
+        print(f"Experiment start op {EXPERIMENT_START.isoformat()} — geen bericht, geen weekregistratie.")
+        return
 
     if today.month not in SEASON_MONTHS and os.environ.get("FORCE_SEND") != "1":
         print(f"Buiten het stookseizoen (maand {today.month}) — geen bericht, geen weekregistratie.")

@@ -1,4 +1,4 @@
-"""Tests voor heating_experiment_notify — de wekelijkse armkeuze + het logboek.
+"""Tests voor heating_experiment_notify — de wekelijkse nachtsetpoint-arm + het logboek.
 
 Alles wat ertoe doet is puur (datum in, arm/venster/logboek uit), dus de hele
 alternatie is zonder Telegram of netwerk door te rekenen. De twee eigenschappen
@@ -9,6 +9,8 @@ vallen van de eerste dag na de omschakeling.
 
 import json
 from datetime import date, timedelta
+
+import pytest
 
 import heating_experiment_notify as hx
 from heating_experiment_notify import (analysis_window, arm_for_week, build_message,
@@ -36,7 +38,7 @@ def test_arm_alterneert_strikt_over_twee_jaar():
     reeks = [arm_for_week(MON + timedelta(weeks=w)) for w in range(104)]
     assert all(a != b for a, b in zip(reeks, reeks[1:]))
     # en beide armen komen even vaak voor
-    assert reeks.count("early") == reeks.count("hard") == 52
+    assert reeks.count("afkoelen") == reeks.count("warm") == 52
 
 
 def test_arm_hangt_niet_af_van_de_state():
@@ -69,10 +71,12 @@ def test_meetvenster_laat_de_dinsdag_vallen():
 
 
 def test_week_entry_is_volledig_datum_afgeleid():
-    entry = week_entry(MON, "early")
+    entry = week_entry(MON, "afkoelen")
     assert entry == {
         "week": "2026-W45",
-        "arm": "early",
+        "experiment": "night_setpoint",
+        "arm": "afkoelen",
+        "night_setpoint": 16.0,
         "switched_at": "2026-11-02",
         "analyse_from": "2026-11-04",
         "analyse_through": "2026-11-09",
@@ -84,10 +88,10 @@ def test_week_entry_is_volledig_datum_afgeleid():
 
 def test_record_week_upsert_geen_dubbele_regels():
     """Een tweede dispatch in dezelfde week overschrijft, stapelt niet."""
-    state = {"experiment": "morning_recovery", "weeks": []}
-    state = record_week(state, week_entry(MON, "early"))
-    state = record_week(state, week_entry(MON, "early"))
-    state = record_week(state, week_entry(MON + timedelta(weeks=1), "hard"))
+    state = {"experiment": "night_setpoint", "weeks": []}
+    state = record_week(state, week_entry(MON, "afkoelen"))
+    state = record_week(state, week_entry(MON, "afkoelen"))
+    state = record_week(state, week_entry(MON + timedelta(weeks=1), "warm"))
     assert [w["week"] for w in state["weeks"]] == ["2026-W45", "2026-W46"]
 
 
@@ -102,39 +106,54 @@ def test_record_week_sorteert_en_kapt_af(monkeypatch):
 
 def test_load_state_op_ontbrekend_bestand(tmp_path, monkeypatch):
     monkeypatch.setenv("HEATING_STATE_FILE", str(tmp_path / "nog-niets.json"))
-    assert load_state() == {"experiment": "morning_recovery", "weeks": []}
+    assert load_state() == {"experiment": "night_setpoint", "weeks": []}
 
 
 def test_save_en_load_rondrit(tmp_path, monkeypatch):
     monkeypatch.setenv("HEATING_STATE_FILE", str(tmp_path / "state.json"))
-    save_state(record_week(load_state(), week_entry(MON, "early")))
+    save_state(record_week(load_state(), week_entry(MON, "afkoelen")))
     state = load_state()
-    assert state["weeks"][0]["arm"] == "early"
+    assert state["weeks"][0]["arm"] == "afkoelen"
     assert state["last_updated"]
 
 
 # ── Bericht ──────────────────────────────────────────────────────────────────
 
-def test_bericht_noemt_arm_meetvenster_en_vast_setpoint():
-    msg = build_message(MON, "early", "hard")
+def test_bericht_noemt_arm_setpoint_en_meetvenster():
+    msg = build_message(MON, "afkoelen", "warm")
     assert "2026-W45" in msg
-    assert "slimme start" in msg                    # deze week
-    assert "harde start" in msg                     # vorige week
+    assert "laten afkoelen" in msg and "16 °C" in msg   # deze week
+    assert "warm houden (19 °C)" in msg                 # vorige week
     assert "woensdag 4 nov" in msg and "maandag 9 nov" in msg
-    assert "dinsdag 3 nov" in msg                   # de dag die afvalt
-    assert "16.0" in msg                            # nachtsetpoint ligt vast
+    assert "dinsdag 3 nov" in msg                       # de dag die afvalt
+
+
+def test_early_start_staat_in_beide_armen_aan():
+    """Alleen het nachtsetpoint wisselt; early start is geen tweede factor.
+
+    Zou early start per arm verschillen, dan valt een gasverschil niet meer
+    aan het setpoint toe te schrijven.
+    """
+    for arm in hx.ARMS:
+        msg = build_message(MON, arm, None)
+        assert "Early start (voorverwarmen) blijft in béíde weken aan" in msg
+
+
+def test_armen_verschillen_alleen_in_setpoint():
+    assert hx.ARMS["afkoelen"]["setpoint"] == 16.0
+    assert hx.ARMS["warm"]["setpoint"] > hx.ARMS["afkoelen"]["setpoint"]
 
 
 def test_bericht_verzint_geen_vorige_week_bij_koude_start():
     """Zonder logboekregel voor vorige week geen bewering over vorige week."""
-    msg = build_message(MON, "early", None)
+    msg = build_message(MON, "afkoelen", None)
     assert "Vorige week" not in msg
     assert "Eerste week van het experiment" in msg
 
 
 def test_previous_arm_leest_uit_het_logboek():
-    state = record_week({"weeks": []}, week_entry(MON - timedelta(weeks=1), "hard"))
-    assert previous_arm(state, MON) == "hard"
+    state = record_week({"weeks": []}, week_entry(MON - timedelta(weeks=1), "warm"))
+    assert previous_arm(state, MON) == "warm"
     assert previous_arm(state, MON + timedelta(weeks=1)) is None   # gat in het log
 
 
@@ -161,12 +180,12 @@ def test_main_verstuurt_en_registreert(monkeypatch, tmp_path):
 
 
 def test_main_zwijgt_buiten_het_stookseizoen(monkeypatch, tmp_path):
-    sent, state = _run_main(monkeypatch, tmp_path, date(2026, 8, 3))
+    sent, state = _run_main(monkeypatch, tmp_path, date(2027, 8, 2))
     assert sent == [] and state is None
 
 
 def test_main_force_send_negeert_het_seizoen(monkeypatch, tmp_path):
-    sent, _ = _run_main(monkeypatch, tmp_path, date(2026, 8, 3), FORCE_SEND="1")
+    sent, _ = _run_main(monkeypatch, tmp_path, date(2027, 8, 2), FORCE_SEND="1")
     assert len(sent) == 1
 
 
@@ -175,3 +194,61 @@ def test_dry_run_stuurt_niets_en_vervuilt_het_logboek_niet(monkeypatch, tmp_path
     datum-afgeleid, dus er valt niets te bewaren."""
     sent, state = _run_main(monkeypatch, tmp_path, MON, DRY_RUN="1")
     assert sent == [] and state is None
+
+
+# ── Overgang vanaf het ochtend-opstookexperiment ─────────────────────────────
+
+OUD_LOG = {
+    "experiment": "morning_recovery",
+    "weeks": [
+        {"week": "2026-W43", "arm": "hard", "switched_at": "2026-10-19",
+         "analyse_from": "2026-10-21", "analyse_through": "2026-10-26"},
+        {"week": "2026-W44", "arm": "early", "switched_at": "2026-10-26",
+         "analyse_from": "2026-10-28", "analyse_through": "2026-11-02"},
+    ],
+}
+
+
+def test_eerste_maandag_is_de_start():
+    assert hx.EXPERIMENT_START.weekday() == 0
+    assert arm_for_week(hx.EXPERIMENT_START) == "afkoelen"
+
+
+def test_oude_weken_blijven_staan_en_houden_hun_experiment(tmp_path, monkeypatch):
+    """De oude weekregels zijn de enige historie van het vorige experiment.
+
+    Ze krijgen bij het laden hun eigen experiment-tag, vóórdat de kop van het
+    bestand naar het nieuwe experiment omgaat — anders lezen ze daarna als
+    nachtsetpoint-weken.
+    """
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(OUD_LOG))
+    monkeypatch.setenv("HEATING_STATE_FILE", str(path))
+    state = record_week(load_state(), week_entry(MON, "afkoelen"))
+    save_state(state)
+    weeks = load_state()["weeks"]
+    assert [(w["week"], w["experiment"]) for w in weeks] == [
+        ("2026-W43", "morning_recovery"),
+        ("2026-W44", "morning_recovery"),
+        ("2026-W45", "night_setpoint"),
+    ]
+
+
+def test_eerste_week_noemt_geen_ochtend_arm_als_vorige(tmp_path, monkeypatch):
+    """W44 draaide `early` — dat is geen arm van dít experiment (en geen sleutel
+    in ARMS), dus het eerste bericht zegt "eerste week"."""
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(OUD_LOG))
+    monkeypatch.setenv("HEATING_STATE_FILE", str(path))
+    assert previous_arm(load_state(), MON) is None
+
+
+def test_dispatch_vóór_de_start_overschrijft_de_oude_week_niet(monkeypatch, tmp_path):
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(OUD_LOG))
+    monkeypatch.setattr(hx, "local_today", lambda: date(2026, 10, 27))
+    monkeypatch.setattr(hx, "send_telegram", lambda msg, **kw: pytest.fail("verstuurd"))
+    monkeypatch.setenv("HEATING_STATE_FILE", str(path))
+    monkeypatch.setenv("FORCE_SEND", "1")
+    main()
+    assert json.loads(path.read_text()) == OUD_LOG
