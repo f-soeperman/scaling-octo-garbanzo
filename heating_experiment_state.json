@@ -21,7 +21,14 @@
       "switched_at": "2026-10-19",
       "analyse_from": "2026-10-21",
       "analyse_through": "2026-10-26"
+    },
+    {
+      "week": "2026-W44",
+      "arm": "early",
+      "switched_at": "2026-10-26",
+      "analyse_from": "2026-10-28",
+      "analyse_through": "2026-11-02"
     }
   ],
-  "last_updated": "2026-10-19T19:00:51.984540+00:00"
+  "last_updated": "2026-10-26T20:00:36.627102+00:00"
 }
