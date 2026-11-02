@@ -1,34 +1,47 @@
 {
-  "experiment": "morning_recovery",
+  "experiment": "night_setpoint",
   "weeks": [
     {
       "week": "2026-W41",
       "arm": "hard",
       "switched_at": "2026-10-05",
       "analyse_from": "2026-10-07",
-      "analyse_through": "2026-10-12"
+      "analyse_through": "2026-10-12",
+      "experiment": "morning_recovery"
     },
     {
       "week": "2026-W42",
       "arm": "early",
       "switched_at": "2026-10-12",
       "analyse_from": "2026-10-14",
-      "analyse_through": "2026-10-19"
+      "analyse_through": "2026-10-19",
+      "experiment": "morning_recovery"
     },
     {
       "week": "2026-W43",
       "arm": "hard",
       "switched_at": "2026-10-19",
       "analyse_from": "2026-10-21",
-      "analyse_through": "2026-10-26"
+      "analyse_through": "2026-10-26",
+      "experiment": "morning_recovery"
     },
     {
       "week": "2026-W44",
       "arm": "early",
       "switched_at": "2026-10-26",
       "analyse_from": "2026-10-28",
-      "analyse_through": "2026-11-02"
+      "analyse_through": "2026-11-02",
+      "experiment": "morning_recovery"
+    },
+    {
+      "week": "2026-W45",
+      "experiment": "night_setpoint",
+      "arm": "afkoelen",
+      "night_setpoint": 16.0,
+      "switched_at": "2026-11-02",
+      "analyse_from": "2026-11-04",
+      "analyse_through": "2026-11-09"
     }
   ],
-  "last_updated": "2026-10-26T20:00:36.627102+00:00"
+  "last_updated": "2026-11-02T20:45:34.632675+00:00"
 }
