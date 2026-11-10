@@ -40,12 +40,16 @@ const H3_DEFAULT_LAYOUT = { zones: {
 const H3_LEVELS = [[0, 2.7], [2.8, 5.5], [5.6, 8.3]];   // verdiepingen (voor het uit elkaar trekken)
 const H3_EXPLODE_M = 3.2;                               // extra tussenruimte per verdieping bij 100 %
 const H3_COL = { open: 0x7cffb2, tilt: 0xffd166, dicht: 0x6b7a94, fixed: 0x3d4a66 };
-const H3_MAXP = 7000, H3_TRAIL = 7;
+const H3_MAXP = 5000, H3_TRAIL = 12;                  // deeltjes × lintpunten (zie h3Ribbons)
+const H3_LIFT_M = 18;                                   // zo ver tillen de verdiepingen bóven een doorsnede weg
+const H3_HAZE_CELL = 1.3;                               // rastermaat van de warmtewaas (m)
 
 const h3 = {
   data: null, meta: null, params: {}, states: {}, live: {}, env: {}, liveEnv: {},
   layout: H3_DEFAULT_LAYOUT, extras: [],
-  view: { explode: 0, glass: 0.3, roof: true, speed: 3, density: 0.6, spin: true },
+  view: { explode: 0, glass: 0.3, roof: true, speed: 3, density: 0.6, spin: true,
+          bloom: window.innerWidth >= 760, haze: true, cut: -1, follow: false },
+  lvlOff: [0, 0, 0],
   zones: [], box: {}, portals: [], portalById: {}, edges: [], outOf: {}, inflow: [],
   zoneTemp: {}, fresh: {}, flowInfo: {}, tRange: [16, 26], ready: false,
 };
@@ -56,7 +60,9 @@ const lerp = (a, b, t) => a + (b - a) * t;
 const rnd = (a, b) => a + Math.random() * (b - a);
 const sstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 const levelOf = y => (y < 2.75 ? 0 : y < 5.55 ? 1 : 2);
-const dispY = y => y + h3.view.explode * H3_EXPLODE_M * (sstep(2.7, 2.8, y) + sstep(5.5, 5.6, y));
+// Weergave-hoogte: elke verdieping heeft een eigen (geanimeerde) verschuiving — uit elkaar
+// trekken én wegtillen boven een doorsnede lopen via dezelfde drie getallen.
+const dispY = y => { const o = h3.lvlOff; return y + o[0] + (o[1] - o[0]) * sstep(2.7, 2.8, y) + (o[2] - o[1]) * sstep(5.5, 5.6, y); };
 const esc = s => ("" + s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 const shortLabel = s => ("" + s).split(" (")[0].split(" — ")[0];
 // Lokale huis-as voor een kompasrichting: +x kijkt naar de straatgevel (PLAN_FRONT_AZ).
@@ -106,7 +112,7 @@ async function h3Load() {
   h3.states = Object.assign({}, h3.live);
   try {
     if (!h3.ready) h3Init();
-    h3BuildHouse(); h3BuildPanel(); h3Recompute();
+    h3BuildHouse(); h3BuildHaze(); h3BuildPanel(); h3Recompute();
   } catch (e) {
     console.error(e); overlay(`Het 3D-beeld kon niet starten (${esc(e.message)}). Ondersteunt deze browser WebGL?`); return;
   }
@@ -284,6 +290,7 @@ function h3BuildHouse() {
   let X0 = 1e9, X1 = -1e9, Z0 = 1e9, Z1 = -1e9;
   all.forEach(({ B }) => { X0 = Math.min(X0, B.x0); X1 = Math.max(X1, B.x1); Z0 = Math.min(Z0, B.z0); Z1 = Math.max(Z1, B.z1); });
   inner.position.set(-(X0 + X1) / 2, 0, -(Z0 + Z1) / 2);
+  h3.bounds = { x0: X0, x1: X1, z0: Z0, z1: Z1 };
   h3.houseOuter.add(inner);
   h3.levelGroups = [0, 1, 2].map(() => { const g = new T.Group(); inner.add(g); return g; });
   h3.roofGroups = [0, 1, 2].map(i => { const g = new T.Group(); h3.levelGroups[i].add(g); return g; });
@@ -298,7 +305,7 @@ function h3BuildHouse() {
   const label = (key, B) => {
     const cv = document.createElement("canvas"); cv.width = 512; cv.height = 150;
     const tex = new T.CanvasTexture(cv), sp = new T.Sprite(new T.SpriteMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false }));
-    sp.scale.set(3.2, 0.94, 1); sp.renderOrder = 20;
+    sp.scale.set(3.2, 0.94, 1); sp.renderOrder = 20; sp.layers.set(1);
     const ly = Math.min(B.y1, B.y0 + 2.7) - 0.75;
     sp.position.set((B.x0 + B.x1) / 2, ly, (B.z0 + B.z1) / 2);
     h3.levelGroups[levelOf(ly)].add(sp);
@@ -508,7 +515,7 @@ function h3InitParticles() {
     pos: new Float32Array(N * 3), vel: new Float32Array(N * 3), tgt: new Float32Array(N * 3), exit: new Float32Array(N * 3),
     phase: new Uint8Array(N), zone: new Int16Array(N).fill(-1), edge: new Int32Array(N).fill(-1), temp: new Float32Array(N),
     life: new Float32Array(N), part: new Uint8Array(N), ttl: new Float32Array(N), alpha: new Float32Array(N), seed: new Float32Array(N), age: new Uint8Array(N), spd: new Float32Array(N),
-    hist: Array.from({ length: H3_TRAIL + 1 }, () => new Float32Array(N * 3)), head: 0,
+    hist: Array.from({ length: H3_TRAIL }, () => new Float32Array(N * 3)), head: 0,
   };
   for (let i = 0; i < N; i++) { P.seed[i] = Math.random() * 100; P.life[i] = Math.random() * 6; }
   const cv = document.createElement("canvas"); cv.width = cv.height = 64;
@@ -518,14 +525,21 @@ function h3InitParticles() {
   const pg = new T.BufferGeometry();
   P.dpos = new Float32Array(N * 3); P.dcol = new Float32Array(N * 3);
   pg.setAttribute("position", new T.BufferAttribute(P.dpos, 3)); pg.setAttribute("color", new T.BufferAttribute(P.dcol, 3));
-  h3.points = new T.Points(pg, new T.PointsMaterial({ size: 0.2, map: new T.CanvasTexture(cv), vertexColors: true, transparent: true,
+  h3.points = new T.Points(pg, new T.PointsMaterial({ size: 0.11, opacity: 0.55, map: new T.CanvasTexture(cv), vertexColors: true, transparent: true,
     blending: T.AdditiveBlending, depthWrite: false, sizeAttenuation: true }));
   h3.points.frustumCulled = false; h3.points.renderOrder = 10;
-  const lg = new T.BufferGeometry();
-  P.lpos = new Float32Array(N * H3_TRAIL * 6); P.lcol = new Float32Array(N * H3_TRAIL * 6);
-  lg.setAttribute("position", new T.BufferAttribute(P.lpos, 3)); lg.setAttribute("color", new T.BufferAttribute(P.lcol, 3));
-  h3.trails = new T.LineSegments(lg, new T.LineBasicMaterial({ vertexColors: true, transparent: true, blending: T.AdditiveBlending, depthWrite: false }));
-  h3.trails.frustumCulled = false; h3.trails.renderOrder = 9;
+  // Linten: per deeltje een taps toelopende, naar de camera gedraaide strook langs zijn spoor.
+  const K = H3_TRAIL, V = N * (K + 1) * 2, idx = new Uint32Array(N * K * 6);
+  for (let i = 0, q = 0; i < N; i++) for (let j = 0; j < K; j++) {
+    const a = (i * (K + 1) + j) * 2;
+    idx[q++] = a; idx[q++] = a + 1; idx[q++] = a + 2; idx[q++] = a + 1; idx[q++] = a + 3; idx[q++] = a + 2;
+  }
+  P.rpos = new Float32Array(V * 3); P.rcol = new Float32Array(V * 3); P.drawn = new Uint8Array(N); P.tick = 0;
+  const rg = new T.BufferGeometry();
+  rg.setAttribute("position", new T.BufferAttribute(P.rpos, 3)); rg.setAttribute("color", new T.BufferAttribute(P.rcol, 3));
+  rg.setIndex(new T.BufferAttribute(idx, 1));
+  h3.ribbon = new T.Mesh(rg, new T.MeshBasicMaterial({ vertexColors: true, transparent: true, blending: T.AdditiveBlending, depthWrite: false, side: T.DoubleSide }));
+  h3.ribbon.frustumCulled = false; h3.ribbon.renderOrder = 9;
 }
 
 function pickEdge(list) {
@@ -598,8 +612,9 @@ function h3Rechoose() {                              // na een herberekening: bi
 function h3Step(dt, time) {
   const P = h3.P, ts = h3.view.speed, sdt = dt * ts, wl = h3.windLocal, col = [0, 0, 0];
   const steer = 1 - Math.exp(-sdt * 3.2), N = H3_MAXP, act = h3.active;
-  P.head = (P.head + 1) % (H3_TRAIL + 1);
-  const hNow = P.hist[P.head];
+  const push = (P.tick++ & 1) === 0;                    // spoorpunt om de twee frames → langere linten
+  if (push) P.head = (P.head + 1) % H3_TRAIL;
+  const hNow = P.hist[P.head], hz = h3.haze, hideLv = h3.view.cut >= 0 ? h3.view.cut : 9;
   for (let i = 0; i < N; i++) {
     const o = i * 3; let ph = P.phase[i];
     if (i >= act && (ph === 0 || ph === 4 || ph === 5) && P.alpha[i] <= 0.01) { P.phase[i] = 0; P.dcol[o] = P.dcol[o + 1] = P.dcol[o + 2] = 0; P.age[i] = 0; continue; }
@@ -640,31 +655,106 @@ function h3Step(dt, time) {
     const zt = P.zone[i] >= 0 ? h3.zoneTemp[h3.zones[P.zone[i]]] : h3.env.tOut;
     P.temp[i] += (zt - P.temp[i]) * (1 - Math.exp(-sdt * 0.22));
     tempColor(P.temp[i], col);
-    const a = P.alpha[i];
+    const a = levelOf(P.pos[o + 1]) > hideLv ? 0 : P.alpha[i];   // boven de doorsnede: onzichtbaar
     P.dpos[o] = P.pos[o]; P.dpos[o + 1] = dispY(P.pos[o + 1]); P.dpos[o + 2] = P.pos[o + 2];
     P.dcol[o] = col[0] * a; P.dcol[o + 1] = col[1] * a; P.dcol[o + 2] = col[2] * a;
-    hNow[o] = P.pos[o]; hNow[o + 1] = P.pos[o + 1]; hNow[o + 2] = P.pos[o + 2];
-    if (P.age[i] < 250) P.age[i]++;
-  }
-  // Staartjes: K segmenten terug in de ringbuffer, uitdovend.
-  const K = H3_TRAIL, R = K + 1, ex = h3.view.explode > 0.001;
-  for (let i = 0; i < N; i++) {
-    const o = i * 3, base = i * K * 6, age = P.age[i];
-    for (let j = 0; j < K; j++) {
-      const q = base + j * 6;
-      if (age <= j + 1) { for (let k = 0; k < 6; k++) { P.lcol[q + k] = 0; P.lpos[q + k] = 0; } continue; }
-      const A = P.hist[(P.head - j + R) % R], Bq = P.hist[(P.head - j - 1 + R) % R], f0 = 0.55 * (1 - j / K), f1 = 0.55 * (1 - (j + 1) / K);
-      const ya = ex ? dispY(A[o + 1]) : A[o + 1], yb = ex ? dispY(Bq[o + 1]) : Bq[o + 1];
-      // Uit elkaar getrokken verdiepingen: een staartje dat de kier overbrugt zou een lange streep worden.
-      if (ex && Math.abs(ya - yb) > 0.5) { for (let k = 0; k < 6; k++) { P.lcol[q + k] = 0; P.lpos[q + k] = 0; } continue; }
-      P.lpos[q] = A[o]; P.lpos[q + 1] = ya; P.lpos[q + 2] = A[o + 2]; P.lpos[q + 3] = Bq[o]; P.lpos[q + 4] = yb; P.lpos[q + 5] = Bq[o + 2];
-      P.lcol[q] = P.dcol[o] * f0; P.lcol[q + 1] = P.dcol[o + 1] * f0; P.lcol[q + 2] = P.dcol[o + 2] * f0;
-      P.lcol[q + 3] = P.dcol[o] * f1; P.lcol[q + 4] = P.dcol[o + 1] * f1; P.lcol[q + 5] = P.dcol[o + 2] * f1;
+    if (push) { hNow[o] = P.pos[o]; hNow[o + 1] = P.pos[o + 1]; hNow[o + 2] = P.pos[o + 2]; if (P.age[i] < 250) P.age[i]++; }
+    // Warmtewaas: een deeltje in een kamer trekt de cel waar het doorheen gaat naar zijn eigen temperatuur.
+    if (hz && P.zone[i] >= 0 && (P.phase[i] === 2 || P.phase[i] === 3)) {
+      const g = hz.grid[P.zone[i]], B = h3.box[h3.zones[P.zone[i]]];
+      const pk = g && g[Math.max(0, partAt(B, P.pos[o], P.pos[o + 2]))];
+      if (pk) {
+        const C = pk.B, ix = clamp(Math.floor((P.pos[o] - C.x0) / pk.sx), 0, pk.nx - 1), iy = clamp(Math.floor((P.pos[o + 1] - C.y0) / pk.sy), 0, pk.ny - 1), iz = clamp(Math.floor((P.pos[o + 2] - C.z0) / pk.sz), 0, pk.nz - 1);
+        const c = pk.off + (iy * pk.nz + iz) * pk.nx + ix;
+        hz.T[c] += (P.temp[i] - hz.T[c]) * 0.04;
+      }
     }
   }
-  const pg = h3.points.geometry, lg = h3.trails.geometry;
-  pg.attributes.position.needsUpdate = pg.attributes.color.needsUpdate = true;
-  lg.attributes.position.needsUpdate = lg.attributes.color.needsUpdate = true;
+  h3Ribbons();
+  h3HazeStep(sdt, time, hideLv);
+  h3.points.geometry.attributes.position.needsUpdate = h3.points.geometry.attributes.color.needsUpdate = true;
+}
+
+// Linten opbouwen: punt 0 is de actuele positie, daarachter de spoorpunten. Ongeldige punten
+// (jonger dan het spoor, of over de kier tussen uit elkaar getrokken verdiepingen) vallen
+// samen met het laatste geldige punt, zodat er nooit een streep naar een oude plek loopt.
+function h3Ribbons() {
+  const P = h3.P, K = H3_TRAIL, N = H3_MAXP, W = 0.034;
+  const cl = h3.houseInner.worldToLocal(h3.camera.position.clone());
+  const px = new Float32Array(K + 1), py = new Float32Array(K + 1), pz = new Float32Array(K + 1);
+  for (let i = 0; i < N; i++) {
+    const o = i * 3, base = i * (K + 1) * 6, r = P.dcol[o], g = P.dcol[o + 1], b = P.dcol[o + 2];
+    if (r + g + b < 0.004) {
+      if (P.drawn[i]) { P.rpos.fill(0, base, base + (K + 1) * 6); P.rcol.fill(0, base, base + (K + 1) * 6); P.drawn[i] = 0; }
+      continue;
+    }
+    P.drawn[i] = 1;
+    px[0] = P.dpos[o]; py[0] = P.dpos[o + 1]; pz[0] = P.dpos[o + 2];
+    // Vlak voor de lens zou één lint het hele beeld vullen (volg-camera): dichtbij uitdoven.
+    const near = clamp((Math.hypot(px[0] - cl.x, py[0] - cl.y, pz[0] - cl.z) - 0.7) / 2.5, 0, 1);
+    let nv = Math.min(K, P.age[i]) + 1;
+    for (let j = 1; j < nv; j++) {
+      const H = P.hist[(P.head - (j - 1) + K * 2) % K];
+      px[j] = H[o]; py[j] = dispY(H[o + 1]); pz[j] = H[o + 2];
+      if (Math.abs(py[j] - py[j - 1]) > 0.6 || Math.abs(px[j] - px[j - 1]) + Math.abs(pz[j] - pz[j - 1]) > 3) { nv = j; break; }
+    }
+    for (let j = 0; j <= K; j++) {
+      const q = base + j * 6, jj = Math.min(j, nv - 1), s = j / K;
+      const ja = Math.max(jj - 1, 0), jb = Math.min(jj + 1, nv - 1);
+      const tx = px[ja] - px[jb], ty = py[ja] - py[jb], tz = pz[ja] - pz[jb];
+      const vx = px[jj] - cl.x, vy = py[jj] - cl.y, vz = pz[jj] - cl.z;
+      let sx = ty * vz - tz * vy, sy = tz * vx - tx * vz, sz = tx * vy - ty * vx;
+      const sl = Math.sqrt(sx * sx + sy * sy + sz * sz) || 1, w = j >= nv ? 0 : W * Math.pow(1 - s, 0.7) / sl;
+      sx *= w; sy *= w; sz *= w;
+      P.rpos[q] = px[jj] + sx; P.rpos[q + 1] = py[jj] + sy; P.rpos[q + 2] = pz[jj] + sz;
+      P.rpos[q + 3] = px[jj] - sx; P.rpos[q + 4] = py[jj] - sy; P.rpos[q + 5] = pz[jj] - sz;
+      const f = j >= nv ? 0 : 0.15 * near * Math.pow(1 - s, 1.6);
+      P.rcol[q] = P.rcol[q + 3] = r * f; P.rcol[q + 1] = P.rcol[q + 4] = g * f; P.rcol[q + 2] = P.rcol[q + 5] = b * f;
+    }
+  }
+  const rg = h3.ribbon.geometry;
+  rg.attributes.position.needsUpdate = rg.attributes.color.needsUpdate = true;
+}
+
+// Warmtewaas: per kamer een grof raster van zachte vlekken in de kleur van de lucht dáár. Elke
+// cel zakt langzaam terug naar de kamertemperatuur; de deeltjesstroom trekt hem naar zijn eigen
+// temperatuur (zie h3Step), dus een koude pluim tekent zich af in een warme kamer. Puur beeld —
+// de kamertemperaturen zelf komen uit de tweeling en veranderen hier niet.
+function h3BuildHaze() {
+  const T = THREE, grid = [], cells = [];
+  h3.zones.forEach((zid, zi) => {
+    grid[zi] = h3.box[zid].parts.map(B => {
+      const nx = Math.max(1, Math.round((B.x1 - B.x0) / H3_HAZE_CELL)), ny = Math.max(1, Math.round((B.y1 - B.y0) / H3_HAZE_CELL)), nz = Math.max(1, Math.round((B.z1 - B.z0) / H3_HAZE_CELL));
+      const pk = { B, nx, ny, nz, sx: (B.x1 - B.x0) / nx, sy: (B.y1 - B.y0) / ny, sz: (B.z1 - B.z0) / nz, off: cells.length };
+      for (let iy = 0; iy < ny; iy++) for (let iz = 0; iz < nz; iz++) for (let ix = 0; ix < nx; ix++)
+        cells.push({ zi, x: B.x0 + (ix + 0.5) * pk.sx, y: B.y0 + (iy + 0.5) * pk.sy, z: B.z0 + (iz + 0.5) * pk.sz });
+      return pk;
+    });
+  });
+  const n = cells.length, g = new T.BufferGeometry(), pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+  g.setAttribute("position", new T.BufferAttribute(pos, 3)); g.setAttribute("color", new T.BufferAttribute(col, 3));
+  const pts = new T.Points(g, new T.PointsMaterial({ size: 3.0, map: h3.points.material.map, vertexColors: true, transparent: true,
+    blending: T.AdditiveBlending, depthWrite: false, sizeAttenuation: true }));
+  pts.frustumCulled = false; pts.renderOrder = 8;
+  h3.haze = { grid, cells, n, pos, col, pts, T: new Float32Array(n).fill(NaN) };
+  h3.houseInner.add(pts);
+}
+
+function h3HazeStep(sdt, time, hideLv) {
+  const hz = h3.haze; if (!hz) return;
+  hz.pts.visible = h3.view.haze; if (!h3.view.haze) return;
+  const k = 1 - Math.exp(-sdt * 0.1), col = [0, 0, 0], cl = h3.houseInner.worldToLocal(h3.camera.position.clone());
+  for (let c = 0; c < hz.n; c++) {
+    const ce = hz.cells[c], zt = h3.zoneTemp[h3.zones[ce.zi]], o = c * 3;
+    if (!(hz.T[c] === hz.T[c])) hz.T[c] = zt;
+    hz.T[c] += (zt - hz.T[c]) * k;
+    hz.pos[o] = ce.x + 0.22 * Math.sin(time * 0.31 + c); hz.pos[o + 1] = dispY(ce.y) + 0.15 * Math.sin(time * 0.23 + c * 1.7); hz.pos[o + 2] = ce.z + 0.22 * Math.cos(time * 0.27 + c * 0.6);
+    const near = clamp((Math.hypot(hz.pos[o] - cl.x, hz.pos[o + 1] - cl.y, hz.pos[o + 2] - cl.z) - 3) / 5, 0, 1);   // niet in de lens
+    const it = levelOf(ce.y) > hideLv ? 0 : near * (0.012 + 0.12 * Math.min(1, Math.abs(hz.T[c] - zt) / 2.5));
+    tempColor(hz.T[c], col);
+    hz.col[o] = col[0] * it; hz.col[o + 1] = col[1] * it; hz.col[o + 2] = col[2] * it;
+  }
+  hz.pts.geometry.attributes.position.needsUpdate = hz.pts.geometry.attributes.color.needsUpdate = true;
 }
 
 // ---------------------------------------------------------------- scène
@@ -682,7 +772,7 @@ function h3Init() {
   bc.fillStyle = bgr; bc.fillRect(0, 0, 512, 512); scene.background = new T.CanvasTexture(bg);
   const cam = h3.camera = new T.PerspectiveCamera(38, 1, 0.1, 200); cam.position.set(17, 13, 21.5);
   const oc = h3.controls = new T.OrbitControls(cam, r.domElement);
-  oc.target.set(0, 3, 0); oc.enableDamping = true; oc.dampingFactor = 0.08; oc.minDistance = 6; oc.maxDistance = 60;
+  oc.target.set(0, 3, 0); oc.enableDamping = true; oc.dampingFactor = 0.08; oc.minDistance = 1.5; oc.maxDistance = 60;
   oc.maxPolarAngle = Math.PI * 0.495; oc.autoRotate = true; oc.autoRotateSpeed = 0.6;
   scene.add(new T.HemisphereLight(0xcfe0ff, 0x101624, 0.95));
   const sun = new T.DirectionalLight(0xfff1d6, 0.55); sun.position.set(8, 14, 6); scene.add(sun);
@@ -694,7 +784,7 @@ function h3Init() {
     const cv = document.createElement("canvas"); cv.width = cv.height = 96; const c = cv.getContext("2d");
     c.font = '600 60px "JetBrains Mono", monospace'; c.textAlign = "center"; c.textBaseline = "middle"; c.fillStyle = t === "N" ? "#ff8a3d" : "#8fa6d0"; c.fillText(t, 48, 52);
     const sp = new T.Sprite(new T.SpriteMaterial({ map: new T.CanvasTexture(cv), transparent: true, depthWrite: false })); sp.scale.set(1.3, 1.3, 1);
-    sp.position.set(Math.sin(az * H3_RAD) * 14.5, 0.5, -Math.cos(az * H3_RAD) * 14.5); scene.add(sp);
+    sp.position.set(Math.sin(az * H3_RAD) * 14.5, 0.5, -Math.cos(az * H3_RAD) * 14.5); sp.layers.set(1); scene.add(sp);
   });
   h3.houseOuter = new T.Group(); h3.houseOuter.rotation.y = (90 - PLAN_FRONT_AZ) * H3_RAD; scene.add(h3.houseOuter);
   h3InitParticles();
@@ -706,8 +796,16 @@ function h3Init() {
   scene.add(h3.ambPts);
   h3.windArrow = new T.ArrowHelper(new T.Vector3(1, 0, 0), new T.Vector3(), 3, 0xffd166, 1.1, 0.7); scene.add(h3.windArrow);
 
+  // Gloed: nabewerking over de hele scène. Labels en kompas staan op laag 1 en worden er ná de
+  // gloed overheen getekend (h3Render) — tekst die meegloeit wordt onleesbaar.
+  if (T.EffectComposer && T.RenderPass && T.UnrealBloomPass) {
+    const ec = h3.composer = new T.EffectComposer(r);
+    ec.addPass(new T.RenderPass(scene, cam));
+    ec.addPass(h3.bloomPass = new T.UnrealBloomPass(new T.Vector2(256, 256), 0.55, 0.55, 0.62));
+  } else h3.view.bloom = false;
   const resize = () => {
     const w = stage.clientWidth, hh = stage.clientHeight; r.setSize(w, hh, false); cam.aspect = w / hh;
+    if (h3.composer) { h3.composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5)); h3.composer.setSize(w, hh); }
     cam.fov = cam.aspect < 1 ? 58 : 38;                 // staand scherm: wijder, anders past het huis niet
     cam.updateProjectionMatrix();
   };
@@ -739,8 +837,13 @@ function h3ApplyView(force) {
 function h3Frame() {
   const dt = Math.min(h3.clock.getDelta(), 0.05), time = h3.clock.elapsedTime, v = h3.view;
   if (h3.levelGroups) {
-    h3.levelGroups.forEach((g, i) => { g.position.y = v.explode * H3_EXPLODE_M * i; });
-    h3.roofLift = lerp(h3.roofLift, v.roof ? 0 : 1, 1 - Math.exp(-dt * 5));
+    const ka = 1 - Math.exp(-dt * 4);
+    h3.levelGroups.forEach((g, i) => {
+      const lifted = v.cut >= 0 && i > v.cut, ex = v.explode * H3_EXPLODE_M * i;
+      h3.lvlOff[i] = lerp(h3.lvlOff[i], ex + (lifted ? H3_LIFT_M : 0), ka);
+      g.position.y = h3.lvlOff[i]; g.visible = h3.lvlOff[i] - ex < H3_LIFT_M - 1.5;
+    });
+    h3.roofLift = lerp(h3.roofLift, v.roof && v.cut < 0 ? 0 : 1, 1 - Math.exp(-dt * 5));
     h3.roofGroups.forEach(g => { g.position.y = h3.roofLift * 4.5; g.visible = h3.roofLift < 0.97; });
     h3.roofMat.opacity = lerp(0.06, 0.55, v.glass) * (1 - h3.roofLift);
     const k = 1 - Math.exp(-dt * 7);
@@ -753,10 +856,86 @@ function h3Frame() {
       if (a.pos[o] * a.pos[o] + a.pos[o + 2] * a.pos[o + 2] > 17 * 17) { const lat = rnd(-17, 17), back = Math.sqrt(Math.max(0, 289 - lat * lat)); a.pos[o] = -w.x * back + -w.z * lat; a.pos[o + 2] = -w.z * back + w.x * lat; a.pos[o + 1] = rnd(0.2, 9); }
     }
     h3.ambPts.geometry.attributes.position.needsUpdate = true;
-    if (h3.points.parent !== h3.houseInner) { h3.houseInner.add(h3.trails); h3.houseInner.add(h3.points); }
+    if (h3.points.parent !== h3.houseInner) { h3.houseInner.add(h3.ribbon); h3.houseInner.add(h3.points); }
+    h3Camera(dt);
   }
-  h3.controls.autoRotate = v.spin; h3.controls.update();
-  h3.renderer.render(h3.scene, h3.camera);
+  h3.controls.autoRotate = v.spin && !v.follow && !h3.camAnim; h3.controls.update();
+  h3Render();
+}
+
+function h3Render() {
+  const r = h3.renderer, cam = h3.camera, sc = h3.scene;
+  const lab = !h3.view.follow;                         // labels vlak voor de lens zijn alleen maar in de weg
+  if (!(h3.view.bloom && h3.composer)) { cam.layers.set(0); if (lab) cam.layers.enable(1); r.render(sc, cam); return; }
+  cam.layers.set(0); h3.composer.render();
+  const bg = sc.background; sc.background = null; r.autoClear = false;     // labels over de gloed heen
+  if (lab) { cam.layers.set(1); r.clearDepth(); r.render(sc, cam); }
+  cam.layers.set(0); r.autoClear = true; sc.background = bg;
+}
+
+// ---------------------------------------------------------------- camera
+const h3World = (x, y, z) => h3.houseInner.localToWorld(new THREE.Vector3(x, dispYTarget(y), z));
+// Hoogte zoals ze wórdt zodra de verdiepingen op hun doel staan (de animatie loopt nog).
+function dispYTarget(y) {
+  const v = h3.view, o = [0, 1, 2].map(i => v.explode * H3_EXPLODE_M * i);
+  return y + o[0] + (o[1] - o[0]) * sstep(2.7, 2.8, y) + (o[2] - o[1]) * sstep(5.5, 5.6, y);
+}
+function h3Fly(pos, target, dur = 1.4) {
+  h3.view.spin = false; h3.view.follow = false;
+  h3.camAnim = { t: 0, dur, p0: h3.camera.position.clone(), p1: pos, q0: h3.controls.target.clone(), q1: target };
+  h3SyncPanel();
+}
+function h3CamTo(what) {
+  const v = h3.view, B = h3.bounds, top = dispYTarget(3);
+  if (what === "overview") { v.cut = -1; h3Fly(new THREE.Vector3(17, 13 + v.explode * 4, 21.5), new THREE.Vector3(0, top, 0)); return; }
+  if (what === "top") { h3Fly(new THREE.Vector3(0.02, 30 + v.explode * 6, 0.02), new THREE.Vector3(0, 1, 0)); return; }
+  // Kijkrichting behouden: de camera blijft aan dezelfde kant van het huis hangen.
+  const d = h3.camera.position.clone().sub(h3.controls.target); d.y = 0;
+  if (d.lengthSq() < 0.01) d.set(1, 0, 1); d.normalize();
+  if (what.startsWith("level:")) {
+    const lv = +what.slice(6); v.cut = lv;
+    const t = h3World((B.x0 + B.x1) / 2, H3_LEVELS[lv][0] + 1.2, (B.z0 + B.z1) / 2);
+    h3Fly(t.clone().add(d.multiplyScalar(15)).add(new THREE.Vector3(0, 15, 0)), t); return;
+  }
+  const Z = h3.box[what.slice(5)]; if (!Z) return;
+  v.cut = levelOf(Z.y0 + 0.5);
+  const t = h3World((Z.x0 + Z.x1) / 2, Z.y0 + 1.1, (Z.z0 + Z.z1) / 2);
+  const dist = Math.max(6.5, Math.hypot(Z.x1 - Z.x0, Z.z1 - Z.z0) * 1.15 + 3);
+  h3Fly(t.clone().add(d.multiplyScalar(dist * 0.72)).add(new THREE.Vector3(0, dist * 0.7, 0)), t);
+}
+
+// "Volg de lucht": de camera rijdt achter één deeltje aan, van buiten door het huis en er weer uit.
+function pickFollow() {
+  const P = h3.P; let best = -1, bestQ = -1;
+  for (let n = 0; n < 400; n++) {
+    const i = Math.floor(Math.random() * Math.max(1, h3.active));
+    if (P.phase[i] !== 1 || P.alpha[i] > 0.6) continue;           // net vertrokken, nog buiten
+    const e = h3.edges[P.edge[i]]; if (e && e.q > bestQ) { bestQ = e.q; best = i; }
+  }
+  if (best < 0) for (let i = 0; i < h3.active; i++) if (P.phase[i] === 2 || P.phase[i] === 3) { best = i; break; }
+  return best;
+}
+function h3Camera(dt) {
+  const v = h3.view, cam = h3.camera, oc = h3.controls, a = h3.camAnim;
+  if (a) {
+    a.t = Math.min(1, a.t + dt / a.dur);
+    const e = a.t < 0.5 ? 4 * a.t * a.t * a.t : 1 - Math.pow(-2 * a.t + 2, 3) / 2;
+    cam.position.lerpVectors(a.p0, a.p1, e); oc.target.lerpVectors(a.q0, a.q1, e);
+    if (a.t >= 1) h3.camAnim = null;
+    return;
+  }
+  if (!v.follow) return;
+  const P = h3.P; let i = h3.followIdx;
+  if (i == null || i < 0 || P.phase[i] === 0 || P.phase[i] === 5 || (P.phase[i] === 4 && P.life[i] < 1.6)) {
+    i = h3.followIdx = pickFollow(); if (i < 0) return;
+  }
+  const o = i * 3, W = h3.houseInner.localToWorld(new THREE.Vector3(P.dpos[o], P.dpos[o + 1], P.dpos[o + 2]));
+  const A = h3.houseInner.localToWorld(new THREE.Vector3(P.dpos[o] + P.vel[o], P.dpos[o + 1] + P.vel[o + 1], P.dpos[o + 2] + P.vel[o + 2])).sub(W);
+  if (A.lengthSq() > 1e-4) { A.normalize(); h3.followDir = (h3.followDir || A.clone()).lerp(A, 1 - Math.exp(-dt * 1.6)).normalize(); }
+  const dir = h3.followDir || new THREE.Vector3(1, 0, 0);
+  const want = W.clone().addScaledVector(dir, -3.4).add(new THREE.Vector3(0, 1.2, 0));
+  cam.position.lerp(want, 1 - Math.exp(-dt * 2.2));
+  oc.target.lerp(W.clone().addScaledVector(dir, 1.2), 1 - Math.exp(-dt * 4));
 }
 
 // ---------------------------------------------------------------- interactie
@@ -777,7 +956,7 @@ function h3Pointer(el) {
     const hit = ray.intersectObjects(h3.hits || [], false)[0];
     return hit ? hit.object.userData.pid : null;
   };
-  el.addEventListener("pointerdown", ev => { down = { x: ev.clientX, y: ev.clientY }; h3.view.spin = false; const b = document.querySelector('[data-view="spin"]'); if (b) b.classList.remove("on"); });
+  el.addEventListener("pointerdown", ev => { down = { x: ev.clientX, y: ev.clientY }; h3.view.spin = false; h3.view.follow = false; h3.camAnim = null; h3SyncPanel(); const b = document.querySelector('[data-view="spin"]'); if (b) b.classList.remove("on"); });
   el.addEventListener("pointerup", ev => {
     if (!down || Math.hypot(ev.clientX - down.x, ev.clientY - down.y) > 6) return;
     const id = pick(ev); if (id) cycleState(id);
@@ -816,7 +995,15 @@ function h3BuildPanel() {
     `<div class="grp">Weer</div>` + sl("tOut", "Buitentemperatuur", -5, 36, 0.5) + sl("bft", "Windkracht", 0, 9, 1) + sl("dir", "Windrichting (uit)", 0, 355, 5) +
     `<div class="grp">Beeld</div>` + sl("explode", "Verdiepingen uit elkaar", 0, 1, 0.01) + sl("glass", "Wanden: glas ↔ massief", 0, 1, 0.01) +
     sl("speed", "Tijdversnelling", 0.5, 8, 0.5) + sl("density", "Deeltjes", 0.1, 1, 0.05) +
-    `<div class="btns"><button class="btn" type="button" data-view="roof">Dak eraf</button><button class="btn" type="button" data-view="spin">Draaien</button></div>` +
+    `<div class="btns"><button class="btn" type="button" data-view="roof">Dak eraf</button><button class="btn" type="button" data-view="spin">Draaien</button>` +
+    (h3.composer ? `<button class="btn" type="button" data-view="bloom">Gloed</button>` : "") + `<button class="btn" type="button" data-view="haze">Warmtewaas</button></div>` +
+    `<div class="grp">Camera</div>` +
+    `<div class="btns"><button class="btn" type="button" data-cam="overview">Overzicht</button><button class="btn" type="button" data-cam="top">Van boven</button>` +
+    `<button class="btn" type="button" data-view="follow">Volg de lucht</button></div>` +
+    `<div class="room-title">Doorsnede per verdieping</div><div class="btns">` +
+    ["Begane grond", "1e", "2e"].map((n, i) => `<button class="btn" type="button" data-cam="level:${i}">${n}</button>`).join("") + `</div>` +
+    `<div class="room-title">Naar een kamer</div><div class="btns">` +
+    h3.zones.filter(z => h3.box[z]).map(z => `<button class="btn" type="button" data-cam="room:${esc(z)}">${esc(zl(z).replace(/ \+.*$/, ""))}</button>`).join("") + `</div>` +
     `<div class="grp">Ramen, roosters &amp; deuren</div>` +
     `<div class="btns"><button class="btn" type="button" data-all="live">↺ Live stand</button><button class="btn" type="button" data-all="open">Alles open</button><button class="btn" type="button" data-all="dicht">Alles dicht</button></div>` +
     ops + `<p class="hint">Wat je hier wisselt is een wat-als in deze browser — er wordt niets gemeld of opgeslagen. De kamertemperaturen blijven op de laatste modelstand staan; alleen de luchtstroom rekent mee.</p>`;
@@ -832,8 +1019,8 @@ function h3SyncPanel() {
   t("explode", `${Math.round(v.explode * 100)} %`); t("glass", `${Math.round(v.glass * 100)} %`); t("speed", `${v.speed}×`); t("density", `${Math.round(v.density * 100)} %`);
   document.querySelectorAll("#panel .seg button").forEach(b => b.classList.toggle("on", h3.states[b.dataset.id] === b.dataset.v));
   document.querySelectorAll("#panel [data-flow]").forEach(n => { n.textContent = h3.states[n.dataset.flow] === "dicht" ? "" : flowText(n.dataset.flow); });
-  const rb = document.querySelector('[data-view="roof"]'), sb = document.querySelector('[data-view="spin"]');
-  if (rb) rb.classList.toggle("on", !v.roof); if (sb) sb.classList.toggle("on", v.spin);
+  document.querySelectorAll("#panel [data-view]").forEach(b => { const k = b.dataset.view; b.classList.toggle("on", k === "roof" ? !v.roof : !!v[k]); });
+  document.querySelectorAll('#panel [data-cam^="level:"]').forEach(b => b.classList.toggle("on", v.cut === +b.dataset.cam.slice(6)));
 }
 
 function h3BindPanel() {
@@ -848,7 +1035,12 @@ function h3BindPanel() {
   panel.addEventListener("click", ev => {
     const b = ev.target.closest("button"); if (!b) return;
     if (b.dataset.v) { h3.states[b.dataset.id] = b.dataset.v; h3Recompute(); }
-    else if (b.dataset.view) { const k = b.dataset.view; h3.view[k] = !h3.view[k]; h3SyncPanel(); }
+    else if (b.dataset.view) {
+      const k = b.dataset.view; h3.view[k] = !h3.view[k];
+      if (k === "follow") { h3.camAnim = null; h3.followIdx = -1; h3.followDir = null; if (h3.view.follow) h3.view.spin = false; }
+      h3SyncPanel();
+    }
+    else if (b.dataset.cam) { const c = b.dataset.cam; if (c.startsWith("level:") && h3.view.cut === +c.slice(6)) h3CamTo("overview"); else h3CamTo(c); h3SyncPanel(); }
     else if (b.dataset.all) {
       const a = b.dataset.all;
       if (a === "live") { h3.states = Object.assign({}, h3.live); h3.env = Object.assign({}, h3.liveEnv); h3BuildPanel(); }
