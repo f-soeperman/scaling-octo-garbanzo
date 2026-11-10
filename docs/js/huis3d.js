@@ -140,8 +140,10 @@ async function h3ReadArtefacts(names) {
 //     "extras": [ { "x":[a,b], "z":[a,b], "y":[a,b], "label":"…", "solid":true } ],  // de hoofddoos raakt
 //     "place":  { "<element-id>": { "side":"x0|x1|z0|z1|roof", "pos":0.5 },            // raam/rooster
 //                 "<deur-id>":    { "axis":"x|z", "pos":0.5 } } }                    // binnendeur: welke wand
-//     "stairs": { "<zone-id>": { "start":45, "sweep":-270, "landing":"z1" } }  → wenteltrap: beginhoek en
-//                 draaiing in graden om het kokermidden (0° = +x, 90° = +z), overloop langs die wand
+//     "stairs": { "<zone-id>": { "start":[x,z], "heading":180, "run":0.6, "radius":0.85, "turn":120, "tail":0.5,
+//                                "width":0.9, "landing":[{ "x":[a,b], "z":[a,b] }] } } }
+//                 → trap langs een looplijn vanaf de onderste trede: richting in graden (0° = +x, 90° = +z),
+//                   recht stuk, bocht (positief = linksom), recht stuk; overlopen op de bovenverdiepingen
 // `extras` doen niet mee in de luchtstroom (solid = dicht blok, anders een lege ruimte).
 function h3Layout(raw) {
   const pair = v => Array.isArray(v) && v.length === 2 && v.every(n => typeof n === "number" && isFinite(n)) && v[1] > v[0];
@@ -152,9 +154,12 @@ function h3Layout(raw) {
     if (!boxOk(z, true)) { console.warn(`huis3d_layout: zone ${id} ongeldig — standaardindeling gebruikt`); return H3_DEFAULT_LAYOUT; }
     zones[id] = { x: z.x, z: z.z, y: z.y, parts: (z.parts || []).filter(q => boxOk(q, false)).map(q => (pair(q.y) ? q : { x: q.x, z: q.z })) };
   }
-  const stairs = {};
+  const stairs = {}, num = v => typeof v === "number" && isFinite(v);
   Object.entries(raw.stairs || {}).forEach(([z, w]) => {
-    if (w && isFinite(w.start) && isFinite(w.sweep) && Math.abs(w.sweep) >= 90 && ["x0", "x1", "z0", "z1"].includes(w.landing)) stairs[z] = { start: +w.start, sweep: +w.sweep, landing: w.landing };
+    if (!w || !Array.isArray(w.start) || !w.start.slice(0, 2).every(num) || w.start.length !== 2 || ![w.heading, w.turn].every(num) || !(w.radius > 0.2)) return;
+    stairs[z] = { start: w.start, heading: w.heading, turn: w.turn, radius: w.radius, run: num(w.run) ? Math.max(0, w.run) : 0.5,
+                  tail: num(w.tail) ? Math.max(0, w.tail) : 0.5, width: num(w.width) ? clamp(w.width, 0.5, 1.5) : 0.9,
+                  landing: (w.landing || []).filter(r => r && pair(r.x) && pair(r.z)) };
   });
   return { zones, extras: (raw.extras || []).filter(e => boxOk(e, true)), place: raw.place || {}, stairs, custom: true };
 }
@@ -391,28 +396,32 @@ function h3BuildHouse() {
       const sm = new T.MeshLambertMaterial({ color: 0x4a5a7c, transparent: true, opacity: 0.75 });
       const wd = k === 0 ? (h3.layout.stairs || {})[zid] : null;
       if (wd) {
-        // Wenteltrap: treden waaieren om het midden van de koker, met een overloop per verdieping.
-        const lw = 0.95, far = wd.landing[1] === "1", lx = wd.landing[0] === "x";
-        const R = { x0: B.x0 + 0.05, x1: B.x1 - 0.05, z0: B.z0 + 0.05, z1: B.z1 - 0.05 };
-        R[wd.landing] += far ? -lw : lw;
-        const mx = (R.x0 + R.x1) / 2, mz = (R.z0 + R.z1) / 2, hx = (R.x1 - R.x0) / 2, hz = (R.z1 - R.z0) / 2;
-        const n = 15, sw = wd.sweep * Math.PI / 180, r0 = 0.22;
+        // Trap langs een looplijn: recht stuk → bocht → recht stuk; per verdieping dezelfde plattegrond.
+        const rad = Math.PI / 180, n = 14, tr = Math.abs(wd.turn) * rad, sg = wd.turn >= 0 ? -1 : 1;   // links = hoek neemt af
+        const L = wd.run + wd.radius * tr + wd.tail, h0 = wd.heading * rad;
+        const at = d => {
+          let x = wd.start[0], z = wd.start[1], h = h0;
+          const d1 = Math.min(d, wd.run); x += Math.cos(h) * d1; z += Math.sin(h) * d1; d -= d1;
+          if (d > 0) {
+            const nx = Math.cos(h + sg * Math.PI / 2), nz = Math.sin(h + sg * Math.PI / 2), mx = x + nx * wd.radius, mz = z + nz * wd.radius;
+            const da = Math.min(d / wd.radius, tr); h += sg * da; d -= da * wd.radius;
+            x = mx - Math.cos(h + sg * Math.PI / 2) * wd.radius; z = mz - Math.sin(h + sg * Math.PI / 2) * wd.radius;
+          }
+          if (d > 0) { x += Math.cos(h) * d; z += Math.sin(h) * d; }
+          return { x, z, h };
+        };
         segs.forEach(([y0], si) => {
           const G = h3.levelGroups[levelOf(y0 + 0.1)];
-          if (si > 0) {                                           // overloop op de bovenverdiepingen
-            const ldx = lx ? lw : dx - 0.1, ldz = lx ? dz - 0.1 : lw;
-            const lm = new T.Mesh(new T.BoxGeometry(ldx, 0.06, ldz), sm);
-            lm.position.set(lx ? (far ? B.x1 - 0.05 - lw / 2 : B.x0 + 0.05 + lw / 2) : cx, y0 + 0.03, lx ? cz : (far ? B.z1 - 0.05 - lw / 2 : B.z0 + 0.05 + lw / 2));
-            G.add(lm);
-          }
+          if (si > 0) wd.landing.forEach(r => {                  // overloop op de bovenverdiepingen
+            const lm = new T.Mesh(new T.BoxGeometry(r.x[1] - r.x[0], 0.06, r.z[1] - r.z[0]), sm);
+            lm.position.set((r.x[0] + r.x[1]) / 2, y0 + 0.03, (r.z[0] + r.z[1]) / 2); G.add(lm);
+          });
           if (si === segs.length - 1) return;
           const rise = (H3_LEVELS[levelOf(y0 + 0.1) + 1][0] - y0) / (n + 1);
           for (let j = 0; j < n; j++) {
-            const th = wd.start * Math.PI / 180 + sw * (j + 0.5) / n, co = Math.cos(th), si2 = Math.sin(th);
-            const Ro = Math.min(hx / Math.max(Math.abs(co), 1e-3), hz / Math.max(Math.abs(si2), 1e-3)), rm = (r0 + Ro) / 2;
-            const st = new T.Mesh(new T.BoxGeometry(Ro - r0, 0.05, Math.abs(sw) / n * rm * 1.05), sm);
-            st.position.set(mx + co * rm, y0 + (j + 1) * rise, mz + si2 * rm); st.rotation.y = -th;
-            G.add(st);
+            const q = at(L * (j + 0.5) / n);
+            const st = new T.Mesh(new T.BoxGeometry(L / n * 1.15, 0.05, wd.width), sm);
+            st.position.set(q.x, y0 + (j + 1) * rise, q.z); st.rotation.y = -q.h; G.add(st);
           }
         });
       } else segs.forEach(([y0], si) => {
