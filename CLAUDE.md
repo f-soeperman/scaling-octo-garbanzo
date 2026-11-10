@@ -814,6 +814,20 @@ Read-only aggregation of the published artefacts of Projects 1, 5, 7, 13 from th
   kamer uit `docs/js/uncertainty.json` — hulpdatasets met een "_"-label, gefilterd uit
   legenda/tooltip; ontbreekt het bestand → kale lijn), leercurve, speeltuin (gedeelde
   `speeltuin.js`, met een eigen **3u terug + 12u vooruit**-scenariografiek).
+- `docs/huis3d.html` + `docs/js/huis3d.js` — **het huis in 3D** (nov 2026): subpagina van
+  vent.html (gelinkt in diens nav, bewust niet in de gedeelde navigatierij — het
+  `model.html`-patroon). Draaibaar three.js-huis met deeltjesstromen die de netwerkdebieten
+  van opening naar opening volgen; ramen/roosters/deuren klikbaar, verdiepingen uit elkaar
+  te trekken, wanden glas↔massief, dak eraf. Zelfde token+artefact-gist-poort als vent.html,
+  leest alleen `vent_data.json` en **schrijft niets** (elke wissel is een lokale wat-als).
+  Geen tweede fysica-port: het laadt `speeltuin.js` voor `buildOpeningsJS`/`solveNetwork`
+  (houd de `?v=` op beide pagina's gelijk — test bewaakt). De indeling (`H3_LAYOUT`) is
+  **gestileerd en verzonnen** uit volumes/verdiepingen/gevelrichtingen — geen plattegrond op
+  schaal, en dat moet zo blijven (echte maten zouden locatiedetail aanscherpen). Bovenop het
+  netto debiet tekent de pagina twee uitwisselingen die alleen beeld zijn: eenzijdig door
+  één open raam en tegenstroom door een open binnendeur. three.js r147 is de laatste reeks
+  met een klassieke (niet-module) build + `examples/js/OrbitControls` — een nieuwere versie
+  vraagt ES-modules, en een import-map is een inline script dat de CSP verbiedt.
 - `docs/js/vent_core.js` — de **browserkern**: de helft van `vent_physics` die van de raamstand
   afhangt (surrogaat → fresh/mix → deur-/ventilatiegeleiding → stratificatie → 2-knoops
   RC-assemblage → 14×14 stelsel per substap). Plain globals + een CommonJS-export voor de
