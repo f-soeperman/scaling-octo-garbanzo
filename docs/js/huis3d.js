@@ -140,6 +140,8 @@ async function h3ReadArtefacts(names) {
 //     "extras": [ { "x":[a,b], "z":[a,b], "y":[a,b], "label":"…", "solid":true } ],  // de hoofddoos raakt
 //     "place":  { "<element-id>": { "side":"x0|x1|z0|z1|roof", "pos":0.5 },            // raam/rooster
 //                 "<deur-id>":    { "axis":"x|z", "pos":0.5 } } }                    // binnendeur: welke wand
+//     "stairs": { "<zone-id>": { "start":45, "sweep":-270, "landing":"z1" } }  → wenteltrap: beginhoek en
+//                 draaiing in graden om het kokermidden (0° = +x, 90° = +z), overloop langs die wand
 // `extras` doen niet mee in de luchtstroom (solid = dicht blok, anders een lege ruimte).
 function h3Layout(raw) {
   const pair = v => Array.isArray(v) && v.length === 2 && v.every(n => typeof n === "number" && isFinite(n)) && v[1] > v[0];
@@ -150,7 +152,11 @@ function h3Layout(raw) {
     if (!boxOk(z, true)) { console.warn(`huis3d_layout: zone ${id} ongeldig — standaardindeling gebruikt`); return H3_DEFAULT_LAYOUT; }
     zones[id] = { x: z.x, z: z.z, y: z.y, parts: (z.parts || []).filter(q => boxOk(q, false)).map(q => (pair(q.y) ? q : { x: q.x, z: q.z })) };
   }
-  return { zones, extras: (raw.extras || []).filter(e => boxOk(e, true)), place: raw.place || {}, custom: true };
+  const stairs = {};
+  Object.entries(raw.stairs || {}).forEach(([z, w]) => {
+    if (w && isFinite(w.start) && isFinite(w.sweep) && Math.abs(w.sweep) >= 90 && ["x0", "x1", "z0", "z1"].includes(w.landing)) stairs[z] = { start: +w.start, sweep: +w.sweep, landing: w.landing };
+  });
+  return { zones, extras: (raw.extras || []).filter(e => boxOk(e, true)), place: raw.place || {}, stairs, custom: true };
 }
 
 // ---------------------------------------------------------------- geometrie uit het model
@@ -363,17 +369,53 @@ function h3BuildHouse() {
       });
       const ln = new T.LineSegments(new T.EdgesGeometry(new T.BoxGeometry(dx, H, dz)), h3.edgeMat); ln.position.set(cx, y0 + H / 2, cz); G.add(ln);
     });
-    // Dak waar geen andere doos bovenop staat.
-    const covered = all.some(({ B: C }) => C !== B && Math.abs(C.y0 - B.y1) < 0.2 && C.x0 < B.x1 - 0.1 && C.x1 > B.x0 + 0.1 && C.z0 < B.z1 - 0.1 && C.z1 > B.z0 + 0.1);
-    if (!covered) {
-      const holes = !zid ? [] : h3.portals.filter(p => p.roof && p.a === zid && p.hole && inBox(B, p.c.x, p.c.z, 0))
-        .map(p => ({ u0: p.c.z - B.z0 - p.hw, u1: p.c.z - B.z0 + p.hw, v0: p.c.x - B.x0 - p.hh, v1: p.c.x - B.x0 + p.hh }));
-      h3.roofGroups[levelOf(B.y1 - 0.1)].add(h3Panel(new V(B.x0, B.y1, B.z0), new V(0, 0, 1), new V(1, 0, 0), dz, dx, holes, h3.roofMat));
-    }
+    // Dak waar geen andere doos bovenop staat — per onbedekt rechthoekje, zodat een kamer die
+    // onder een hoger blok uitsteekt daar wél een dak (en een dakraam) houdt.
+    let free = [{ x0: B.x0, x1: B.x1, z0: B.z0, z1: B.z1 }];
+    all.forEach(({ B: C }) => {
+      if (C === B || Math.abs(C.y0 - B.y1) > 0.2) return;
+      free = free.flatMap(r => {
+        const ix0 = Math.max(r.x0, C.x0), ix1 = Math.min(r.x1, C.x1), iz0 = Math.max(r.z0, C.z0), iz1 = Math.min(r.z1, C.z1);
+        if (ix1 - ix0 < 0.1 || iz1 - iz0 < 0.1) return [r];
+        return [{ x0: r.x0, x1: ix0, z0: r.z0, z1: r.z1 }, { x0: ix1, x1: r.x1, z0: r.z0, z1: r.z1 },
+                { x0: ix0, x1: ix1, z0: r.z0, z1: iz0 }, { x0: ix0, x1: ix1, z0: iz1, z1: r.z1 }].filter(q => q.x1 - q.x0 > 0.1 && q.z1 - q.z0 > 0.1);
+      });
+    });
+    free.forEach(r => {
+      const holes = !zid ? [] : h3.portals.filter(p => p.roof && p.a === zid && p.hole && inBox(r, p.c.x, p.c.z, 0))
+        .map(p => ({ u0: p.c.z - r.z0 - p.hw, u1: p.c.z - r.z0 + p.hw, v0: p.c.x - r.x0 - p.hh, v1: p.c.x - r.x0 + p.hh }));
+      h3.roofGroups[levelOf(B.y1 - 0.1)].add(h3Panel(new V(r.x0, B.y1, r.z0), new V(0, 0, 1), new V(1, 0, 0), r.z1 - r.z0, r.x1 - r.x0, holes, h3.roofMat));
+    });
     // Trap: een paar treden per verdieping in een zone die meerdere lagen beslaat.
     if (zid && segs.length > 1) {
       const sm = new T.MeshLambertMaterial({ color: 0x4a5a7c, transparent: true, opacity: 0.75 });
-      segs.forEach(([y0], si) => {
+      const wd = k === 0 ? (h3.layout.stairs || {})[zid] : null;
+      if (wd) {
+        // Wenteltrap: treden waaieren om het midden van de koker, met een overloop per verdieping.
+        const lw = 0.95, far = wd.landing[1] === "1", lx = wd.landing[0] === "x";
+        const R = { x0: B.x0 + 0.05, x1: B.x1 - 0.05, z0: B.z0 + 0.05, z1: B.z1 - 0.05 };
+        R[wd.landing] += far ? -lw : lw;
+        const mx = (R.x0 + R.x1) / 2, mz = (R.z0 + R.z1) / 2, hx = (R.x1 - R.x0) / 2, hz = (R.z1 - R.z0) / 2;
+        const n = 15, sw = wd.sweep * Math.PI / 180, r0 = 0.22;
+        segs.forEach(([y0], si) => {
+          const G = h3.levelGroups[levelOf(y0 + 0.1)];
+          if (si > 0) {                                           // overloop op de bovenverdiepingen
+            const ldx = lx ? lw : dx - 0.1, ldz = lx ? dz - 0.1 : lw;
+            const lm = new T.Mesh(new T.BoxGeometry(ldx, 0.06, ldz), sm);
+            lm.position.set(lx ? (far ? B.x1 - 0.05 - lw / 2 : B.x0 + 0.05 + lw / 2) : cx, y0 + 0.03, lx ? cz : (far ? B.z1 - 0.05 - lw / 2 : B.z0 + 0.05 + lw / 2));
+            G.add(lm);
+          }
+          if (si === segs.length - 1) return;
+          const rise = (H3_LEVELS[levelOf(y0 + 0.1) + 1][0] - y0) / (n + 1);
+          for (let j = 0; j < n; j++) {
+            const th = wd.start * Math.PI / 180 + sw * (j + 0.5) / n, co = Math.cos(th), si2 = Math.sin(th);
+            const Ro = Math.min(hx / Math.max(Math.abs(co), 1e-3), hz / Math.max(Math.abs(si2), 1e-3)), rm = (r0 + Ro) / 2;
+            const st = new T.Mesh(new T.BoxGeometry(Ro - r0, 0.05, Math.abs(sw) / n * rm * 1.05), sm);
+            st.position.set(mx + co * rm, y0 + (j + 1) * rise, mz + si2 * rm); st.rotation.y = -th;
+            G.add(st);
+          }
+        });
+      } else segs.forEach(([y0], si) => {
         if (si === segs.length - 1) return;
         const n = 10, rise = (H3_LEVELS[levelOf(y0 + 0.1) + 1][0] - y0) / n, wx = dx * 0.46, run = (dz - 0.6) / n;
         for (let j = 0; j < n; j++) {

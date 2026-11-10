@@ -837,7 +837,9 @@ Read-only aggregation of the published artefacts of Projects 1, 5, 7, 13 from th
   het huis hoort, anders een lege ruimte; elk met optioneel `label`) en `place.<element-id>`
   (`side` x0/x1/z0/z1/roof + `pos`) voor een opening die op de azimut-wand niet past; voor een
   binnendeur `axis` x/z + `pos` — welke van de gedeelde wanden, als twee ruimtes er meer dan
-  één delen (zonder opgave de eerste). Zet
+  één delen (zonder opgave de eerste) — en `stairs.<zone-id>` (`start`/`sweep` in graden +
+  `landing`-wand) voor een wenteltrap met overlopen i.p.v. de rechte steektrappen. Een `solid`
+  extra bóven een kamer laat het dak alleen op het onbedekte deel staan. Zet
   nooit waarden of labels uit dat bestand in code, tests, commits of deze file.
   **Beeldlaag (nov 2026):** de luchtstroom is een *lint* per deeltje (taps, naar de camera
   gedraaid, `h3Ribbons`); een **gloed**-nabewerking (`UnrealBloomPass`, zeven extra
