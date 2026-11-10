@@ -835,7 +835,9 @@ Read-only aggregation of the published artefacts of Projects 1, 5, 7, 13 from th
   part mag een eigen `y` dragen; deeltjes lopen via de doorgang, niet dwars door de
   inspringende hoek), `extras` (ruimtes zónder luchtstroom: `solid` = dicht blok dat niet bij
   het huis hoort, anders een lege ruimte; elk met optioneel `label`) en `place.<element-id>`
-  (`side` x0/x1/z0/z1/roof + `pos`) voor een opening die op de azimut-wand niet past. Zet
+  (`side` x0/x1/z0/z1/roof + `pos`) voor een opening die op de azimut-wand niet past; voor een
+  binnendeur `axis` x/z + `pos` — welke van de gedeelde wanden, als twee ruimtes er meer dan
+  één delen (zonder opgave de eerste). Zet
   nooit waarden of labels uit dat bestand in code, tests, commits of deze file.
   **Beeldlaag (nov 2026):** de luchtstroom is een *lint* per deeltje (taps, naar de camera
   gedraaid, `h3Ribbons`); een **gloed**-nabewerking (`UnrealBloomPass`, zeven extra

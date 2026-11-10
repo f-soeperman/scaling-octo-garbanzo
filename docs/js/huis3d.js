@@ -138,7 +138,8 @@ async function h3ReadArtefacts(names) {
 //   { "zones":  { "<zone-id>": { "x":[a,b], "z":[a,b], "y":[a,b],
 //                                "parts":[{ "x":[a,b], "z":[a,b], "y":[a,b] }] } },  // parts: uitbouw die aan
 //     "extras": [ { "x":[a,b], "z":[a,b], "y":[a,b], "label":"…", "solid":true } ],  // de hoofddoos raakt
-//     "place":  { "<element-id>": { "side":"x0|x1|z0|z1|roof", "pos":0.5 } } }
+//     "place":  { "<element-id>": { "side":"x0|x1|z0|z1|roof", "pos":0.5 },            // raam/rooster
+//                 "<deur-id>":    { "axis":"x|z", "pos":0.5 } } }                    // binnendeur: welke wand
 // `extras` doen niet mee in de luchtstroom (solid = dicht blok, anders een lege ruimte).
 function h3Layout(raw) {
   const pair = v => Array.isArray(v) && v.length === 2 && v.every(n => typeof n === "number" && isFinite(n)) && v[1] > v[0];
@@ -244,16 +245,24 @@ function h3Portals() {
   Object.entries(m.doors || {}).forEach(([id, el]) => {
     if (!el.between) return;
     const [a, b] = el.between, ZA = h3.box[a], ZB = h3.box[b]; if (!ZA || !ZB) return;
-    const y0 = Math.max(ZA.y0, ZB.y0), h = 2.05, w = clamp((el.area_m2 || 1.8) / h, 0.75, 1.15), t = el.plan_pos ?? 0.5;
-    let c = null, n = null;
+    const ov = (h3.layout.place || {})[id] || {};
+    const y0 = Math.max(ZA.y0, ZB.y0), h = 2.05, w = clamp((el.area_m2 || 1.8) / h, 0.75, 1.15);
+    const t = typeof ov.pos === "number" ? ov.pos : (el.plan_pos ?? 0.5);
+    // Alle gedeelde wanden verzamelen; `place.<deur-id>.axis` kiest de wand als er meer dan één is
+    // (een deur naar een L-vormige ruimte), anders de eerste — het gedrag van vóór de override.
+    const cands = [];
     for (const A of ZA.parts) for (const B of ZB.parts) for (const [ax, o] of [["x", "z"], ["z", "x"]]) for (const sgn of [1, -1]) {
-      if (c) continue;
       const pa = sgn > 0 ? A[ax + "1"] : A[ax + "0"], pb = sgn > 0 ? B[ax + "0"] : B[ax + "1"];
       const lo = Math.max(A[o + "0"], B[o + "0"]), hi = Math.min(A[o + "1"], B[o + "1"]);
       if (Math.abs(pa - pb) > 0.05 || hi - lo < w + 0.2) continue;
-      const al = clamp(lerp(lo, hi, t), lo + w / 2 + 0.1, hi - w / 2 - 0.1);
-      c = ax === "x" ? new V(pa, y0 + h / 2 + 0.03, al) : new V(al, y0 + h / 2 + 0.03, pa);
-      n = ax === "x" ? new V(sgn, 0, 0) : new V(0, 0, sgn);
+      cands.push({ ax, sgn, pa, lo, hi });
+    }
+    const k = cands.find(q => q.ax === ov.axis) || cands[0];
+    let c = null, n = null;
+    if (k) {
+      const al = clamp(lerp(k.lo, k.hi, t), k.lo + w / 2 + 0.1, k.hi - w / 2 - 0.1);
+      c = k.ax === "x" ? new V(k.pa, y0 + h / 2 + 0.03, al) : new V(al, y0 + h / 2 + 0.03, k.pa);
+      n = k.ax === "x" ? new V(k.sgn, 0, 0) : new V(0, 0, k.sgn);
     }
     if (!c) return;   // geen gedeelde wand in de gestileerde indeling → deur niet tekenbaar
     add({ id, kind: "door", a, b, el, operable: id in h3.live, fixed: !!el.fixed, hole: true, c, n, hw: w / 2, hh: h / 2 });
