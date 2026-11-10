@@ -87,8 +87,10 @@ regexes, kamerreeks-scan over de hele boom, workflow-echo-scan over álle workfl
 opnieuw aankaarten zonder nieuwe informatie): (1) de base64-gecodeerde namen-denylist
 in `tests/test_privacy.py` blijft (obfuscatie tegen indexering volstaat); (2) de
 huisgeometrie/-oriëntatie in `house_model.json` + `speeltuin.js` is inherent aan de
-zon-/gevelfysica; (3) `tools/golden/golden.json` draagt één echt gemeten moment
-(het golden-contract herslaan is het risico niet waard); (4) de gecommitte
+zon-/gevelfysica; (3) ~~`tools/golden/golden.json` draagt één echt gemeten moment~~ —
+vervallen nov 2026: de golden-vector is bij de deur-topologie-correctie herslagen op een
+volledig synthetische tijdlijn (`tools/synth_history.py`), er staat geen gemeten waarde meer
+in; (4) de gecommitte
 zandbak-/verwarmings-state (weer-/datum-gedreven automaten); (5) alles wat vóór de
 fixes gecommit is — inclusief de twin2-maanden mei–aug 2026 — blijft in de publieke
 git-historie staan; volledig verwijderen kan alleen met een nieuwe history-squash
@@ -829,7 +831,8 @@ Read-only aggregation of the published artefacts of Projects 1, 5, 7, 13 from th
   dezelfde call als `vent_data.json`; bewust géén terugval op een pad onder `docs/`, en het
   bestand staat in `.gitignore`). Vorm (`h3Layout` valideert, ongeldig → de standaard):
   `zones.<id>` = `{x,z,y}`-paren in meters plus optionele `parts` (uitbouwen die aan de
-  hoofddoos raken — een L-vormige kamer; deeltjes lopen via de doorgang, niet dwars door de
+  hoofddoos raken — een L-vormige kamer, of de begane-grond-overloop aan de trapkoker; een
+  part mag een eigen `y` dragen; deeltjes lopen via de doorgang, niet dwars door de
   inspringende hoek), `extras` (ruimtes zónder luchtstroom: `solid` = dicht blok dat niet bij
   het huis hoort, anders een lege ruimte; elk met optioneel `label`) en `place.<element-id>`
   (`side` x0/x1/z0/z1/roof + `pos`) voor een opening die op de azimut-wand niet past. Zet
@@ -967,6 +970,49 @@ Twin 1's validated physics, ported verbatim into `vent_physics.py`: multi-zone d
   een huismodel-grens op een fractie van de GRENSWAARDE (`MODEL_RAIL_TOL`). Op de brede
   `c_mass`-band (0.2–10.0) is 2 % bandbreedte ~0.19, waardoor `living.c_mass` op 0.728 — 22 %
   bóven zijn vloer van 0.595, dus volledig vrij — permanent als "op de vloer" werd gemeld.
+
+### Deur-topologie begane grond (nov 2026 — bewonersopgave, rechtgezet)
+Tot nov 2026 stond de **gang** in het model als centrale ruimte waar woonkamer en badkamer op
+uitkwamen, met een vaste open doorgang naar de trap. Zo zit het huis niet in elkaar:
+- de **gang (`hall`)** is het portaal direct achter de voordeur. Ze heeft precies één
+  binnendeur, de tussendeur naar het trappenhuis (`hall_stair`), en die staat vrijwel altijd
+  **dicht** (default `dicht`, wél meldbaar);
+- het **trappenhuis (`stair`)** is op de begane grond één open ruimte met de overloop, en
+  dáár komen woonkamer (`living_hall`), badkamer (`hall_bath`), kinderkamer en de gang op
+  uit. Zijn volume en `ground_m2` zijn daarop bijgesteld (schets-schatting, geen meting).
+
+Wat er bewust NIET veranderde, en waarom:
+- **De id's `living_hall`/`hall_bath` blijven.** Het zijn dezelfde fysieke deuren; de
+  openingen-log in de Gist is erop gesleuteld en hun volgorde is het kolomcontract van het
+  surrogaat. Alleen `between` + label zijn rechtgezet.
+- **Het huis werd er niet lekker of dichter van.** Het oude model droeg de voordeur als één
+  rest-lek van 0,005 m² "achter een altijd-dichte tussendeur". Dat zijn nu twee openingen in
+  serie: `front_door_leak` (0,007, in de gang) en de **kier van de dichte tussendeur**
+  (`closed_leak_m2` 0,007 op `hall_stair`) — samen weer 0,005 effectief; een test pint dat.
+  `closed_leak_m2` is de enige nieuwe term: een dichte deur mét die opgave blijft een lekpad
+  in het druknetwerk (op-vlag `crack`), maar telt nergens als *open* deur — niet voor de
+  stratificatie-gradiënt, niet voor de Brown–Solvason-counterflow. Zonder de opgave (alle
+  andere deuren) is dicht nog steeds luchtdicht. Gevolg voor `tools/test_invariants.py`:
+  "dicht huis → exact nul" wordt getoetst op een kopie zónder kieren; het kier-residu
+  (~0,08 ACH in de gang, een paar watt) staat er apart onder, begrensd.
+- **Geen `PHYSICS_REV`-bump.** Een bump zet álle geleerde params terug naar de priors, en in
+  november is er niets om opnieuw op te leren: gestookte kamers vallen uit de kalibratie, en
+  een re-seed heeft de privé shards nodig. De sensorkamer-params (ua_env, c_mass, zon) hangen
+  nauwelijks aan de deur-topologie; de online fit stuurt het restant per kwartier bij. Wie
+  dit in het stookvrije seizoen wil nameten: `tools/horizon_backtest.py` met beide armen
+  her-geseed, zoals de grondregel voorschrijft.
+- Het surrogaat is opnieuw gedistilleerd (uitvoerkolommen = de nieuwe deurparen) en door
+  `tools/surrogate_backtest.py` geaccepteerd (|surrogaat − solver| 0,04 °C gem.), en de
+  golden-vector is herslagen. Omdat de echte shards privé zijn en de publieke historie
+  gesquasht is, gebeurde dat op **`tools/synth_history.py`**: een deterministische week
+  zomerweer + kamertemps + openingen-log zonder één gemeten waarde. De golden-test is een
+  port-contract (JS == Python), dus synthetische invoer is daar volwaardig; als *replay*-pool
+  voor de distillatie is ze armer dan de echte log (zie `airflow_distill.py`).
+  `tests/test_vent_forecast.py` bewaakt dat golden + surrogaat dezelfde deurparen dragen als
+  `house_model.json` — de kolomvolgorde-poort van `surrogate_runtime` ziet een gewijzigde
+  `between` namelijk níet.
+- De 2D-plattegrond (`plan_xy`) is meeverhuisd: trappenhuis in het midden, woonkamer links,
+  kinderkamer/badkamer rechts, gang eronder.
 
 ### Vooruitblik (12u) — `vent_forecast.py`
 De kalibratie-sim start 72u terug en staat op "nu" dus op een *gesimuleerde* toestand. Voor een

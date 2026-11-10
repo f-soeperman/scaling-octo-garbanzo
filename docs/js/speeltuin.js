@@ -678,7 +678,8 @@ function buildOpeningsJS(meta, states, wind, params, outsideTemp) {
   Object.entries(meta.vents || {}).forEach(([vid, v]) => ext(vid, v, "vent"));
   Object.entries(meta.doors || {}).forEach(([did, dr]) => {
     const frac = (did in states) ? openFracJS(states[did], dr) : defaultFracJS(dr, "door");
-    const area = frac * (dr.area_m2 ?? 0);
+    // Dichte deur met een kier (closed_leak_m2) blijft een lekpad — mirror van build_openings.
+    const area = frac * (dr.area_m2 ?? 0) || (dr.closed_leak_m2 ?? 0);
     if (area <= 0 || !dr.between) return;
     const [a, b] = dr.between;
     ops.push({ a, b, area, Cd: cd, z: dr.center_height_m ?? 1.0, Pe: 0, id: did });

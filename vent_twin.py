@@ -158,7 +158,8 @@ def _room_dashboard_row(rid, room, house, params, wd, sim, timeline,
     if strat_info and ta_now is not None and t_out_now is not None and now_step is not None:
         strat_ops = build_openings(house, now_step["states"], now_step["weather"], params,
                                    ta_all, t_out_now)
-        open_pairs = {(op["a"], op["b"]) for op in strat_ops if op.get("b") != "outside"}
+        open_pairs = {(op["a"], op["b"]) for op in strat_ops
+                      if op.get("b") != "outside" and not op.get("crack")}
         open_others = {o for o in strat_info["doors"]
                        if (rid, o) in open_pairs or (o, rid) in open_pairs}
         # Zelfde regressie-basis als de fysica: gemeten waar beschikbaar (zie _gamma_temps),
@@ -178,7 +179,7 @@ def _room_dashboard_row(rid, room, house, params, wd, sim, timeline,
         # grootte van die term controleerbaar blijft i.p.v. impliciet.
         door_area_now = {}
         for op in strat_ops:
-            if op.get("b") != "outside":
+            if op.get("b") != "outside" and not op.get("crack"):
                 pair = (op["a"], op["b"])
                 door_area_now[pair] = door_area_now.get(pair, 0.0) + op["area"]
         gamma_w = {}
@@ -413,6 +414,9 @@ def house_meta_out(house: dict) -> dict:
                         "area_m2": d.get("area_m2"), "center_height_m": d.get("center_height_m"),
                         "default_state": d.get("default_state", "open"),
                         "plan_pos": d.get("plan_pos"),
+                        # Kier van een dichte deur (additief; 0 = luchtdicht) — de
+                        # JS-speeltuin rekent 'm mee, net als build_openings.
+                        "closed_leak_m2": d.get("closed_leak_m2", 0.0),
                         "fixed": bool(d.get("fixed"))}
                   for did, d in house.get("doors", {}).items()},
         "sim": {"leak_area": LEAK_AREA, "dp_lam": DP_LAM, "wind_ref_z": WIND_REF_Z},

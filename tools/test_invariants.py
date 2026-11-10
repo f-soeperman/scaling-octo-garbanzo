@@ -19,6 +19,10 @@ is itself worth recording:
                        modelling choice worth knowing when reading playground output,
                        not a bug.
                        (First version asserted "small and strictly positive". Wrong.)
+                       One deliberate exception since nov 2026: a door with a
+                       `closed_leak_m2` (the always-shut inner door to the hall). The
+                       invariant is asserted without cracks; the crack residual is
+                       bounded and reported on its own line.
 
   B  short-circuiting  opening one more element CAN reduce whole-house fresh air —
                        measured on the real solver in ~2 % of random configurations,
@@ -233,13 +237,30 @@ def main():
     print("=" * 76)
     # The solver stops at NET_TOL, so its net flow is ~0 to convergence tolerance,
     # not exactly 0. 0.01 ACH is ~30x below any real ventilation rate.
-    for name, flow, lim in (("solver", airflow_solver, 0.01), ("surrogate", f_sur, 0.05)):
-        w = inv_a_sealed(house, elems, zones, flow, random.Random(7),
-                         max(1, args.n_configs // 4), vols)
-        ok = w <= lim
-        print(f"  {name:10} worst {w:.4f} ACH   limit {lim}   {'ok' if ok else 'FAIL'}")
-        if not ok:
-            failed.append(f"A/{name}")
+    # A door may carry a `closed_leak_m2` (the crack under an always-shut inner door, see
+    # house_model.json doors.hall_stair). That crack links two zones' leak openings, so with
+    # it the "sealed" house is no longer strictly sealed. The invariant is therefore asserted
+    # on a copy of the house WITHOUT cracks; the crack's own residual is reported and bounded
+    # separately, and the surrogate (which has the cracks baked in) is held to the solver.
+    import copy
+    tight = copy.deepcopy(house)
+    for d in tight.get("doors", {}).values():
+        d.pop("closed_leak_m2", None)
+    n_a = max(1, args.n_configs // 4)
+    w = inv_a_sealed(tight, elems, zones, airflow_solver, random.Random(7), n_a, vols)
+    print(f"  {'solver':10} worst {w:.4f} ACH   limit 0.01   {'ok' if w <= 0.01 else 'FAIL'}   (no door cracks)")
+    if w > 0.01:
+        failed.append("A/solver")
+    w_crack = inv_a_sealed(house, elems, zones, airflow_solver, random.Random(7), n_a, vols)
+    ok = w_crack <= 0.15
+    print(f"  {'cracks':10} worst {w_crack:.4f} ACH   limit 0.15   {'ok' if ok else 'FAIL'}   (residual through closed-door cracks)")
+    if not ok:
+        failed.append("A/cracks")
+    w_sur = inv_a_sealed(house, elems, zones, f_sur, random.Random(7), n_a, vols)
+    ok = abs(w_sur - w_crack) <= 0.05
+    print(f"  {'surrogate':10} worst {w_sur:.4f} ACH   within 0.05 of the solver's {w_crack:.4f}   {'ok' if ok else 'FAIL'}")
+    if not ok:
+        failed.append("A/surrogate")
     print("  NB: no background-infiltration term exists — a shut house exchanges no air")
     print("      in this model. Real infiltration is absorbed into the learned ua_env.")
 
