@@ -821,9 +821,19 @@ Read-only aggregation of the published artefacts of Projects 1, 5, 7, 13 from th
   te trekken, wanden glas↔massief, dak eraf. Zelfde token+artefact-gist-poort als vent.html,
   leest alleen `vent_data.json` en **schrijft niets** (elke wissel is een lokale wat-als).
   Geen tweede fysica-port: het laadt `speeltuin.js` voor `buildOpeningsJS`/`solveNetwork`
-  (houd de `?v=` op beide pagina's gelijk — test bewaakt). De indeling (`H3_LAYOUT`) is
-  **gestileerd en verzonnen** uit volumes/verdiepingen/gevelrichtingen — geen plattegrond op
-  schaal, en dat moet zo blijven (echte maten zouden locatiedetail aanscherpen). Bovenop het
+  (houd de `?v=` op beide pagina's gelijk — test bewaakt). De indeling in de broncode
+  (`H3_DEFAULT_LAYOUT`) is **gestileerd en verzonnen** uit volumes/verdiepingen/gevelrichtingen
+  — geen plattegrond op schaal, en dat moet zo blijven: een herkenbare plattegrond in een
+  publieke repo is naast een woningadvertentie te leggen. **De echte indeling leeft als
+  `huis3d_layout.json` in de privé artefact-gist** (bewoner-geschreven, de pagina leest 'm in
+  dezelfde call als `vent_data.json`; bewust géén terugval op een pad onder `docs/`, en het
+  bestand staat in `.gitignore`). Vorm (`h3Layout` valideert, ongeldig → de standaard):
+  `zones.<id>` = `{x,z,y}`-paren in meters plus optionele `parts` (uitbouwen die aan de
+  hoofddoos raken — een L-vormige kamer; deeltjes lopen via de doorgang, niet dwars door de
+  inspringende hoek), `extras` (ruimtes zónder luchtstroom: `solid` = dicht blok dat niet bij
+  het huis hoort, anders een lege ruimte; elk met optioneel `label`) en `place.<element-id>`
+  (`side` x0/x1/z0/z1/roof + `pos`) voor een opening die op de azimut-wand niet past. Zet
+  nooit waarden of labels uit dat bestand in code, tests, commits of deze file. Bovenop het
   netto debiet tekent de pagina twee uitwisselingen die alleen beeld zijn: eenzijdig door
   één open raam en tegenstroom door een open binnendeur. three.js r147 is de laatste reeks
   met een klassieke (niet-module) build + `examples/js/OrbitControls` — een nieuwere versie

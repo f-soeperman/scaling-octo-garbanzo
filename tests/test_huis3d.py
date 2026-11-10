@@ -19,7 +19,19 @@ def _read(*parts: str) -> str:
 def test_pagina_is_gepoort_op_token_en_artefact_gist():
     js = _read("js", "huis3d.js")
     gate = js.index("CONFIG.githubToken && CONFIG.artefactGistId")
-    assert gate < js.index('artefactReadJSON("vent_data.json"'), "poort moet vóór de fetch staan"
+    assert gate < js.index("h3ReadArtefacts(["), "poort moet vóór de fetch staan"
+
+
+def test_echte_indeling_komt_alleen_uit_de_prive_gist():
+    """De standaardindeling in de broncode is verzonnen. Een echte indeling leest de
+    pagina uit de privé artefact-gist — nooit van een pad onder docs/, want dat is
+    publiek geserveerd."""
+    js = _read("js", "huis3d.js")
+    assert '"huis3d_layout.json"' in js
+    assert not os.path.exists(os.path.join(_DOCS, "huis3d_layout.json"))
+    reader = js[js.index("async function h3ReadArtefacts"):js.index("function h3Layout")]
+    assert "api.github.com/gists/" in reader
+    assert "artefactReadJSON" not in js, "die helper valt terug op een publiek docs/-pad"
 
 
 def test_pagina_schrijft_niets():

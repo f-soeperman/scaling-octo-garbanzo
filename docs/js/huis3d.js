@@ -7,9 +7,12 @@
 // Hergebruik i.p.v. een tweede fysica-port: `buildOpeningsJS`/`solveNetwork`/`simConst`/
 // `normState` komen uit speeltuin.js (vóór dit script geladen). Wat hier nieuw is, is
 // uitsluitend tekenwerk:
-//   1. H3_LAYOUT — een GESTILEERDE indeling. Het huismodel kent volumes, verdiepingen en
-//      gevelrichtingen maar geen maten; de rechthoeken hieronder zijn daaruit verzonnen
-//      (oppervlak ≈ volume / hoogte) en zijn nadrukkelijk géén plattegrond op schaal.
+//   1. H3_DEFAULT_LAYOUT — een GESTILEERDE indeling. Het huismodel kent volumes,
+//      verdiepingen en gevelrichtingen maar geen maten; de rechthoeken hieronder zijn daaruit
+//      verzonnen (oppervlak ≈ volume / hoogte) en zijn nadrukkelijk géén plattegrond op schaal.
+//      Een echte indeling hoort NIET in deze publieke repo: wie dat wil, zet een
+//      `huis3d_layout.json` in de privé artefact-gist (zelfde vorm, zie h3Layout) en de
+//      pagina gebruikt die. Zet hier dus nooit echte maten of een echte kamerschikking neer.
 //   2. de openingen worden automatisch geplaatst uit house_meta (gevel-azimut → wand,
 //      plan_pos → plek langs de wand, center_height_m → hoogte, area_m2 → afmeting);
 //   3. een deeltjes-"agent" volgt de netwerkdebieten van opening naar opening, zodat de
@@ -22,7 +25,7 @@
 
 const H3_RAD = Math.PI / 180;
 // x: tuingevel (0) → straatgevel; z: zijgevel (0) → overzijde; y: hoogte. Meters, gestileerd.
-const H3_LAYOUT = {
+const H3_DEFAULT_LAYOUT = { zones: {
   living:  { x: [0, 8.5],   z: [0, 6.5],    y: [0, 2.7] },
   hall:    { x: [0, 8.5],   z: [6.5, 7.8],  y: [0, 2.7] },
   bath:    { x: [0, 2.6],   z: [7.8, 10.8], y: [0, 2.7] },
@@ -30,7 +33,7 @@ const H3_LAYOUT = {
   nursery: { x: [4.5, 8.5], z: [7.8, 10.8], y: [0, 2.7] },
   bedroom: { x: [4.5, 8.5], z: [7.8, 10.8], y: [2.8, 5.5] },
   office:  { x: [4.5, 8.5], z: [7.8, 10.8], y: [5.6, 8.3] },
-};
+} };
 const H3_LEVELS = [[0, 2.7], [2.8, 5.5], [5.6, 8.3]];   // verdiepingen (voor het uit elkaar trekken)
 const H3_EXPLODE_M = 3.2;                               // extra tussenruimte per verdieping bij 100 %
 const H3_COL = { open: 0x7cffb2, tilt: 0xffd166, dicht: 0x6b7a94, fixed: 0x3d4a66 };
@@ -38,6 +41,7 @@ const H3_MAXP = 7000, H3_TRAIL = 7;
 
 const h3 = {
   data: null, meta: null, params: {}, states: {}, live: {}, env: {}, liveEnv: {},
+  layout: H3_DEFAULT_LAYOUT, extras: [],
   view: { explode: 0, glass: 0.3, roof: true, speed: 3, density: 0.6, spin: true },
   zones: [], box: {}, portals: [], portalById: {}, edges: [], outOf: {}, inflow: [],
   zoneTemp: {}, fresh: {}, flowInfo: {}, tRange: [16, 26], ready: false,
@@ -83,8 +87,11 @@ async function h3Load() {
   }
   overlay("⋯ het huis wordt opgebouwd…", true);
   let d;
-  try { d = await artefactReadJSON("vent_data.json", "vent_data.json"); }
-  catch (e) { overlay(`Kon <code>vent_data.json</code> niet laden (${esc(e.message)}).`); return; }
+  try {
+    const files = await h3ReadArtefacts(["vent_data.json", "huis3d_layout.json"]);
+    d = files["vent_data.json"];
+    h3.layout = h3Layout(files["huis3d_layout.json"]);
+  } catch (e) { overlay(`Kon <code>vent_data.json</code> niet laden (${esc(e.message)}).`); return; }
   if (!d || !d.house_meta) { overlay("Het artefact draagt geen huisgeometrie (house_meta)."); return; }
   h3.data = d; h3.meta = d.house_meta; h3.params = (d.learned && d.learned.params) || {};
   simConst(d);
@@ -103,19 +110,77 @@ async function h3Load() {
   overlay(null);
 }
 
+// Beide bestanden in één call uit de privé artefact-gist. Bewust géén terugval op een pad
+// onder docs/: de indeling is privé en mag nooit vanaf Pages geserveerd worden.
+async function h3ReadArtefacts(names) {
+  const r = await fetch(`https://api.github.com/gists/${CONFIG.artefactGistId}`,
+    { headers: { Authorization: `token ${CONFIG.githubToken}` }, cache: "no-store" });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const files = (await r.json()).files || {}, out = {};
+  for (const n of names) {
+    let txt = null;
+    try { txt = await gistFileText(files[n]); } catch (e) { console.warn(n, e); }
+    try { out[n] = txt ? JSON.parse(txt) : null; } catch (e) { console.warn(`${n}: geen geldige JSON`); out[n] = null; }
+  }
+  return out;
+}
+
+// Privé-indeling valideren; alles wat niet klopt → de verzonnen standaard. Vorm:
+//   { "zones":  { "<zone-id>": { "x":[a,b], "z":[a,b], "y":[a,b],
+//                                "parts":[{ "x":[a,b], "z":[a,b] }] } },   // parts: uitbouw die aan
+//     "extras": [ { "x":[a,b], "z":[a,b], "y":[a,b], "label":"…", "solid":true } ],  // de hoofddoos raakt
+//     "place":  { "<element-id>": { "side":"x0|x1|z0|z1|roof", "pos":0.5 } } }
+// `extras` doen niet mee in de luchtstroom (solid = dicht blok, anders een lege ruimte).
+function h3Layout(raw) {
+  const pair = v => Array.isArray(v) && v.length === 2 && v.every(n => typeof n === "number" && isFinite(n)) && v[1] > v[0];
+  const boxOk = (b, needY) => b && pair(b.x) && pair(b.z) && (needY ? pair(b.y) : true);
+  if (!raw || typeof raw.zones !== "object" || !raw.zones) return H3_DEFAULT_LAYOUT;
+  const zones = {};
+  for (const [id, z] of Object.entries(raw.zones)) {
+    if (!boxOk(z, true)) { console.warn(`huis3d_layout: zone ${id} ongeldig — standaardindeling gebruikt`); return H3_DEFAULT_LAYOUT; }
+    zones[id] = { x: z.x, z: z.z, y: z.y, parts: (z.parts || []).filter(q => boxOk(q, false)) };
+  }
+  return { zones, extras: (raw.extras || []).filter(e => boxOk(e, true)), place: raw.place || {}, custom: true };
+}
+
 // ---------------------------------------------------------------- geometrie uit het model
 function h3Boxes() {
   const m = h3.meta, all = Object.assign({}, m.rooms || {}, m.junctions || {});
   h3.zones = Object.keys(all); h3.box = {};
+  const mk = (L, y) => ({ x0: L.x[0], x1: L.x[1], z0: L.z[0], z1: L.z[1], y0: (L.y || y)[0], y1: (L.y || y)[1] });
+  let spareZ = 0;
+  Object.values(h3.layout.zones).forEach(L => { spareZ = Math.max(spareZ, L.z[1]); });
   let spare = 0;
   h3.zones.forEach(z => {
-    const L = H3_LAYOUT[z];
-    if (L) { h3.box[z] = { x0: L.x[0], x1: L.x[1], z0: L.z[0], z1: L.z[1], y0: L.y[0], y1: L.y[1] }; return; }
-    // Zone die de indeling (nog) niet kent: een losse doos naast het huis, uit het volume.
-    const lv = H3_LEVELS[clamp(all[z].floor || 0, 0, 2)], s = Math.sqrt((all[z].volume_m3 || 20) / 2.7);
-    h3.box[z] = { x0: spare, x1: spare + s, z0: 12, z1: 12 + s, y0: lv[0], y1: lv[1] };
-    spare += s + 0.6;
+    const L = h3.layout.zones[z];
+    let b;
+    if (L) { b = mk(L); b.parts = [b].concat((L.parts || []).map(q => mk(q, L.y))); }
+    else {   // Zone die de indeling (nog) niet kent: een losse doos naast het huis, uit het volume.
+      const lv = H3_LEVELS[clamp(all[z].floor || 0, 0, 2)], s = Math.sqrt((all[z].volume_m3 || 20) / 2.7);
+      b = { x0: spare, x1: spare + s, z0: spareZ + 1.2, z1: spareZ + 1.2 + s, y0: lv[0], y1: lv[1] }; b.parts = [b];
+      spare += s + 0.6;
+    }
+    // Doorgang van elke uitbouw naar de hoofddoos: een punt nét binnen de hoofddoos, waar de
+    // deeltjes langs moeten — een rechte lijn uitbouw↔kamer snijdt anders de inspringende hoek.
+    b.parts.slice(1).forEach(q => {
+      for (const [ax, o] of [["x", "z"], ["z", "x"]]) for (const sg of [1, -1]) {
+        const face = sg > 0 ? b[ax + "0"] : b[ax + "1"], mine = sg > 0 ? q[ax + "1"] : q[ax + "0"];
+        const lo = Math.max(b[o + "0"], q[o + "0"]), hi = Math.min(b[o + "1"], q[o + "1"]);
+        if (Math.abs(face - mine) > 0.06 || hi - lo < 0.6) continue;
+        q.gate = { ax, o, at: face + sg * 0.45, lo: lo + 0.3, hi: hi - 0.3 };
+      }
+    });
+    h3.box[z] = b;
   });
+  h3.extras = (h3.layout.extras || []).map(e => Object.assign(mk(e), { label: e.label, solid: !!e.solid }));
+}
+
+const inBox = (B, x, z, tol) => x >= B.x0 - tol && x <= B.x1 + tol && z >= B.z0 - tol && z <= B.z1 + tol;
+// In welk deel van de zone ligt dit punt? 0 = hoofddoos (wint bij twijfel), −1 = nergens.
+function partAt(B, x, z) {
+  if (inBox(B, x, z, 0.02)) return 0;
+  for (let k = 1; k < B.parts.length; k++) if (inBox(B.parts[k], x, z, 0.12)) return k;
+  return inBox(B, x, z, 0.25) ? 0 : -1;
 }
 
 function wallSide(az) {
@@ -131,29 +196,36 @@ function h3Portals() {
     const B = h3.box[el.room]; if (!B) return;
     const area = Math.max(el.area_m2 || 0.05, 0.02), operable = id in h3.live;
     const hasTilt = kind === "window" && el.tilt_frac > 0 && el.tilt_frac < 1;
-    const side = wallSide(el.facade_azimuth_deg || 0), t = el.plan_pos ?? 0.5;
-    if (kind === "window" && el.kind === "skylight") {
-      const s = clamp(Math.sqrt(area), 0.45, 1.8), small = (B.x1 - B.x0) < 3 || (B.z1 - B.z0) < 3;
+    const ov = (h3.layout.place || {})[id] || {};
+    const side = ["x0", "x1", "z0", "z1", "roof"].includes(ov.side) ? ov.side : wallSide(el.facade_azimuth_deg || 0);
+    const t = typeof ov.pos === "number" ? ov.pos : (el.plan_pos ?? 0.5);
+    if (side === "roof" || (kind === "window" && el.kind === "skylight")) {
+      const s = kind === "vent" ? 0.45 : clamp(Math.sqrt(area), 0.45, 1.8), small = side === "roof" || (B.x1 - B.x0) < 3 || (B.z1 - B.z0) < 3;
       let x = (B.x0 + B.x1) / 2, z = (B.z0 + B.z1) / 2;
       if (!small) {
         const ins = s / 2 + 0.6;
         if (side[0] === "x") { x = side === "x0" ? B.x0 + ins : B.x1 - ins; z = clamp(lerp(B.z0, B.z1, t), B.z0 + ins, B.z1 - ins); }
         else { z = side === "z0" ? B.z0 + ins : B.z1 - ins; x = clamp(lerp(B.x0, B.x1, t), B.x0 + ins, B.x1 - ins); }
       }
-      add({ id, kind: "skylight", a: el.room, b: "outside", el, operable, hasTilt, hole: operable,
-            c: new V(x, B.y1, z), n: new V(0, 1, 0), u: new V(0, 0, 1), v: new V(1, 0, 0), hw: s / 2, hh: s / 2 });
+      add({ id, kind: kind === "vent" ? "vent" : "skylight", roof: true, a: el.room, b: "outside", el, operable, hasTilt, hole: operable && kind !== "vent",
+            c: new V(x, B.y1, z), n: new V(0, 1, 0), u: new V(0, 0, 1), v: new V(1, 0, 0), hw: s / 2, hh: kind === "vent" ? 0.05 : s / 2 });
       return;
     }
-    const alongX = side[0] === "z", a0 = alongX ? B.x0 : B.z0, a1 = alongX ? B.x1 : B.z1;
+    // De gevel aan deze kant = alle delen van de zone die op het buitenste vlak liggen.
+    const alongX = side[0] === "z", far = side[1] === "1";
+    const edge = B.parts.reduce((mm, q) => (far ? Math.max(mm, q[side]) : Math.min(mm, q[side])), far ? -1e9 : 1e9);
+    const segs = B.parts.filter(q => Math.abs(q[side] - edge) < 0.06).map(q => ({ a0: alongX ? q.x0 : q.z0, a1: alongX ? q.x1 : q.z1, pl: q[side] }));
+    const a0 = Math.min(...segs.map(q => q.a0)), a1 = Math.max(...segs.map(q => q.a1)), want = lerp(a0, a1, t);
+    const seg = segs.find(q => want >= q.a0 && want <= q.a1) || segs[0];
     let w, h, yc;
     const doorlike = kind === "window" && (el.center_height_m ?? 1.5) <= 1.05 && area >= 1.5;
     if (kind === "vent") { w = clamp(area / 0.04, 0.3, 1.3); h = 0.1; }
     else if (doorlike) { h = 2.05; w = area / h; }
     else { w = Math.sqrt(area * 1.5); h = area / w; if (h > 1.7) { h = 1.7; w = area / h; } }
-    w = Math.min(w, (a1 - a0) - 0.5);
+    w = Math.max(0.3, Math.min(w, (seg.a1 - seg.a0) - 0.5));
     yc = doorlike ? B.y0 + h / 2 + 0.03 : clamp(el.center_height_m ?? (B.y0 + 1.4), B.y0 + h / 2 + 0.12, B.y1 - h / 2 - 0.12);
-    const al = clamp(lerp(a0, a1, t), a0 + w / 2 + 0.25, a1 - w / 2 - 0.25);
-    const plane = B[side], sgn = side[1] === "1" ? 1 : -1;
+    const al = clamp(want, seg.a0 + w / 2 + 0.25, seg.a1 - w / 2 - 0.25);
+    const plane = seg.pl, sgn = far ? 1 : -1;
     add({ id, kind, a: el.room, b: "outside", el, operable, hasTilt, doorlike, hole: operable && kind === "window",
           c: alongX ? new V(al, yc, plane) : new V(plane, yc, al),
           n: alongX ? new V(0, 0, sgn) : new V(sgn, 0, 0), hw: w / 2, hh: h / 2 });
@@ -162,19 +234,17 @@ function h3Portals() {
   Object.entries(m.vents || {}).forEach(([id, el]) => ext(id, el, "vent"));
   Object.entries(m.doors || {}).forEach(([id, el]) => {
     if (!el.between) return;
-    const [a, b] = el.between, A = h3.box[a], B = h3.box[b]; if (!A || !B) return;
-    const y0 = Math.max(A.y0, B.y0), h = 2.05, w = clamp((el.area_m2 || 1.8) / h, 0.75, 1.15), t = el.plan_pos ?? 0.5;
-    const ov = (p0, p1, q0, q1) => [Math.max(p0, q0), Math.min(p1, q1)];
+    const [a, b] = el.between, ZA = h3.box[a], ZB = h3.box[b]; if (!ZA || !ZB) return;
+    const y0 = Math.max(ZA.y0, ZB.y0), h = 2.05, w = clamp((el.area_m2 || 1.8) / h, 0.75, 1.15), t = el.plan_pos ?? 0.5;
     let c = null, n = null;
-    for (const [ax, o] of [["x", "z"], ["z", "x"]]) {
-      for (const sgn of [1, -1]) {
-        const pa = sgn > 0 ? A[ax + "1"] : A[ax + "0"], pb = sgn > 0 ? B[ax + "0"] : B[ax + "1"];
-        const [lo, hi] = ov(A[o + "0"], A[o + "1"], B[o + "0"], B[o + "1"]);
-        if (Math.abs(pa - pb) > 0.05 || hi - lo < w + 0.2) continue;
-        const al = clamp(lerp(lo, hi, t), lo + w / 2 + 0.1, hi - w / 2 - 0.1);
-        c = ax === "x" ? new V(pa, y0 + h / 2 + 0.03, al) : new V(al, y0 + h / 2 + 0.03, pa);
-        n = ax === "x" ? new V(sgn, 0, 0) : new V(0, 0, sgn);
-      }
+    for (const A of ZA.parts) for (const B of ZB.parts) for (const [ax, o] of [["x", "z"], ["z", "x"]]) for (const sgn of [1, -1]) {
+      if (c) continue;
+      const pa = sgn > 0 ? A[ax + "1"] : A[ax + "0"], pb = sgn > 0 ? B[ax + "0"] : B[ax + "1"];
+      const lo = Math.max(A[o + "0"], B[o + "0"]), hi = Math.min(A[o + "1"], B[o + "1"]);
+      if (Math.abs(pa - pb) > 0.05 || hi - lo < w + 0.2) continue;
+      const al = clamp(lerp(lo, hi, t), lo + w / 2 + 0.1, hi - w / 2 - 0.1);
+      c = ax === "x" ? new V(pa, y0 + h / 2 + 0.03, al) : new V(al, y0 + h / 2 + 0.03, pa);
+      n = ax === "x" ? new V(sgn, 0, 0) : new V(0, 0, sgn);
     }
     if (!c) return;   // geen gedeelde wand in de gestileerde indeling → deur niet tekenbaar
     add({ id, kind: "door", a, b, el, operable: id in h3.live, fixed: !!el.fixed, hole: true, c, n, hw: w / 2, hh: h / 2 });
@@ -187,7 +257,8 @@ function h3Panel(O, U, Vv, L, H, holes, mat) {
   sh.moveTo(0, 0); sh.lineTo(L, 0); sh.lineTo(L, H); sh.lineTo(0, H); sh.closePath();
   const used = [];
   holes.forEach(r => {
-    const u0 = clamp(r.u0, 0.03, L - 0.03), u1 = clamp(r.u1, 0.03, L - 0.03), v0 = clamp(r.v0, 0.02, H - 0.03), v1 = clamp(r.v1, 0.02, H - 0.03);
+    const mu = r.full ? 0.012 : 0.03, u0 = clamp(r.u0, mu, L - mu), u1 = clamp(r.u1, mu, L - mu);
+    const v0 = r.full ? 0.012 : clamp(r.v0, 0.02, H - 0.03), v1 = r.full ? H - 0.012 : clamp(r.v1, 0.02, H - 0.03);
     if (u1 - u0 < 0.1 || v1 - v0 < 0.1) return;
     if (used.some(q => u0 < q[1] && u1 > q[0] && v0 < q[3] && v1 > q[2])) return;   // overlappende gaten breken de triangulatie
     used.push([u0, u1, v0, v1]);
@@ -203,10 +274,13 @@ function h3BuildHouse() {
   if (h3.houseInner) { h3.houseOuter.remove(h3.houseInner); }
   h3Boxes(); h3Portals();
   const inner = h3.houseInner = new T.Group();
-  let X1 = 1, Z1 = 1;
-  Object.values(h3.box).forEach(b => { X1 = Math.max(X1, b.x1); Z1 = Math.max(Z1, b.z1); });
-  h3.ext = { x: X1, z: Z1 };
-  inner.position.set(-X1 / 2, 0, -Z1 / 2);
+  // Alle dozen die getekend worden: elk deel van elke zone + de extra's (zonder luchtstroom).
+  const all = [];
+  h3.zones.forEach(zid => h3.box[zid].parts.forEach((B, k) => all.push({ B, zid, k })));
+  h3.extras.forEach((B, k) => all.push({ B, zid: null, k }));
+  let X0 = 1e9, X1 = -1e9, Z0 = 1e9, Z1 = -1e9;
+  all.forEach(({ B }) => { X0 = Math.min(X0, B.x0); X1 = Math.max(X1, B.x1); Z0 = Math.min(Z0, B.z0); Z1 = Math.max(Z1, B.z1); });
+  inner.position.set(-(X0 + X1) / 2, 0, -(Z0 + Z1) / 2);
   h3.houseOuter.add(inner);
   h3.levelGroups = [0, 1, 2].map(() => { const g = new T.Group(); inner.add(g); return g; });
   h3.roofGroups = [0, 1, 2].map(i => { const g = new T.Group(); h3.levelGroups[i].add(g); return g; });
@@ -215,60 +289,83 @@ function h3BuildHouse() {
   h3.edgeMat = new T.LineBasicMaterial({ color: 0x9fc4ff, transparent: true, opacity: 0.55 });
   h3.floorMats = {}; h3.labels = {};
   const up = new V(0, 1, 0);
-
-  h3.zones.forEach(zid => {
-    const B = h3.box[zid];
-    const segs = H3_LEVELS.map(([a, b]) => [Math.max(a, B.y0), Math.min(b, B.y1)]).filter(s => s[1] - s[0] > 0.5);
-    const fm = h3.floorMats[zid] = new T.MeshLambertMaterial({ color: 0x1a2233 });
-    segs.forEach(([y0, y1], si) => {
-      const G = h3.levelGroups[levelOf(y0 + 0.1)], H = y1 - y0;
-      if (si === 0) {                                           // vloerplaat alleen onderin de zone
-        const f = new T.Mesh(new T.BoxGeometry(B.x1 - B.x0, 0.1, B.z1 - B.z0), fm);
-        f.position.set((B.x0 + B.x1) / 2, y0 - 0.05, (B.z0 + B.z1) / 2); G.add(f);
-      }
-      const sides = [
-        { O: new V(B.x0, y0, B.z1), U: new V(0, 0, -1), L: B.z1 - B.z0, ax: "x", pl: B.x0 },
-        { O: new V(B.x1, y0, B.z0), U: new V(0, 0, 1),  L: B.z1 - B.z0, ax: "x", pl: B.x1 },
-        { O: new V(B.x0, y0, B.z0), U: new V(1, 0, 0),  L: B.x1 - B.x0, ax: "z", pl: B.z0 },
-        { O: new V(B.x1, y0, B.z1), U: new V(-1, 0, 0), L: B.x1 - B.x0, ax: "z", pl: B.z1 },
-      ];
-      sides.forEach(s => {
-        const holes = h3.portals.filter(p => p.hole && p.kind !== "skylight" && (p.a === zid || p.b === zid) &&
-            Math.abs(p.n[s.ax]) > 0.9 && Math.abs(p.c[s.ax] - s.pl) < 0.03 && p.c.y > y0 && p.c.y < y1)
-          .map(p => { const u = p.c.clone().sub(s.O).dot(s.U); return { u0: u - p.hw, u1: u + p.hw, v0: p.c.y - p.hh - y0, v1: p.c.y + p.hh - y0 }; });
-        G.add(h3Panel(s.O, s.U, up, s.L, H, holes, h3.wallMat));
-      });
-      const eg = new T.EdgesGeometry(new T.BoxGeometry(B.x1 - B.x0, H, B.z1 - B.z0));
-      const ln = new T.LineSegments(eg, h3.edgeMat); ln.position.set((B.x0 + B.x1) / 2, y0 + H / 2, (B.z0 + B.z1) / 2); G.add(ln);
-    });
-    // Dak waar geen andere zone bovenop staat.
-    const covered = h3.zones.some(o => { const C = h3.box[o]; return o !== zid && Math.abs(C.y0 - B.y1) < 0.2 && C.x0 < B.x1 - 0.1 && C.x1 > B.x0 + 0.1 && C.z0 < B.z1 - 0.1 && C.z1 > B.z0 + 0.1; });
-    if (!covered) {
-      const holes = h3.portals.filter(p => p.kind === "skylight" && p.a === zid && p.hole)
-        .map(p => ({ u0: p.c.z - B.z0 - p.hw, u1: p.c.z - B.z0 + p.hw, v0: p.c.x - B.x0 - p.hh, v1: p.c.x - B.x0 + p.hh }));
-      h3.roofGroups[levelOf(B.y1 - 0.1)].add(h3Panel(new V(B.x0, B.y1, B.z0), new V(0, 0, 1), new V(1, 0, 0), B.z1 - B.z0, B.x1 - B.x0, holes, h3.roofMat));
-    }
-    // Trap: een paar treden per verdieping in een zone die meerdere lagen beslaat.
-    if (segs.length > 1) {
-      const sm = new T.MeshLambertMaterial({ color: 0x4a5a7c, transparent: true, opacity: 0.75 });
-      segs.forEach(([y0, y1], si) => {
-        if (si === segs.length - 1) return;
-        const n = 10, rise = (H3_LEVELS[levelOf(y0 + 0.1) + 1][0] - y0) / n, wx = (B.x1 - B.x0) * 0.46, run = (B.z1 - B.z0 - 0.6) / n;
-        for (let k = 0; k < n; k++) {
-          const st = new T.Mesh(new T.BoxGeometry(wx, 0.05, run * 0.9), sm), zz = si % 2 ? B.z1 - 0.3 - (k + 0.5) * run : B.z0 + 0.3 + (k + 0.5) * run;
-          st.position.set(si % 2 ? B.x1 - wx / 2 - 0.05 : B.x0 + wx / 2 + 0.05, y0 + (k + 1) * rise, zz);
-          h3.levelGroups[levelOf(y0 + 0.1)].add(st);
-        }
-      });
-    }
-    // Label (alleen kamers, geen knooppunt-gangetje zonder eigen naam nodig — die krijgt 'm ook).
+  const extraFloor = new T.MeshLambertMaterial({ color: 0x141b29 });
+  const solidMat = new T.MeshLambertMaterial({ color: 0x232c3f, transparent: true, opacity: 0.82 });
+  const solidEdge = new T.LineBasicMaterial({ color: 0x55637f, transparent: true, opacity: 0.6 });
+  const label = (key, B) => {
     const cv = document.createElement("canvas"); cv.width = 512; cv.height = 150;
     const tex = new T.CanvasTexture(cv), sp = new T.Sprite(new T.SpriteMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false }));
     sp.scale.set(3.2, 0.94, 1); sp.renderOrder = 20;
     const ly = Math.min(B.y1, B.y0 + 2.7) - 0.75;
     sp.position.set((B.x0 + B.x1) / 2, ly, (B.z0 + B.z1) / 2);
     h3.levelGroups[levelOf(ly)].add(sp);
-    h3.labels[zid] = { cv, tex, sp };
+    h3.labels[key] = { cv, tex, sp };
+  };
+
+  all.forEach(({ B, zid, k }) => {
+    const cx = (B.x0 + B.x1) / 2, cz = (B.z0 + B.z1) / 2, dx = B.x1 - B.x0, dz = B.z1 - B.z0;
+    if (!zid && B.solid) {                                      // dicht blok: hoort niet bij het huis
+      const H = B.y1 - B.y0, G = h3.levelGroups[levelOf(B.y0 + 0.1)];
+      const bm = new T.Mesh(new T.BoxGeometry(dx - 0.04, H, dz - 0.04), solidMat); bm.position.set(cx, B.y0 + H / 2, cz); G.add(bm);
+      const bl = new T.LineSegments(new T.EdgesGeometry(new T.BoxGeometry(dx, H, dz)), solidEdge); bl.position.copy(bm.position); G.add(bl);
+      if (B.label) { label("extra:" + k, B); h3Label("extra:" + k, B.label, ""); }
+      return;
+    }
+    const sibs = zid ? h3.box[zid].parts.filter(q => q !== B) : [];
+    const segs = H3_LEVELS.map(([a, b]) => [Math.max(a, B.y0), Math.min(b, B.y1)]).filter(sg => sg[1] - sg[0] > 0.5);
+    const fm = zid ? (h3.floorMats[zid] = h3.floorMats[zid] || new T.MeshLambertMaterial({ color: 0x1a2233 })) : extraFloor;
+    segs.forEach(([y0, y1], si) => {
+      const G = h3.levelGroups[levelOf(y0 + 0.1)], H = y1 - y0;
+      if (si === 0) {                                           // vloerplaat alleen onderin
+        const f = new T.Mesh(new T.BoxGeometry(dx, 0.1, dz), fm); f.position.set(cx, y0 - 0.05, cz); G.add(f);
+      }
+      const sides = [
+        { O: new V(B.x0, y0, B.z1), U: new V(0, 0, -1), L: dz, ax: "x", o: "z", pl: B.x0, opp: "x1" },
+        { O: new V(B.x1, y0, B.z0), U: new V(0, 0, 1),  L: dz, ax: "x", o: "z", pl: B.x1, opp: "x0" },
+        { O: new V(B.x0, y0, B.z0), U: new V(1, 0, 0),  L: dx, ax: "z", o: "x", pl: B.z0, opp: "z1" },
+        { O: new V(B.x1, y0, B.z1), U: new V(-1, 0, 0), L: dx, ax: "z", o: "x", pl: B.z1, opp: "z0" },
+      ];
+      sides.forEach(sd => {
+        const uOf = val => (val - sd.O[sd.o]) * sd.U[sd.o];
+        const holes = !zid ? [] : h3.portals.filter(p => p.hole && !p.roof && (p.a === zid || p.b === zid) &&
+            Math.abs(p.n[sd.ax]) > 0.9 && Math.abs(p.c[sd.ax] - sd.pl) < 0.03 && p.c.y > y0 && p.c.y < y1 &&
+            p.c[sd.o] > B[sd.o + "0"] && p.c[sd.o] < B[sd.o + "1"])
+          .map(p => { const u = uOf(p.c[sd.o]); return { u0: u - p.hw, u1: u + p.hw, v0: p.c.y - p.hh - y0, v1: p.c.y + p.hh - y0 }; });
+        // Waar een ander deel van dezelfde kamer aansluit hoort geen wand: de kamer loopt door.
+        let whole = false;
+        sibs.forEach(q => {
+          const lo = Math.max(B[sd.o + "0"], q[sd.o + "0"]), hi = Math.min(B[sd.o + "1"], q[sd.o + "1"]);
+          if (Math.abs(q[sd.opp] - sd.pl) > 0.06 || hi - lo < 0.2) return;
+          if (hi - lo > sd.L - 0.1) { whole = true; return; }
+          const ua = uOf(lo), ub = uOf(hi);
+          holes.push({ u0: Math.min(ua, ub), u1: Math.max(ua, ub), full: true });
+        });
+        if (!whole) G.add(h3Panel(sd.O, sd.U, up, sd.L, H, holes, h3.wallMat));
+      });
+      const ln = new T.LineSegments(new T.EdgesGeometry(new T.BoxGeometry(dx, H, dz)), h3.edgeMat); ln.position.set(cx, y0 + H / 2, cz); G.add(ln);
+    });
+    // Dak waar geen andere doos bovenop staat.
+    const covered = all.some(({ B: C }) => C !== B && Math.abs(C.y0 - B.y1) < 0.2 && C.x0 < B.x1 - 0.1 && C.x1 > B.x0 + 0.1 && C.z0 < B.z1 - 0.1 && C.z1 > B.z0 + 0.1);
+    if (!covered) {
+      const holes = !zid ? [] : h3.portals.filter(p => p.roof && p.a === zid && p.hole && inBox(B, p.c.x, p.c.z, 0))
+        .map(p => ({ u0: p.c.z - B.z0 - p.hw, u1: p.c.z - B.z0 + p.hw, v0: p.c.x - B.x0 - p.hh, v1: p.c.x - B.x0 + p.hh }));
+      h3.roofGroups[levelOf(B.y1 - 0.1)].add(h3Panel(new V(B.x0, B.y1, B.z0), new V(0, 0, 1), new V(1, 0, 0), dz, dx, holes, h3.roofMat));
+    }
+    // Trap: een paar treden per verdieping in een zone die meerdere lagen beslaat.
+    if (zid && segs.length > 1) {
+      const sm = new T.MeshLambertMaterial({ color: 0x4a5a7c, transparent: true, opacity: 0.75 });
+      segs.forEach(([y0], si) => {
+        if (si === segs.length - 1) return;
+        const n = 10, rise = (H3_LEVELS[levelOf(y0 + 0.1) + 1][0] - y0) / n, wx = dx * 0.46, run = (dz - 0.6) / n;
+        for (let j = 0; j < n; j++) {
+          const st = new T.Mesh(new T.BoxGeometry(wx, 0.05, run * 0.9), sm), zz = si % 2 ? B.z1 - 0.3 - (j + 0.5) * run : B.z0 + 0.3 + (j + 0.5) * run;
+          st.position.set(si % 2 ? B.x1 - wx / 2 - 0.05 : B.x0 + wx / 2 + 0.05, y0 + (j + 1) * rise, zz);
+          h3.levelGroups[levelOf(y0 + 0.1)].add(st);
+        }
+      });
+    }
+    if (zid && k === 0) label(zid, B);
+    if (!zid && B.label) { label("extra:" + k, B); h3Label("extra:" + k, B.label, ""); }
   });
 
   // Openingen: kozijn + draaiend blad + onzichtbaar klikvlak.
@@ -311,9 +408,9 @@ function h3Label(zid, line1, line2) {
   const w1 = c.measureText(line1).width; c.font = '600 36px "JetBrains Mono", monospace';
   const w = Math.min(500, Math.max(w1, c.measureText(line2).width) + 56), x0 = 256 - w / 2;
   c.fillStyle = "rgba(7,11,20,.72)"; c.beginPath();
-  c.moveTo(x0 + 22, 6); c.arcTo(x0 + w, 6, x0 + w, 144, 22); c.arcTo(x0 + w, 144, x0, 144, 22); c.arcTo(x0, 144, x0, 6, 22); c.arcTo(x0, 6, x0 + w, 6, 22); c.fill();
+  c.moveTo(x0 + 22, 6); c.arcTo(x0 + w, 6, x0 + w, 144, 22); c.arcTo(x0 + w, 144, x0, 144, 22); c.arcTo(x0, 144, x0, 6, 22); c.arcTo(x0, 6, x0 + w, 6, 22); if (line2) c.fill();
   c.fillStyle = "#cfe0ff"; c.fillText(line2, 256, 122);
-  c.font = 'italic 600 50px "Cormorant Garamond", Georgia, serif'; c.fillStyle = "#f3ecd9"; c.fillText(line1, 256, 62);
+  c.font = 'italic 600 50px "Cormorant Garamond", Georgia, serif'; c.fillStyle = line2 ? "#f3ecd9" : "#9aa6bd"; c.fillText(line1, 256, line2 ? 62 : 92);
   L.tex.needsUpdate = true;
 }
 
@@ -379,7 +476,7 @@ function h3Recompute() {
     if (p.cur) {
       const out = p.kind === "door" ? 1 : -1;
       p.target = { hinge: 0, tilt: 0 };
-      if (p.kind === "skylight") p.target.tilt = st === "open" ? 0.5 : st === "tilt" ? 0.18 : 0;
+      if (p.roof) p.target.tilt = st === "open" ? 0.5 : st === "tilt" ? 0.18 : 0;
       else if (st === "open" && p.el.tilt_frac === 1) p.target.tilt = -0.3;      // kiepraam: "open" = gekiept
       else if (st === "open") p.target.hinge = out * 1.45;
       else if (st === "tilt") p.target.tilt = -0.22;
@@ -407,7 +504,7 @@ function h3InitParticles() {
   const T = THREE, N = H3_MAXP, P = h3.P = {
     pos: new Float32Array(N * 3), vel: new Float32Array(N * 3), tgt: new Float32Array(N * 3), exit: new Float32Array(N * 3),
     phase: new Uint8Array(N), zone: new Int16Array(N).fill(-1), edge: new Int32Array(N).fill(-1), temp: new Float32Array(N),
-    life: new Float32Array(N), ttl: new Float32Array(N), alpha: new Float32Array(N), seed: new Float32Array(N), age: new Uint8Array(N), spd: new Float32Array(N),
+    life: new Float32Array(N), part: new Uint8Array(N), ttl: new Float32Array(N), alpha: new Float32Array(N), seed: new Float32Array(N), age: new Uint8Array(N), spd: new Float32Array(N),
     hist: Array.from({ length: H3_TRAIL + 1 }, () => new Float32Array(N * 3)), head: 0,
   };
   for (let i = 0; i < N; i++) { P.seed[i] = Math.random() * 100; P.life[i] = Math.random() * 6; }
@@ -437,7 +534,7 @@ function pickEdge(list) {
 }
 function portalPoint(e, out, off) {                 // willekeurig punt in de opening (onder-/bovenhelft bij uitwisseling)
   const p = e.p, a = rnd(-0.8, 0.8) * p.hw, b = (e.half === 0 ? rnd(-0.8, 0.8) : e.half * rnd(0.1, 0.85)) * p.hh;
-  const vert = p.kind === "skylight" ? rnd(-0.8, 0.8) * p.hh : b;
+  const vert = p.roof ? rnd(-0.8, 0.8) * p.hh : b;
   out[off] = p.c.x + p.u.x * a + p.v.x * vert; out[off + 1] = p.c.y + p.u.y * a + p.v.y * vert; out[off + 2] = p.c.z + p.u.z * a + p.v.z * vert;
 }
 function teleport(i) { h3.P.age[i] = 0; }
@@ -459,13 +556,21 @@ function enterZone(i, zid) {                         // kies de volgende opening
   P.zone[i] = h3.zones.indexOf(zid);
   if (!e || !B) { P.phase[i] = 5; P.life[i] = 0.8; return; }
   const cl = (v, a, b) => clamp(v, a + 0.25, b - 0.25);
+  const here = Math.max(0, partAt(B, P.pos[o], P.pos[o + 2]));
+  let C = B.parts[here], viaGate = null;
   if (e.to === "sink") {
-    P.tgt[o] = rnd(B.x0, B.x1); P.tgt[o + 1] = rnd(B.y0, Math.min(B.y1, P.pos[o + 1] + 1.5)); P.tgt[o + 2] = rnd(B.z0, B.z1);
+    P.tgt[o] = rnd(C.x0, C.x1); P.tgt[o + 1] = rnd(B.y0, Math.min(B.y1, P.pos[o + 1] + 1.5)); P.tgt[o + 2] = rnd(C.z0, C.z1);
     P.edge[i] = -2;
   } else {
     portalPoint(e, P.exit, o);
+    const there = Math.max(0, partAt(B, P.exit[o], P.exit[o + 2]));
+    if (here !== there) viaGate = (B.parts[here].gate || B.parts[there].gate);
     const k = rnd(0.25, 0.75), same = P.edge[i] >= 0 && h3.edges[P.edge[i]] && h3.edges[P.edge[i]].p === e.p;
-    if (same) {                                       // in en uit door dezelfde opening: een lus de kamer in
+    if (viaGate) {                                    // uitbouw ↔ kamer: eerst naar de doorgang
+      const g = viaGate, along = rnd(g.lo, Math.max(g.lo, g.hi));
+      P.tgt[o] = g.ax === "x" ? g.at : along; P.tgt[o + 2] = g.ax === "x" ? along : g.at;
+      P.tgt[o + 1] = clamp(lerp(P.pos[o + 1], P.exit[o + 1], 0.5) + rnd(-0.3, 0.3), B.y0 + 0.3, B.y1 - 0.3);
+    } else if (same) {                                // in en uit door dezelfde opening: een lus de kamer in
       const s = e.from === e.p.a ? -1 : 1, dpt = rnd(1.0, 3.2), j = rnd(-1.6, 1.6);
       P.tgt[o] = P.pos[o] + e.p.n.x * s * dpt + e.p.u.x * j; P.tgt[o + 1] = P.pos[o + 1] + rnd(-0.4, 0.4) - e.p.n.y * dpt * 0.6; P.tgt[o + 2] = P.pos[o + 2] + e.p.n.z * s * dpt + e.p.u.z * j;
     } else {
@@ -473,7 +578,8 @@ function enterZone(i, zid) {                         // kies de volgende opening
     }
     P.edge[i] = e.i; P.spd[i] = e.v;
   }
-  P.tgt[o] = cl(P.tgt[o], B.x0, B.x1); P.tgt[o + 1] = cl(P.tgt[o + 1], B.y0, B.y1); P.tgt[o + 2] = cl(P.tgt[o + 2], B.z0, B.z1);
+  P.part[i] = viaGate ? 255 : here;                   // 255 = onderweg door de doorgang, niet klemmen
+  if (!viaGate) { P.tgt[o] = cl(P.tgt[o], C.x0, C.x1); P.tgt[o + 1] = cl(P.tgt[o + 1], B.y0, B.y1); P.tgt[o + 2] = cl(P.tgt[o + 2], C.z0, C.z1); }
   P.phase[i] = 2;
 }
 
@@ -524,9 +630,9 @@ function h3Step(dt, time) {
       }
     }
     P.pos[o] += P.vel[o] * sdt; P.pos[o + 1] += P.vel[o + 1] * sdt; P.pos[o + 2] += P.vel[o + 2] * sdt;
-    if (P.phase[i] === 2 && P.zone[i] >= 0) {         // tussenpunt-fase blijft binnen de kamerdoos
-      const B = h3.box[h3.zones[P.zone[i]]];
-      P.pos[o] = clamp(P.pos[o], B.x0 + 0.08, B.x1 - 0.08); P.pos[o + 1] = clamp(P.pos[o + 1], B.y0 + 0.08, B.y1 - 0.08); P.pos[o + 2] = clamp(P.pos[o + 2], B.z0 + 0.08, B.z1 - 0.08);
+    if (P.phase[i] === 2 && P.zone[i] >= 0 && P.part[i] !== 255) {   // tussenpunt-fase blijft binnen haar doos
+      const Z = h3.box[h3.zones[P.zone[i]]], B = Z.parts[P.part[i]] || Z;
+      P.pos[o] = clamp(P.pos[o], B.x0 + 0.08, B.x1 - 0.08); P.pos[o + 1] = clamp(P.pos[o + 1], Z.y0 + 0.08, Z.y1 - 0.08); P.pos[o + 2] = clamp(P.pos[o + 2], B.z0 + 0.08, B.z1 - 0.08);
     }
     const zt = P.zone[i] >= 0 ? h3.zoneTemp[h3.zones[P.zone[i]]] : h3.env.tOut;
     P.temp[i] += (zt - P.temp[i]) * (1 - Math.exp(-sdt * 0.22));
@@ -571,7 +677,7 @@ function h3Init() {
   const bc = bg.getContext("2d"), bgr = bc.createRadialGradient(256, 190, 0, 256, 256, 400);
   bgr.addColorStop(0, "#1b2a45"); bgr.addColorStop(0.55, "#0b1120"); bgr.addColorStop(1, "#05070d");
   bc.fillStyle = bgr; bc.fillRect(0, 0, 512, 512); scene.background = new T.CanvasTexture(bg);
-  const cam = h3.camera = new T.PerspectiveCamera(38, 1, 0.1, 200); cam.position.set(15, 11.5, 19);
+  const cam = h3.camera = new T.PerspectiveCamera(38, 1, 0.1, 200); cam.position.set(17, 13, 21.5);
   const oc = h3.controls = new T.OrbitControls(cam, r.domElement);
   oc.target.set(0, 3, 0); oc.enableDamping = true; oc.dampingFactor = 0.08; oc.minDistance = 6; oc.maxDistance = 60;
   oc.maxPolarAngle = Math.PI * 0.495; oc.autoRotate = true; oc.autoRotateSpeed = 0.6;
