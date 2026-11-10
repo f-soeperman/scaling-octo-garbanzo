@@ -838,7 +838,9 @@ Read-only aggregation of the published artefacts of Projects 1, 5, 7, 13 from th
   (`side` x0/x1/z0/z1/roof + `pos`) voor een opening die op de azimut-wand niet past; voor een
   binnendeur `axis` x/z + `pos` — welke van de gedeelde wanden, als twee ruimtes er meer dan
   één delen (zonder opgave de eerste) — en `stairs.<zone-id>` (looplijn vanaf de onderste trede:
-  `start`, `heading`, `run`, `radius`, `turn`, `tail` + `landing`-vlakken) voor een draaiende
+  `start`, `heading`, `run`, `radius`, `turn`, `tail` + `landing`-vlakken; `closed` vult de
+  hoeken buiten de buitenbocht en de ruimte onder de eerste trap — alleen beeld, de koker
+  blijft voor de luchtstroom een doos) voor een draaiende
   trap met overlopen i.p.v. de rechte steektrappen. Een `solid`
   extra bóven een kamer laat het dak alleen op het onbedekte deel staan. Zet
   nooit waarden of labels uit dat bestand in code, tests, commits of deze file.

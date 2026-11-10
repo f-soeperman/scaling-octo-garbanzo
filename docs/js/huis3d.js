@@ -144,6 +144,7 @@ async function h3ReadArtefacts(names) {
 //                                "width":0.9, "landing":[{ "x":[a,b], "z":[a,b] }] } } }
 //                 → trap langs een looplijn vanaf de onderste trede: richting in graden (0° = +x, 90° = +z),
 //                   recht stuk, bocht (positief = linksom), recht stuk; overlopen op de bovenverdiepingen
+//                   `"closed": true` → de hoeken buiten de buitenbocht en de ruimte onder de eerste trap dicht
 // `extras` doen niet mee in de luchtstroom (solid = dicht blok, anders een lege ruimte).
 function h3Layout(raw) {
   const pair = v => Array.isArray(v) && v.length === 2 && v.every(n => typeof n === "number" && isFinite(n)) && v[1] > v[0];
@@ -159,7 +160,7 @@ function h3Layout(raw) {
     if (!w || !Array.isArray(w.start) || !w.start.slice(0, 2).every(num) || w.start.length !== 2 || ![w.heading, w.turn].every(num) || !(w.radius > 0.2)) return;
     stairs[z] = { start: w.start, heading: w.heading, turn: w.turn, radius: w.radius, run: num(w.run) ? Math.max(0, w.run) : 0.5,
                   tail: num(w.tail) ? Math.max(0, w.tail) : 0.5, width: num(w.width) ? clamp(w.width, 0.5, 1.5) : 0.9,
-                  landing: (w.landing || []).filter(r => r && pair(r.x) && pair(r.z)) };
+                  closed: !!w.closed, landing: (w.landing || []).filter(r => r && pair(r.x) && pair(r.z)) };
   });
   return { zones, extras: (raw.extras || []).filter(e => boxOk(e, true)), place: raw.place || {}, stairs, custom: true };
 }
@@ -422,6 +423,33 @@ function h3BuildHouse() {
             const q = at(L * (j + 0.5) / n);
             const st = new T.Mesh(new T.BoxGeometry(L / n * 1.15, 0.05, wd.width), sm);
             st.position.set(q.x, y0 + (j + 1) * rise, q.z); st.rotation.y = -q.h; G.add(st);
+            if (wd.closed && si === 0) {                          // dichte ruimte onder de eerste trap
+              const hh = (j + 1) * rise - 0.03, ub = new T.Mesh(new T.BoxGeometry(L / n * 1.15, hh, wd.width), solidMat);
+              ub.position.set(q.x, y0 + hh / 2, q.z); ub.rotation.y = -q.h; G.add(ub);
+            }
+          }
+          if (!wd.closed) return;
+          // Buiten de buitenbocht hoort niet bij de koker: per strook de cellen aan de buitenkant
+          // van de looplijn vullen (de koker blijft voor de luchtstroom een doos).
+          const cs = 0.12, smp = []; for (let i = 0; i <= 60; i++) smp.push(at(L * i / 60));
+          const out = (x, z) => {
+            let b = 0, bd = 1e9; smp.forEach((q, i) => { const d = (x - q.x) ** 2 + (z - q.z) ** 2; if (d < bd) { bd = d; b = i; } });
+            const q = smp[b], ux = Math.cos(q.h), uz = Math.sin(q.h), al = (x - q.x) * ux + (z - q.z) * uz;
+            if ((b === 0 && al < 0) || (b === 60 && al > 0)) return false;
+            return (x - q.x) * -Math.cos(q.h + sg * Math.PI / 2) + (z - q.z) * -Math.sin(q.h + sg * Math.PI / 2) > wd.width / 2 + 0.05;
+          };
+          const H = B.y1 > y0 + 2.75 ? 2.7 : B.y1 - y0;
+          for (let x = B.x0; x < B.x1 - 0.01; x += cs) {
+            let z0 = null;
+            for (let z = B.z0; ; z += cs) {
+              const o = z < B.z1 - 0.01 && out(x + cs / 2, z + cs / 2);
+              if (o && z0 === null) z0 = z;
+              if (!o && z0 !== null) {
+                const fm = new T.Mesh(new T.BoxGeometry(Math.min(cs, B.x1 - x), H, z - z0), solidMat);
+                fm.position.set(x + Math.min(cs, B.x1 - x) / 2, y0 + H / 2, (z0 + z) / 2); G.add(fm); z0 = null;
+              }
+              if (z >= B.z1 - 0.01) break;
+            }
           }
         });
       } else segs.forEach(([y0], si) => {
