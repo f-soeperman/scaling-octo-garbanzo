@@ -836,7 +836,17 @@ Read-only aggregation of the published artefacts of Projects 1, 5, 7, 13 from th
   inspringende hoek), `extras` (ruimtes zónder luchtstroom: `solid` = dicht blok dat niet bij
   het huis hoort, anders een lege ruimte; elk met optioneel `label`) en `place.<element-id>`
   (`side` x0/x1/z0/z1/roof + `pos`) voor een opening die op de azimut-wand niet past. Zet
-  nooit waarden of labels uit dat bestand in code, tests, commits of deze file. Bovenop het
+  nooit waarden of labels uit dat bestand in code, tests, commits of deze file.
+  **Beeldlaag (nov 2026):** de luchtstroom is een *lint* per deeltje (taps, naar de camera
+  gedraaid, `h3Ribbons`); een **gloed**-nabewerking (`UnrealBloomPass`, zeven extra
+  three-scripts met SRI) met labels/kompas op laag 1 er ná overheen getekend, anders gloeit
+  de tekst mee; een **warmtewaas** (grof raster per kamer dat de stroom naar zijn eigen
+  temperatuur trekt en langzaam terugzakt — puur beeld, de kamertemperaturen veranderen
+  niet); en **camerabewegingen**: overzicht/bovenaanzicht, doorsnede per verdieping (de
+  lagen erboven tillen weg — uit elkaar trekken en wegtillen lopen via dezelfde
+  `h3.lvlOff`), naar een kamer vliegen en "volg de lucht" (de camera rijdt achter één
+  deeltje aan). Additief mengen telt op: bij het bijstellen van helderheid altijd in de
+  drukste stroom kijken (open raam + open deur), niet in een rustige kamer. Bovenop het
   netto debiet tekent de pagina twee uitwisselingen die alleen beeld zijn: eenzijdig door
   één open raam en tegenstroom door een open binnendeur. three.js r147 is de laatste reeks
   met een klassieke (niet-module) build + `examples/js/OrbitControls` — een nieuwere versie
