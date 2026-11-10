@@ -14,7 +14,11 @@
 // LEESRICHTING: dit script wordt vóór vent.js geladen maar draait erná — alles hier start bij
 // renderSandbox(), dat vent.js' render() aanroept. Daarom mag het gerust vent.js' globals
 // gebruiken (`state`, `ventTimeScale`, `ventTooltip`, `futureAnnotations`) en shared.js' `bust`;
-// op laadmoment bestaat daar nog niets van. Dit bestand hoort dan ook alléén op vent.html.
+// op laadmoment bestaat daar nog niets van. De UI-helft hoort dan ook alléén op vent.html.
+// huis3d.html laadt dit bestand wél, maar uitsluitend voor de zuivere netwerk-helft (2 + 4:
+// `simConst`/`buildOpeningsJS`/`solveNetwork`) en de kleine helpers — die raken geen DOM en
+// geen vent.js-global. Houd dat zo: een top-level-statement dat `state` of een element van
+// vent.html aanraakt, breekt de 3D-pagina.
 
 function sandboxCardHTML() {
 

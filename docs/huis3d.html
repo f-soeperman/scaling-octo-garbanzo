@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'none';
+  script-src 'self' https://cdn.jsdelivr.net;
+  style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+  font-src https://fonts.gstatic.com;
+  img-src 'self' data: blob:;
+  connect-src 'self' https://api.github.com https://gist.githubusercontent.com;
+  frame-ancestors 'none';
+  base-uri 'none';
+  form-action 'none';
+">
+<title>Het huis in 3D · Pineapple Under The Sea</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" crossorigin="anonymous">
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js" integrity="sha384-vV17nr/rMaJqmeZkFUzXLpHdQ+ME5QHKdydaqqN+3Ga39RJlNrTatJxHwGV4ml2C" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js" integrity="sha384-I0DMsfimAPIqWT8lF+oA997gRgdUi3jhidoTq3fN0zmn35smXZukD01FLnsPRU9i" crossorigin="anonymous"></script>
+<style>
+  /* Eigen nachtthema: de deeltjes gloeien alleen tegen een donkere achtergrond. De
+     perkament-accenten (lettertypes, mos/klei) houden de pagina familie van de rest. */
+  :root {
+    --night: #070b14; --night-2: #0f1626; --panel: #101827e6; --line: #e8f0ff1f;
+    --paper: #f3ecd9; --paper-soft: #b9b3a2; --mint: #7cffb2; --amber: #ffd166;
+    --cold: #3aa0ff; --warm: #ff8a3d;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--night); color: var(--paper);
+               font-family: "Cormorant Garamond", Georgia, serif; }
+  #stage { position: fixed; inset: 0; }
+  #stage canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+
+  #topbar { position: fixed; left: 0; top: 0; right: 0; display: flex; gap: 18px; align-items: flex-start;
+            justify-content: space-between; padding: 16px 20px; pointer-events: none; z-index: 5; }
+  #topbar > * { pointer-events: auto; }
+  h1 { font-size: clamp(26px, 3.4vw, 42px); font-style: italic; font-weight: 500; margin: 0; line-height: 1;
+       letter-spacing: -0.01em; text-shadow: 0 2px 18px #000a; }
+  .sub { font-size: 13px; font-style: italic; color: var(--paper-soft); max-width: 440px; margin-top: 6px; text-shadow: 0 1px 8px #000; }
+  nav { display: flex; gap: 14px; flex-wrap: wrap; justify-content: flex-end; }
+  a.link { font-family: "JetBrains Mono", monospace; font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase;
+           color: var(--paper-soft); text-decoration: none; border-bottom: 1px solid currentColor; padding-bottom: 2px; }
+  a.link:hover { color: var(--paper); }
+
+  #stats { position: fixed; left: 20px; bottom: 18px; z-index: 5; display: flex; flex-direction: column; gap: 8px;
+           font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--paper-soft); pointer-events: none; }
+  #stats b { color: var(--paper); font-weight: 600; }
+  #legend { display: flex; align-items: center; gap: 8px; }
+  #legend .bar { width: 150px; height: 8px; border-radius: 4px;
+                 background: linear-gradient(90deg, var(--cold), #e8f4ff, var(--warm)); }
+  .keys { display: flex; gap: 12px; flex-wrap: wrap; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 1px; }
+
+  #panel { position: fixed; right: 16px; top: 78px; bottom: 16px; width: 318px; z-index: 6; overflow-y: auto;
+           background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px 18px;
+           backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); transition: transform .25s; }
+  #panel.closed { transform: translateX(calc(100% + 24px)); }
+  #panel-toggle { position: fixed; right: 16px; top: 78px; z-index: 7; }
+  #panel:not(.closed) ~ #panel-toggle { right: 342px; }
+  .grp { font-family: "JetBrains Mono", monospace; font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase;
+         color: var(--paper-soft); margin: 16px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+  .grp:first-child { margin-top: 0; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 0; }
+  .row label { font-size: 15px; }
+  .row .val { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--paper); min-width: 64px; text-align: right; }
+  input[type=range] { width: 100%; accent-color: var(--mint); margin: 0; }
+  .slider { padding: 4px 0 8px; }
+  .btn { font-family: "JetBrains Mono", monospace; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase;
+         background: #e8f0ff12; color: var(--paper); border: 1px solid var(--line); border-radius: 6px;
+         padding: 8px 11px; min-height: 36px; cursor: pointer; transition: background .15s, border-color .15s; }
+  .btn:hover { background: #e8f0ff22; border-color: #e8f0ff55; }
+  .btn.on { background: #7cffb226; border-color: var(--mint); color: var(--mint); }
+  .btns { display: flex; gap: 6px; flex-wrap: wrap; }
+  .seg { display: flex; flex-shrink: 0; }
+  .seg button { font-family: "JetBrains Mono", monospace; font-size: 10px; padding: 6px 8px; min-height: 32px;
+                border: 1px solid var(--line); background: transparent; color: var(--paper-soft); cursor: pointer; }
+  .seg button:first-child { border-radius: 6px 0 0 6px; }
+  .seg button:last-child { border-radius: 0 6px 6px 0; }
+  .seg button:not(:last-child) { border-right: none; }
+  .seg button.on[data-v=open] { background: #7cffb226; color: var(--mint); border-color: var(--mint); }
+  .seg button.on[data-v=tilt] { background: #ffd16626; color: var(--amber); border-color: var(--amber); }
+  .seg button.on[data-v=dicht] { background: #e8f0ff1c; color: var(--paper); }
+  .op-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 0; }
+  .op-row .name { font-size: 14px; line-height: 1.15; }
+  .op-row .flow { font-family: "JetBrains Mono", monospace; font-size: 9px; color: var(--paper-soft); }
+  .op-row.hot .name { color: var(--mint); }
+  .room-title { font-style: italic; font-size: 15px; color: var(--paper-soft); margin: 10px 0 2px; }
+  .hint { font-size: 12px; font-style: italic; color: var(--paper-soft); margin: 6px 0 0; }
+
+  #tip { position: fixed; z-index: 9; pointer-events: none; display: none; background: #0b1120f2; border: 1px solid var(--line);
+         border-radius: 6px; padding: 7px 10px; font-family: "JetBrains Mono", monospace; font-size: 11px; max-width: 260px; }
+  #tip b { display: block; font-family: "Cormorant Garamond", serif; font-size: 15px; font-weight: 600; margin-bottom: 2px; }
+  #overlay { position: fixed; inset: 0; z-index: 8; display: flex; align-items: center; justify-content: center; text-align: center;
+             padding: 30px; background: #070b14d9; font-size: 18px; font-style: italic; }
+  #overlay.hidden { display: none; }
+  #overlay .box { max-width: 520px; }
+  .pulse { animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: .45 } 50% { opacity: 1 } }
+  @media (max-width: 760px) {
+    #panel { top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; height: 52vh; }
+    #panel.closed { transform: translateY(calc(100% + 16px)); }
+    #panel-toggle, #panel:not(.closed) ~ #panel-toggle { right: 12px; top: auto; bottom: calc(52vh + 16px); }
+    #panel.closed ~ #panel-toggle { bottom: 12px; }
+    #stats { left: 12px; bottom: 12px; font-size: 10px; }
+    #panel:not(.closed) ~ #stats { display: none; }
+    .sub { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div id="stage"></div>
+
+<div id="topbar">
+  <div>
+    <h1>Het huis in 3D</h1>
+    <div class="sub">De luchtstroom van de ventilatie-tweeling, zichtbaar gemaakt. Sleep om te draaien,
+      scroll om te zoomen, klik een raam, rooster of deur om het open of dicht te zetten.</div>
+  </div>
+  <nav aria-label="Dashboards">
+    <a class="link" href="vent.html">← Ventilatie</a>
+    <a class="link" href="window.html">Ramen</a>
+    <a class="link" href="index.html">Bodem</a>
+  </nav>
+</div>
+
+<aside id="panel" aria-label="Bediening"></aside>
+<button class="btn" id="panel-toggle" type="button" aria-controls="panel">☰ Bediening</button>
+
+<div id="stats">
+  <div id="stat-line"></div>
+  <div id="legend"><span id="leg-min">koel</span><span class="bar"></span><span id="leg-max">warm</span></div>
+  <div class="keys">
+    <span><span class="dot" style="background:var(--mint)"></span>open</span>
+    <span><span class="dot" style="background:var(--amber)"></span>kier</span>
+    <span><span class="dot" style="background:#6b7a94"></span>dicht</span>
+  </div>
+</div>
+
+<div id="tip"></div>
+<div id="overlay"><div class="box pulse" id="overlay-box">⋯ het huis wordt opgebouwd…</div></div>
+
+<script src="js/theme.js"></script>
+<script src="js/shared.js?v=4"></script>
+<script src="js/speeltuin.js?v=7"></script>
+<script src="js/huis3d.js?v=1"></script>
+</body>
+</html>
