@@ -247,3 +247,28 @@ def test_driver_export_element_fracties_komen_uit_de_echte_parser(setup):
         assert e["frac"]["dicht"] == pytest.approx(vp._open_frac("dicht", elem))
         assert e["frac"]["open"] == pytest.approx(vp._open_frac("open", elem))
         assert e["default"] == pytest.approx(vp._default_frac(elem, e["kind"]))
+
+
+# ── Surrogaat + golden moeten dezelfde deurparen dragen als het huismodel ────────────
+
+def test_surrogaat_en_golden_volgen_de_deur_topologie():
+    """`surrogate_runtime` weigert te starten als de KOLOMVOLGORDE afwijkt, maar een deur die
+    alleen een andere `between` krijgt (nov 2026: woonkamer/badkamer hangen aan het
+    trappenhuis, niet aan de gang) houdt dezelfde id en dezelfde kolom. Dan rekent een oud
+    surrogaat stilletjes met de oude verbindingen. Deze test maakt dat hard."""
+    import json
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "house_model.json"), encoding="utf-8") as f:
+        house = json.load(f)
+    paren = {tuple(sorted(d["between"])) for d in house["doors"].values()}
+
+    with open(os.path.join(root, "docs", "js", "surrogate.json"), encoding="utf-8") as f:
+        cols = json.load(f)["output_cols"]
+    mix = {tuple(sorted(c[len("mix_"):].split("__"))) for c in cols if c.startswith("mix_")}
+    assert mix == paren, "surrogaat opnieuw distilleren (tools/airflow_distill.py + train_surrogate.py)"
+
+    with open(os.path.join(root, "tools", "golden", "driver_timeline.json"), encoding="utf-8") as f:
+        golden = json.load(f)
+    assert {tuple(sorted((d["a"], d["b"]))) for d in golden["doors"]} == paren, \
+        "golden-vector herslaan (tools/synth_history.py + export_driver_timeline.py)"

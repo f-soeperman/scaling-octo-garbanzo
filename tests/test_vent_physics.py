@@ -1226,3 +1226,54 @@ def _node_residual(zones, ops, pressures, zt, T_out):
         if op["b"] != "outside":
             res[idx[op["b"]]] -= md
     return res
+
+
+# ── Deur-topologie begane grond (bewonersopgave nov 2026) ────────────────────────────
+
+def _echt_huis():
+    import json
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "house_model.json"), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def test_begane_grond_komt_uit_op_het_trappenhuis():
+    """Woonkamer, badkamer, kinderkamer en de gang hangen elk met een eigen deur aan het
+    trappenhuis; de gang is het portaal achter de voordeur en heeft verder geen deuren.
+    De id's living_hall/hall_bath zijn bewust niet hernoemd (log + surrogaat-kolommen)."""
+    doors = _echt_huis()["doors"]
+    assert set(doors["living_hall"]["between"]) == {"living", "stair"}
+    assert set(doors["hall_bath"]["between"]) == {"bath", "stair"}
+    assert set(doors["hall_stair"]["between"]) == {"hall", "stair"}
+    assert not doors["hall_stair"].get("fixed")
+    assert doors["hall_stair"]["default_state"] == "dicht"
+    naar_gang = [d for d in doors.values() if "hall" in d["between"]]
+    assert len(naar_gang) == 1
+    assert _echt_huis()["vents"]["front_door_leak"]["room"] == "hall"
+
+
+def test_dichte_tussendeur_lekt_en_telt_niet_als_open_deur():
+    house = _echt_huis()
+    params = {"cp_shelter": 0.2}
+    temps = {z: 21.0 for z in list(house["rooms"]) + list(house["junctions"])}
+    ops = {op["id"]: op for op in vp.build_openings(house, {}, {}, params, temps, 10.0)}
+    kier = ops["hall_stair"]
+    assert kier["crack"] is True and kier["area"] == house["doors"]["hall_stair"]["closed_leak_m2"]
+    # Een andere dichte deur (badkamer) heeft geen kier-opgave en blijft luchtdicht.
+    assert "hall_bath" not in ops
+    # Gemeld open → de volle deur, geen kier-vlag.
+    open_ops = {op["id"]: op for op in vp.build_openings(house, {"hall_stair": "open"}, {}, params, temps, 10.0)}
+    assert "crack" not in open_ops["hall_stair"]
+    assert open_ops["hall_stair"]["area"] == house["doors"]["hall_stair"]["area_m2"]
+
+
+def test_voordeurlek_en_tussendeurkier_in_serie_geven_het_oude_restlek():
+    """De topologie is rechtgezet zonder het huis lekker of dichter te maken: twee gelijke
+    openingen in serie = A/sqrt(2), en dat moet het oude enkelvoudige rest-lek (0.005 m2)
+    blijven dat het model vóór nov 2026 droeg."""
+    house = _echt_huis()
+    a = house["vents"]["front_door_leak"]["max_open_area_m2"]
+    b = house["doors"]["hall_stair"]["closed_leak_m2"]
+    serie = a * b / (a * a + b * b) ** 0.5
+    assert abs(serie - 0.005) < 2e-4

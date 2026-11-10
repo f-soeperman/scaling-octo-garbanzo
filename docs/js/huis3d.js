@@ -27,9 +27,12 @@ const H3_RAD = Math.PI / 180;
 // x: tuingevel (0) → straatgevel; z: zijgevel (0) → overzijde; y: hoogte. Meters, gestileerd.
 const H3_DEFAULT_LAYOUT = { zones: {
   living:  { x: [0, 8.5],   z: [0, 6.5],    y: [0, 2.7] },
-  hall:    { x: [0, 8.5],   z: [6.5, 7.8],  y: [0, 2.7] },
+  hall:    { x: [6.9, 8.5], z: [6.5, 7.8],  y: [0, 2.7] },      // portaal achter de voordeur
   bath:    { x: [0, 2.6],   z: [7.8, 10.8], y: [0, 2.7] },
-  stair:   { x: [2.6, 4.5], z: [7.8, 10.8], y: [0, 8.3] },
+  // Het trappenhuis is de koker plus de overloop op de begane grond, waar woonkamer,
+  // badkamer, kinderkamer en de gang elk met een eigen deur op uitkomen (house_model.json).
+  stair:   { x: [2.6, 4.5], z: [7.8, 10.8], y: [0, 8.3],
+             parts: [{ x: [0, 6.9], z: [6.5, 7.8], y: [0, 2.7] }] },
   nursery: { x: [4.5, 8.5], z: [7.8, 10.8], y: [0, 2.7] },
   bedroom: { x: [4.5, 8.5], z: [7.8, 10.8], y: [2.8, 5.5] },
   office:  { x: [4.5, 8.5], z: [7.8, 10.8], y: [5.6, 8.3] },
@@ -127,7 +130,7 @@ async function h3ReadArtefacts(names) {
 
 // Privé-indeling valideren; alles wat niet klopt → de verzonnen standaard. Vorm:
 //   { "zones":  { "<zone-id>": { "x":[a,b], "z":[a,b], "y":[a,b],
-//                                "parts":[{ "x":[a,b], "z":[a,b] }] } },   // parts: uitbouw die aan
+//                                "parts":[{ "x":[a,b], "z":[a,b], "y":[a,b] }] } },  // parts: uitbouw die aan
 //     "extras": [ { "x":[a,b], "z":[a,b], "y":[a,b], "label":"…", "solid":true } ],  // de hoofddoos raakt
 //     "place":  { "<element-id>": { "side":"x0|x1|z0|z1|roof", "pos":0.5 } } }
 // `extras` doen niet mee in de luchtstroom (solid = dicht blok, anders een lege ruimte).
@@ -138,7 +141,7 @@ function h3Layout(raw) {
   const zones = {};
   for (const [id, z] of Object.entries(raw.zones)) {
     if (!boxOk(z, true)) { console.warn(`huis3d_layout: zone ${id} ongeldig — standaardindeling gebruikt`); return H3_DEFAULT_LAYOUT; }
-    zones[id] = { x: z.x, z: z.z, y: z.y, parts: (z.parts || []).filter(q => boxOk(q, false)) };
+    zones[id] = { x: z.x, z: z.z, y: z.y, parts: (z.parts || []).filter(q => boxOk(q, false)).map(q => (pair(q.y) ? q : { x: q.x, z: q.z })) };
   }
   return { zones, extras: (raw.extras || []).filter(e => boxOk(e, true)), place: raw.place || {}, custom: true };
 }
@@ -569,7 +572,7 @@ function enterZone(i, zid) {                         // kies de volgende opening
     if (viaGate) {                                    // uitbouw ↔ kamer: eerst naar de doorgang
       const g = viaGate, along = rnd(g.lo, Math.max(g.lo, g.hi));
       P.tgt[o] = g.ax === "x" ? g.at : along; P.tgt[o + 2] = g.ax === "x" ? along : g.at;
-      P.tgt[o + 1] = clamp(lerp(P.pos[o + 1], P.exit[o + 1], 0.5) + rnd(-0.3, 0.3), B.y0 + 0.3, B.y1 - 0.3);
+      P.tgt[o + 1] = clamp(lerp(P.pos[o + 1], P.exit[o + 1], 0.5) + rnd(-0.3, 0.3), B.y0 + 0.3, Math.min(B.parts[here].y1, B.parts[there].y1) - 0.3);
     } else if (same) {                                // in en uit door dezelfde opening: een lus de kamer in
       const s = e.from === e.p.a ? -1 : 1, dpt = rnd(1.0, 3.2), j = rnd(-1.6, 1.6);
       P.tgt[o] = P.pos[o] + e.p.n.x * s * dpt + e.p.u.x * j; P.tgt[o + 1] = P.pos[o + 1] + rnd(-0.4, 0.4) - e.p.n.y * dpt * 0.6; P.tgt[o + 2] = P.pos[o + 2] + e.p.n.z * s * dpt + e.p.u.z * j;

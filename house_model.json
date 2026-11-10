@@ -42,7 +42,7 @@
       "ground_m2": 55,
       "floor": 0,
       "plan_xy": [
-        0,
+        1,
         2
       ],
       "plan_h": 2,
@@ -104,10 +104,11 @@
       "sensor_outdoor_frac": 0.15
     },
     "stair": {
-      "volume_m3": 26,
+      "volume_m3": 58,
+      "_volume": "nov 2026: de begane-grond-overloop (waar woonkamer, badkamer, kinderkamer en gang op uitkomen) is één open ruimte met de trap en hoort dus bij deze zone: ~15 m2 op de begane grond (was 3) + de ongewijzigde koker erboven (2 lagen x ~3 m2). Schets-schatting van de bewoner, geen meting.",
       "exterior_wall_m2": 6,
       "party_wall_m2": 8,
-      "ground_m2": 3,
+      "ground_m2": 15,
       "floor": 0,
       "roof_m2": 10,
       "roof_u": 0.25,
@@ -142,7 +143,7 @@
       ],
       "_subzones": "Alleen gebruikt door Project 12 (airflow2_model): per-verdieping thermische sub-knopen van de koker (één drukknoop blijft; de tweeling-1 'stratify'-gradiënt geldt daar nog steeds). Elke verdiepingsdeur draagt een 'subzone'-sleutel die zegt op welke sub-knoop hij uitkomt. Project 8 negeert deze velden volledig.",
       "_note": "geen tado-sensor → niet gekalibreerd, wél gesimuleerd. Vangt de skylight-zon en drijft het schoorsteeneffect tussen de verdiepingen. Één gemengde knoop voor de kalibratie/airflow, maar met 'stratify': true legt het model een begrensde, niet-leerbare verticale gradiënt op (warme lucht bovenin): de gerapporteerde predicted_temp blijft het koker-gemiddelde, maar boven/onder worden apart getoond (predicted_temp_top/bottom) en elke verdiepingsdeur mengt tegen de lucht op zíjn hoogte i.p.v. het vlakke gemiddelde. Een volledige verdieping-per-verdieping-zone-split blijft afgewezen (geen sensor in de koker om sub-zone-temps op te ijken).",
-      "plan_h": 3
+      "plan_h": 4
     },
     "bath": {
       "from_window_data": "Shower",
@@ -153,7 +154,7 @@
       "ground_m2": 7,
       "floor": 0,
       "plan_xy": [
-        1,
+        3,
         3
       ],
       "label": "Badkamer (douche)",
@@ -167,13 +168,14 @@
   "junctions": {
     "hall": {
       "floor": 0,
-      "volume_m3": 14,
-      "ground_m2": 5,
+      "volume_m3": 19,
+      "ground_m2": 7,
       "plan_xy": [
-        1,
-        2
+        2,
+        4
       ],
-      "label": "Gang/hal"
+      "label": "Gang (voordeur)",
+      "_topologie": "Bewonersopgave nov 2026: de gang is het portaal direct achter de voordeur (~7 m2) en hangt met één tussendeur aan het trappenhuis. Tot dan stond ze in het model als de centrale gang waar woonkamer en badkamer op uitkwamen; in werkelijkheid komen die uit op de begane-grond-overloop van het trappenhuis (zie doors + rooms.stair)."
     }
   },
   "_interzone": "Geleidende koppeling tussen zones: vloeren/plafonds tussen gestapelde kamers en binnenwanden. Dit ontbrak volledig — de énige kamer↔kamer-weg was luchtadvectie door open deuren, terwijl nursery → bedroom → office fysiek op elkaar staan en hun warmte omlaag zakt (en via nursery's vloer de kruipruimte in). Zonder die afvoer heeft de bovenste kamer geen uitweg en stapelt de fout zich op mét de hoogte: gemeten op een zonnige 27,5°C-middag nursery +0,71, bedroom +1,32, office +2,19 °C te warm. 'u' is lucht-tot-lucht (oppervlakte-overgangsweerstanden inbegrepen), daarom koppelt dit lucht↔lucht, parallel aan de deuren; de massa van de vloer zelf zit in mass_floor_m2 van beide kamers. De globale geleerde 'ua_inter' schaalt het geheel — per vlak leren zou onderling degenereren.",
@@ -560,12 +562,13 @@
     "front_door_leak": {
       "room": "hall",
       "facade_azimuth_deg": 309,
-      "area_m2": 0.005,
-      "max_open_area_m2": 0.005,
+      "area_m2": 0.007,
+      "max_open_area_m2": 0.007,
       "center_height_m": 1.2,
       "default_state": "open",
-      "label": "Voordeur-kieren (rest-lek; achter een altijd-dichte tussendeur)",
-      "plan_side": "top",
+      "label": "Voordeur-kieren",
+      "_area": "0.007 (was 0.005 'achter een altijd-dichte tussendeur'): die tussendeur is sinds nov 2026 een eigen element (doors.hall_stair) met een eigen kier; samen in serie geven ze weer 0.005.",
+      "plan_side": "bottom",
       "plan_pos": 0.5
     },
     "bath_extract": {
@@ -576,7 +579,7 @@
       "center_height_m": 2.2,
       "default_state": "dicht",
       "label": "Badkamer mechanische afzuiging (aan/uit)",
-      "plan_side": "left",
+      "plan_side": "bottom",
       "plan_pos": 0.5
     }
   },
@@ -584,36 +587,40 @@
     "living_hall": {
       "between": [
         "living",
-        "hall"
+        "stair"
       ],
       "area_m2": 2.0,
       "center_height_m": 1.0,
       "default_state": "open",
-      "label": "Woonkamer ↔ gang (deur)",
+      "label": "Woonkamer ↔ trappenhuis (deur)",
+      "subzone": "bg",
+      "_id": "De id's living_hall/hall_bath dateren van vóór de topologie-correctie (nov 2026) en blijven bewust staan: het zijn dezelfde fysieke deuren, de openingen-log in de Gist is erop gesleuteld en hun volgorde is het kolomcontract van het surrogaat. Alleen `between` en het label zijn rechtgezet.",
       "advice": {
-        "naam": "deur woonkamer↔hal"
+        "naam": "deur woonkamer↔trappenhuis"
       }
     },
     "hall_bath": {
       "between": [
-        "hall",
+        "stair",
         "bath"
       ],
       "area_m2": 1.6,
       "center_height_m": 1.0,
       "default_state": "dicht",
-      "label": "Gang ↔ badkamer"
+      "label": "Trappenhuis ↔ badkamer",
+      "subzone": "bg"
     },
     "hall_stair": {
       "between": [
         "hall",
         "stair"
       ],
-      "area_m2": 2.2,
-      "center_height_m": 1.5,
-      "default_state": "open",
-      "fixed": true,
-      "label": "Gang ↔ trap (open doorgang)",
+      "area_m2": 1.8,
+      "center_height_m": 1.0,
+      "default_state": "dicht",
+      "closed_leak_m2": 0.007,
+      "_closed_leak": "Tussendeur, vrijwel altijd dicht (bewonersopgave nov 2026) — maar een dichte binnendeur is niet luchtdicht. De kier staat in serie met de voordeur-kieren (vents.front_door_leak, ook 0.007): 0.007 en 0.007 in serie = 0.005 effectief, exact het 'rest-lek achter een altijd-dichte tussendeur' dat het model hier tot nov 2026 als één opening van 0.005 droeg. De topologie is dus rechtgezet zonder dat het huis er lekker of dichter van werd.",
+      "label": "Gang ↔ trappenhuis (tussendeur)",
       "subzone": "bg"
     },
     "nursery_stair": {

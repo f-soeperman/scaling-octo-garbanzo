@@ -959,11 +959,21 @@ def build_openings(house: dict, states: dict, weather: dict, params: dict,
     for did, d in house.get("doors", {}).items():
         frac = _open_frac(states[did], d) if did in states else _default_frac(d, "door")
         area = frac * d.get("area_m2", 0.0)
+        crack = False
         if area <= 0:
-            continue
+            # Dichte deur met een opgegeven kier (`closed_leak_m2`): géén open deur, wél een
+            # lekpad in het druknetwerk. Zonder de vlag (alle deuren behalve de tussendeur
+            # naar de gang) blijft een dichte deur luchtdicht, precies als voorheen.
+            area = d.get("closed_leak_m2", 0.0)
+            crack = True
+            if area <= 0:
+                continue
         a, b = d["between"]
-        ops.append({"a": a, "b": b, "area": area, "Cd": cd,
-                    "z": d.get("center_height_m", 1.0), "Pe": 0.0, "id": did})
+        op = {"a": a, "b": b, "area": area, "Cd": cd,
+              "z": d.get("center_height_m", 1.0), "Pe": 0.0, "id": did}
+        if crack:
+            op["crack"] = True      # stratificatie/counterflow tellen dit niet als open deur
+        ops.append(op)
     # Per-zone infiltratielek (altijd aanwezig, klein) → het netwerk blijft welgesteld,
     # óók als een zone helemaal dicht zit (b.v. badkamer: deur dicht + afzuiging uit) —
     # anders wordt die knoop singulier en ontspoort de hele drukoplossing.
@@ -1304,7 +1314,7 @@ def simulate(house: dict, params: dict, timeline: list[dict],
         if strat:
             door_area = {}
             for op in ops:
-                if op.get("b") != "outside":
+                if op.get("b") != "outside" and not op.get("crack"):
                     k = (op["a"], op["b"])
                     door_area[k] = door_area.get(k, 0.0) + op["area"]
             gamma_temps = _gamma_temps(measured, Ta, step["t"])

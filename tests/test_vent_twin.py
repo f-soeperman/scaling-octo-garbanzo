@@ -360,9 +360,15 @@ def test_controls_filtert_vast_glas_en_vaste_deuren(setup):
     assert not vaste_ramen & per_kind["window"]
     # Alle roosters zijn bedienbaar.
     assert per_kind["vent"] == set(house["vents"])
-    # De vaste doorgang (fixed) is geen deur → niet tonen.
-    assert "hall_stair" not in per_kind["door"]
+    # Een vaste doorgang (fixed) is geen deur → niet tonen. Het huismodel draagt er sinds de
+    # topologie-correctie (nov 2026) zelf geen meer, dus de regel wordt op een kopie getoetst.
     assert per_kind["door"] == {did for did, d in house["doors"].items() if not d.get("fixed")}
+    import copy
+    vast = copy.deepcopy(house)
+    vast["doors"]["hall_stair"]["fixed"] = True
+    assert "hall_stair" not in {c["id"] for c in vt._controls(vast, {})}
+    # De tussendeur naar de gang is bedienbaar en staat zonder melding dicht.
+    assert {c["id"]: c for c in controls}["hall_stair"]["state"] == "dicht"
     # Default-standen zonder meldingen: raam dicht, rooster open.
     by_id = {c["id"]: c for c in controls}
     assert by_id["nursery_small_window"]["state"] == "dicht"
