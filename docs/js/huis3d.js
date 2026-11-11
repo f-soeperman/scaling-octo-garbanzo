@@ -139,6 +139,7 @@ async function h3ReadArtefacts(names) {
 //                                "parts":[{ "x":[a,b], "z":[a,b], "y":[a,b] }] } },  // parts: uitbouw die aan
 //     "extras": [ { "x":[a,b], "z":[a,b], "y":[a,b], "label":"…", "solid":true } ],  // de hoofddoos raakt
 //     "place":  { "<element-id>": { "side":"x0|x1|z0|z1|roof", "pos":0.5 },            // raam/rooster
+//                 "<dakraam-id>": { "at":[x,z], "size":[dx,dz] },                      // dakraam als strook
 //                 "<deur-id>":    { "axis":"x|z", "pos":0.5 } } }                    // binnendeur: welke wand
 //     "stairs": { "<zone-id>": { "start":[x,z], "heading":180, "run":0.6, "radius":0.85, "turn":120, "tail":0.5,
 //                                "width":0.9, "landing":[{ "x":[a,b], "z":[a,b] }] } } }
@@ -229,8 +230,13 @@ function h3Portals() {
         if (side[0] === "x") { x = side === "x0" ? B.x0 + ins : B.x1 - ins; z = clamp(lerp(B.z0, B.z1, t), B.z0 + ins, B.z1 - ins); }
         else { z = side === "z0" ? B.z0 + ins : B.z1 - ins; x = clamp(lerp(B.x0, B.x1, t), B.x0 + ins, B.x1 - ins); }
       }
+      // Privé-indeling mag een dakraam als strook leggen: `at` = midden [x,z], `size` = [langs x, langs z].
+      const okp = v => Array.isArray(v) && v.length === 2 && v.every(n => typeof n === "number" && isFinite(n));
+      let hw = s / 2, hh = kind === "vent" ? 0.05 : s / 2;
+      if (okp(ov.at)) { x = ov.at[0]; z = ov.at[1]; }
+      if (okp(ov.size) && ov.size[0] > 0.1 && ov.size[1] > 0.1) { hh = ov.size[0] / 2; hw = ov.size[1] / 2; }
       add({ id, kind: kind === "vent" ? "vent" : "skylight", roof: true, a: el.room, b: "outside", el, operable, hasTilt, hole: operable && kind !== "vent",
-            c: new V(x, B.y1, z), n: new V(0, 1, 0), u: new V(0, 0, 1), v: new V(1, 0, 0), hw: s / 2, hh: kind === "vent" ? 0.05 : s / 2 });
+            c: new V(x, B.y1, z), n: new V(0, 1, 0), u: new V(0, 0, 1), v: new V(1, 0, 0), hw, hh });
       return;
     }
     // De gevel aan deze kant = alle delen van de zone die op het buitenste vlak liggen.
