@@ -138,7 +138,13 @@ async function h3ReadArtefacts(names) {
 //   { "zones":  { "<zone-id>": { "x":[a,b], "z":[a,b], "y":[a,b],
 //                                "parts":[{ "x":[a,b], "z":[a,b], "y":[a,b] }] } },  // parts: uitbouw die aan
 //     "extras": [ { "x":[a,b], "z":[a,b], "y":[a,b], "label":"…", "solid":true } ],  // de hoofddoos raakt
-//     "place":  { "<element-id>": { "side":"x0|x1|z0|z1|roof", "pos":0.5 } } }
+//     "place":  { "<element-id>": { "side":"x0|x1|z0|z1|roof", "pos":0.5 },            // raam/rooster
+//                 "<deur-id>":    { "axis":"x|z", "pos":0.5 } } }                    // binnendeur: welke wand
+//     "stairs": { "<zone-id>": { "start":[x,z], "heading":180, "run":0.6, "radius":0.85, "turn":120, "tail":0.5,
+//                                "width":0.9, "landing":[{ "x":[a,b], "z":[a,b] }] } } }
+//                 → trap langs een looplijn vanaf de onderste trede: richting in graden (0° = +x, 90° = +z),
+//                   recht stuk, bocht (positief = linksom), recht stuk; overlopen op de bovenverdiepingen
+//                   `"closed": true` → de hoeken buiten de buitenbocht en de ruimte onder de eerste trap dicht
 // `extras` doen niet mee in de luchtstroom (solid = dicht blok, anders een lege ruimte).
 function h3Layout(raw) {
   const pair = v => Array.isArray(v) && v.length === 2 && v.every(n => typeof n === "number" && isFinite(n)) && v[1] > v[0];
@@ -149,7 +155,14 @@ function h3Layout(raw) {
     if (!boxOk(z, true)) { console.warn(`huis3d_layout: zone ${id} ongeldig — standaardindeling gebruikt`); return H3_DEFAULT_LAYOUT; }
     zones[id] = { x: z.x, z: z.z, y: z.y, parts: (z.parts || []).filter(q => boxOk(q, false)).map(q => (pair(q.y) ? q : { x: q.x, z: q.z })) };
   }
-  return { zones, extras: (raw.extras || []).filter(e => boxOk(e, true)), place: raw.place || {}, custom: true };
+  const stairs = {}, num = v => typeof v === "number" && isFinite(v);
+  Object.entries(raw.stairs || {}).forEach(([z, w]) => {
+    if (!w || !Array.isArray(w.start) || !w.start.slice(0, 2).every(num) || w.start.length !== 2 || ![w.heading, w.turn].every(num) || !(w.radius > 0.2)) return;
+    stairs[z] = { start: w.start, heading: w.heading, turn: w.turn, radius: w.radius, run: num(w.run) ? Math.max(0, w.run) : 0.5,
+                  tail: num(w.tail) ? Math.max(0, w.tail) : 0.5, width: num(w.width) ? clamp(w.width, 0.5, 1.5) : 0.9,
+                  closed: !!w.closed, landing: (w.landing || []).filter(r => r && pair(r.x) && pair(r.z)) };
+  });
+  return { zones, extras: (raw.extras || []).filter(e => boxOk(e, true)), place: raw.place || {}, stairs, custom: true };
 }
 
 // ---------------------------------------------------------------- geometrie uit het model
@@ -244,16 +257,24 @@ function h3Portals() {
   Object.entries(m.doors || {}).forEach(([id, el]) => {
     if (!el.between) return;
     const [a, b] = el.between, ZA = h3.box[a], ZB = h3.box[b]; if (!ZA || !ZB) return;
-    const y0 = Math.max(ZA.y0, ZB.y0), h = 2.05, w = clamp((el.area_m2 || 1.8) / h, 0.75, 1.15), t = el.plan_pos ?? 0.5;
-    let c = null, n = null;
+    const ov = (h3.layout.place || {})[id] || {};
+    const y0 = Math.max(ZA.y0, ZB.y0), h = 2.05, w = clamp((el.area_m2 || 1.8) / h, 0.75, 1.15);
+    const t = typeof ov.pos === "number" ? ov.pos : (el.plan_pos ?? 0.5);
+    // Alle gedeelde wanden verzamelen; `place.<deur-id>.axis` kiest de wand als er meer dan één is
+    // (een deur naar een L-vormige ruimte), anders de eerste — het gedrag van vóór de override.
+    const cands = [];
     for (const A of ZA.parts) for (const B of ZB.parts) for (const [ax, o] of [["x", "z"], ["z", "x"]]) for (const sgn of [1, -1]) {
-      if (c) continue;
       const pa = sgn > 0 ? A[ax + "1"] : A[ax + "0"], pb = sgn > 0 ? B[ax + "0"] : B[ax + "1"];
       const lo = Math.max(A[o + "0"], B[o + "0"]), hi = Math.min(A[o + "1"], B[o + "1"]);
       if (Math.abs(pa - pb) > 0.05 || hi - lo < w + 0.2) continue;
-      const al = clamp(lerp(lo, hi, t), lo + w / 2 + 0.1, hi - w / 2 - 0.1);
-      c = ax === "x" ? new V(pa, y0 + h / 2 + 0.03, al) : new V(al, y0 + h / 2 + 0.03, pa);
-      n = ax === "x" ? new V(sgn, 0, 0) : new V(0, 0, sgn);
+      cands.push({ ax, sgn, pa, lo, hi });
+    }
+    const k = cands.find(q => q.ax === ov.axis) || cands[0];
+    let c = null, n = null;
+    if (k) {
+      const al = clamp(lerp(k.lo, k.hi, t), k.lo + w / 2 + 0.1, k.hi - w / 2 - 0.1);
+      c = k.ax === "x" ? new V(k.pa, y0 + h / 2 + 0.03, al) : new V(al, y0 + h / 2 + 0.03, k.pa);
+      n = k.ax === "x" ? new V(k.sgn, 0, 0) : new V(0, 0, k.sgn);
     }
     if (!c) return;   // geen gedeelde wand in de gestileerde indeling → deur niet tekenbaar
     add({ id, kind: "door", a, b, el, operable: id in h3.live, fixed: !!el.fixed, hole: true, c, n, hw: w / 2, hh: h / 2 });
@@ -354,17 +375,84 @@ function h3BuildHouse() {
       });
       const ln = new T.LineSegments(new T.EdgesGeometry(new T.BoxGeometry(dx, H, dz)), h3.edgeMat); ln.position.set(cx, y0 + H / 2, cz); G.add(ln);
     });
-    // Dak waar geen andere doos bovenop staat.
-    const covered = all.some(({ B: C }) => C !== B && Math.abs(C.y0 - B.y1) < 0.2 && C.x0 < B.x1 - 0.1 && C.x1 > B.x0 + 0.1 && C.z0 < B.z1 - 0.1 && C.z1 > B.z0 + 0.1);
-    if (!covered) {
-      const holes = !zid ? [] : h3.portals.filter(p => p.roof && p.a === zid && p.hole && inBox(B, p.c.x, p.c.z, 0))
-        .map(p => ({ u0: p.c.z - B.z0 - p.hw, u1: p.c.z - B.z0 + p.hw, v0: p.c.x - B.x0 - p.hh, v1: p.c.x - B.x0 + p.hh }));
-      h3.roofGroups[levelOf(B.y1 - 0.1)].add(h3Panel(new V(B.x0, B.y1, B.z0), new V(0, 0, 1), new V(1, 0, 0), dz, dx, holes, h3.roofMat));
-    }
+    // Dak waar geen andere doos bovenop staat — per onbedekt rechthoekje, zodat een kamer die
+    // onder een hoger blok uitsteekt daar wél een dak (en een dakraam) houdt.
+    let free = [{ x0: B.x0, x1: B.x1, z0: B.z0, z1: B.z1 }];
+    all.forEach(({ B: C }) => {
+      if (C === B || Math.abs(C.y0 - B.y1) > 0.2) return;
+      free = free.flatMap(r => {
+        const ix0 = Math.max(r.x0, C.x0), ix1 = Math.min(r.x1, C.x1), iz0 = Math.max(r.z0, C.z0), iz1 = Math.min(r.z1, C.z1);
+        if (ix1 - ix0 < 0.1 || iz1 - iz0 < 0.1) return [r];
+        return [{ x0: r.x0, x1: ix0, z0: r.z0, z1: r.z1 }, { x0: ix1, x1: r.x1, z0: r.z0, z1: r.z1 },
+                { x0: ix0, x1: ix1, z0: r.z0, z1: iz0 }, { x0: ix0, x1: ix1, z0: iz1, z1: r.z1 }].filter(q => q.x1 - q.x0 > 0.1 && q.z1 - q.z0 > 0.1);
+      });
+    });
+    free.forEach(r => {
+      const holes = !zid ? [] : h3.portals.filter(p => p.roof && p.a === zid && p.hole && inBox(r, p.c.x, p.c.z, 0))
+        .map(p => ({ u0: p.c.z - r.z0 - p.hw, u1: p.c.z - r.z0 + p.hw, v0: p.c.x - r.x0 - p.hh, v1: p.c.x - r.x0 + p.hh }));
+      h3.roofGroups[levelOf(B.y1 - 0.1)].add(h3Panel(new V(r.x0, B.y1, r.z0), new V(0, 0, 1), new V(1, 0, 0), r.z1 - r.z0, r.x1 - r.x0, holes, h3.roofMat));
+    });
     // Trap: een paar treden per verdieping in een zone die meerdere lagen beslaat.
     if (zid && segs.length > 1) {
       const sm = new T.MeshLambertMaterial({ color: 0x4a5a7c, transparent: true, opacity: 0.75 });
-      segs.forEach(([y0], si) => {
+      const wd = k === 0 ? (h3.layout.stairs || {})[zid] : null;
+      if (wd) {
+        // Trap langs een looplijn: recht stuk → bocht → recht stuk; per verdieping dezelfde plattegrond.
+        const rad = Math.PI / 180, n = 14, tr = Math.abs(wd.turn) * rad, sg = wd.turn >= 0 ? -1 : 1;   // links = hoek neemt af
+        const L = wd.run + wd.radius * tr + wd.tail, h0 = wd.heading * rad;
+        const at = d => {
+          let x = wd.start[0], z = wd.start[1], h = h0;
+          const d1 = Math.min(d, wd.run); x += Math.cos(h) * d1; z += Math.sin(h) * d1; d -= d1;
+          if (d > 0) {
+            const nx = Math.cos(h + sg * Math.PI / 2), nz = Math.sin(h + sg * Math.PI / 2), mx = x + nx * wd.radius, mz = z + nz * wd.radius;
+            const da = Math.min(d / wd.radius, tr); h += sg * da; d -= da * wd.radius;
+            x = mx - Math.cos(h + sg * Math.PI / 2) * wd.radius; z = mz - Math.sin(h + sg * Math.PI / 2) * wd.radius;
+          }
+          if (d > 0) { x += Math.cos(h) * d; z += Math.sin(h) * d; }
+          return { x, z, h };
+        };
+        segs.forEach(([y0], si) => {
+          const G = h3.levelGroups[levelOf(y0 + 0.1)];
+          if (si > 0) wd.landing.forEach(r => {                  // overloop op de bovenverdiepingen
+            const lm = new T.Mesh(new T.BoxGeometry(r.x[1] - r.x[0], 0.06, r.z[1] - r.z[0]), sm);
+            lm.position.set((r.x[0] + r.x[1]) / 2, y0 + 0.03, (r.z[0] + r.z[1]) / 2); G.add(lm);
+          });
+          if (si === segs.length - 1) return;
+          const rise = (H3_LEVELS[levelOf(y0 + 0.1) + 1][0] - y0) / (n + 1);
+          for (let j = 0; j < n; j++) {
+            const q = at(L * (j + 0.5) / n);
+            const st = new T.Mesh(new T.BoxGeometry(L / n * 1.15, 0.05, wd.width), sm);
+            st.position.set(q.x, y0 + (j + 1) * rise, q.z); st.rotation.y = -q.h; G.add(st);
+            if (wd.closed && si === 0) {                          // dichte ruimte onder de eerste trap
+              const hh = (j + 1) * rise - 0.03, ub = new T.Mesh(new T.BoxGeometry(L / n * 1.15, hh, wd.width), solidMat);
+              ub.position.set(q.x, y0 + hh / 2, q.z); ub.rotation.y = -q.h; G.add(ub);
+            }
+          }
+          if (!wd.closed) return;
+          // Buiten de buitenbocht hoort niet bij de koker: per strook de cellen aan de buitenkant
+          // van de looplijn vullen (de koker blijft voor de luchtstroom een doos).
+          const cs = 0.12, smp = []; for (let i = 0; i <= 60; i++) smp.push(at(L * i / 60));
+          const out = (x, z) => {
+            let b = 0, bd = 1e9; smp.forEach((q, i) => { const d = (x - q.x) ** 2 + (z - q.z) ** 2; if (d < bd) { bd = d; b = i; } });
+            const q = smp[b], ux = Math.cos(q.h), uz = Math.sin(q.h), al = (x - q.x) * ux + (z - q.z) * uz;
+            if ((b === 0 && al < 0) || (b === 60 && al > 0)) return false;
+            return (x - q.x) * -Math.cos(q.h + sg * Math.PI / 2) + (z - q.z) * -Math.sin(q.h + sg * Math.PI / 2) > wd.width / 2 + 0.05;
+          };
+          const H = B.y1 > y0 + 2.75 ? 2.7 : B.y1 - y0;
+          for (let x = B.x0; x < B.x1 - 0.01; x += cs) {
+            let z0 = null;
+            for (let z = B.z0; ; z += cs) {
+              const o = z < B.z1 - 0.01 && out(x + cs / 2, z + cs / 2);
+              if (o && z0 === null) z0 = z;
+              if (!o && z0 !== null) {
+                const fm = new T.Mesh(new T.BoxGeometry(Math.min(cs, B.x1 - x), H, z - z0), solidMat);
+                fm.position.set(x + Math.min(cs, B.x1 - x) / 2, y0 + H / 2, (z0 + z) / 2); G.add(fm); z0 = null;
+              }
+              if (z >= B.z1 - 0.01) break;
+            }
+          }
+        });
+      } else segs.forEach(([y0], si) => {
         if (si === segs.length - 1) return;
         const n = 10, rise = (H3_LEVELS[levelOf(y0 + 0.1) + 1][0] - y0) / n, wx = dx * 0.46, run = (dz - 0.6) / n;
         for (let j = 0; j < n; j++) {
