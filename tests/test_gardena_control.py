@@ -721,7 +721,7 @@ def test_orchestrator_dispatcht_elk_uur():
 
 def test_geen_verboden_vocabulaire():
     # De reden achter de gazon-automaat-vlag is privé (bewonersbesluit): de
-    # code, de workflow, het paneel en het CLAUDE.md-hoofdstuk beschrijven
+    # code, de workflow, het paneel en de projectdocumentatie beschrijven
     # alleen wát er schakelt, nooit waaróm. (De patroon-string is opgeknipt
     # zodat deze test zichzelf niet matcht.)
     pattern = re.compile("|".join(("vaka" "ntie", "holi" "day")), re.IGNORECASE)
@@ -732,6 +732,14 @@ def test_geen_verboden_vocabulaire():
                 "tests/test_gardena_control.py", "tests/test_gardena_api.py"):
         text = (REPO / rel).read_text(encoding="utf-8")
         assert not pattern.search(text), rel
+    # Het Project 16-hoofdstuk is een eigen bestand; in CLAUDE.md zelf staat
+    # het project alleen nog in de kaart en de regels — elke regel die het
+    # noemt telt mee.
+    doc = (REPO / "project_docs" / "p16-gardena.md").read_text(encoding="utf-8")
+    assert "# Project 16" in doc
+    assert not pattern.search(doc)
     claude = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
-    sectie = claude.split("## Project 16")[1].split("\n## ")[0]
-    assert not pattern.search(sectie)
+    regels = [ln for ln in claude.splitlines()
+              if "gardena" in ln.lower() or "P16" in ln]
+    assert regels
+    assert not any(pattern.search(ln) for ln in regels)
