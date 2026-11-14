@@ -49,7 +49,8 @@ function render() {
   const banners = [];
   const ageH = (Date.now() - new Date(d.generated_at).getTime()) / 3.6e6;
   if (ageH > 3) banners.push(`<div class="banner banner-warn">⚠ Data is ${Math.round(ageH)} uur oud — draait de Action nog?</div>`);
-  if (d.gated) banners.push(`<div class="banner banner-ok">🌥 Koele dag (max ${fmtT(d.day_max)}) — koeladvies onderdrukt. Ramen blijven op hun laatste stand; hieronder de verwachting.</div>`);
+  if (d.heating_weather) banners.push(`<div class="banner banner-ok">🔥 Stookweer (max ${fmtT(d.day_max)}) — koeladvies staat uit, ramen dicht.</div>`);
+  else if (d.gated) banners.push(`<div class="banner banner-ok">🌥 Koele dag (max ${fmtT(d.day_max)}) — koeladvies onderdrukt. Ramen blijven op hun laatste stand; hieronder de verwachting.</div>`);
   document.getElementById("banner-slot").innerHTML = banners.join("");
 
   document.getElementById("content").innerHTML = `

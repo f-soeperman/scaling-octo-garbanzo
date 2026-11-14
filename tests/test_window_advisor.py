@@ -1208,3 +1208,54 @@ def test_dashboard_valt_lokaal_terug_zonder_secret(tmp_path, monkeypatch):
 
     monkeypatch.setattr(wa, "DASHBOARD_FILE", str(tmp_path / "weg.json"))
     assert wa.read_prev_dashboard() == {}
+
+
+# ── Seizoenspoort: bij stookweer staat het koeladvies uit (nov 2026) ───────────────
+
+def test_stookweer_onderdrukt_ook_een_warme_kamer():
+    # Koud buiten, een gestookte kamer boven haar comfortband.
+    gated, reason = wa.cooling_gate(dmax=8.0, upcoming_max=7.0, warm_room=True)
+    assert gated and "stookweer" in reason
+
+
+def test_koele_dag_boven_de_stookgrens_houdt_het_oude_gedrag():
+    assert wa.cooling_gate(18.0, 17.0, warm_room=True) == (False, "warme dag")
+    assert wa.cooling_gate(18.0, 17.0, warm_room=False)[0] is True
+    assert wa.cooling_gate(25.0, 26.0, warm_room=False) == (False, "warme dag")
+
+
+def test_warme_dag_in_aantocht_is_geen_stookweer():
+    # Koude avond, maar morgen wordt het warm: koelte tanken moet kunnen.
+    assert not wa.heating_weather(12.0, 23.0)
+    assert wa.heating_weather(12.0, None)
+    assert wa.heating_weather(None, 12.0)
+
+
+def test_zonder_forecast_geen_stookweer():
+    assert not wa.heating_weather(None, None)
+    assert wa.cooling_gate(None, None, warm_room=True) == (False, "warme dag")
+
+
+def test_stookweer_zet_het_koelgeheugen_terug():
+    state = {"rooms": {"Nursery": "open", "office": "dicht"},
+             "notified": {"Nursery": {"state": "open", "at": "x"}},
+             "open_since": {"Nursery": "x"}, "msg_at": {"Nursery": {"open": "x"}}}
+    assert wa.reset_for_heating(state) is True
+    assert state["rooms"] == {"Nursery": "dicht", "office": "dicht"}
+    assert state["notified"]["Nursery"] == {"state": "dicht", "at": "x"}
+    assert state["open_since"] == {}
+    assert state["msg_at"] == {"Nursery": {"open": "x"}}
+    assert wa.reset_for_heating(state) is False   # idempotent → geen tweede schrijf
+
+
+def test_dashboard_toont_bij_stookweer_geen_open_kamer():
+    now = datetime(2026, 1, 10, 12, 0, tzinfo=wa.TZ)
+    rooms = {"Nursery": {"inside": 20.0, "humidity": 70}}
+    ctx = {"od": 5.0, "prev_rooms": {"Nursery": "open"}, "warm_ahead": False,
+           "gated": True, "outside_rh": 85, "outside_rh_temp": 5.0, "fc": [], "hourly": []}
+    zonder = wa._room_dashboard_row("Nursery", rooms, {}, now, ctx)
+    assert zonder["advice"] == "open"          # het oude gedrag
+    met = wa._room_dashboard_row("Nursery", rooms, {}, now, {**ctx, "heating_weather": True})
+    assert met["advice"] == "dicht" and met["open_now"] is False
+    assert met["open_reason"] is None and met["open_intervals"] == []
+    assert met["status_text"] == "Stookweer — dicht houden"

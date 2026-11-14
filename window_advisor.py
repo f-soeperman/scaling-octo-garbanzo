@@ -82,6 +82,11 @@ COMFORT_HIGH = 23.5   # °C — standaard-comfortgrens (fallback voor kamers bui
 OPEN_MARGIN  = 1.5    # °C — open als buiten ≥ deze marge kouder is dan binnen
 CLOSE_MARGIN = 0.5    # °C — sluit als buiten tot binnen ± deze marge stijgt
 WARM_DAY_MAX = 22.0   # °C — onder deze verwachte dag-max: geen koeladvies
+HEATING_DAY_MAX = 16.0  # °C — stookweer: komt de buitentemperatuur vandaag én de komende
+                      #       24u niet boven het laagste setpoint in huis (16°), dan verliest
+                      #       het huis de hele dag warmte en is "te warm" een gestookte kamer,
+                      #       geen kamer die gekoeld moet worden. Dan staat het koeladvies
+                      #       helemaal uit — óók als een kamer boven haar comfortband zit.
 LOOKAHEAD_H  = 12     # uur — vooruitblik voor "open weer rond HH:00"
 SMOOTH_WINDOW_H = 0.75  # uur — mediaanvenster op de buitentemp vóór decide() (anti-flapping)
 MIN_CLOSE_H  = 1.0    # uur — sluit een open raam niet voor een warmte-instroom die binnen
@@ -1105,6 +1110,52 @@ def decide(inside: float | None, outside: float | None, prev: str,
     return prev  # dode band (low < binnen ≤ high) of koelte tanken → huidig advies vasthouden
 
 
+# ── Seizoenspoort ──────────────────────────────────────────────────────────────────
+
+def heating_weather(dmax: float | None, upcoming_max: float | None) -> bool:
+    """Stookweer: de warmste buitentemperatuur van vandaag én van de komende 24u blijft
+    onder `HEATING_DAY_MAX`. Zonder forecast (beide None) geen uitspraak → False, zodat
+    het gedrag dan exact het oude is."""
+    known = [v for v in (dmax, upcoming_max) if v is not None]
+    return bool(known) and max(known) < HEATING_DAY_MAX
+
+
+def cooling_gate(dmax: float | None, upcoming_max: float | None,
+                 warm_room: bool) -> tuple[bool, str]:
+    """Is het koeladvies deze run onderdrukt, en waarom? Koeladvies is alleen zinvol op
+    warme dagen; een warme kamer mag de poort op een koele dag opheffen (voor- en najaar,
+    zon op het glas) — maar niet bij stookweer. Tot nov 2026 deed ze dat wél: een kamer
+    die boven haar comfortband gestóókt was hief de poort op, kreeg midden in de winter
+    "buiten is koeler · open laten de hele nacht door", en trok via de frisse-lucht-
+    tie-break de overige kamers mee."""
+    if heating_weather(dmax, upcoming_max):
+        return True, "stookweer — koeladvies uit"
+    if (dmax is None or dmax < WARM_DAY_MAX) and not warm_room:
+        return True, "koele dag — advies onderdrukt"
+    return False, "warme dag"
+
+
+def reset_for_heating(state: dict) -> bool:
+    """Zet bij stookweer het koel-geheugen terug naar "alles dicht": advies, meldgeheugen
+    en open-kandidaten. Zonder dit blijft een kamer die op de laatste warme dag "open"
+    gemeld kreeg maandenlang zo in de state staan, en opent het voorjaar met een "Sluit"
+    voor een raam dat al sinds de herfst dicht is. Geeft terug of er iets veranderde, zodat
+    de aanroeper alleen dan schrijft."""
+    changed = False
+    for room, adv in list((state.get("rooms") or {}).items()):
+        if adv != "dicht":
+            state["rooms"][room] = "dicht"
+            changed = True
+    for room, n in list((state.get("notified") or {}).items()):
+        if isinstance(n, dict) and n.get("state") == "open":
+            state["notified"][room] = {**n, "state": "dicht"}
+            changed = True
+    if state.get("open_since"):
+        state["open_since"] = {}
+        changed = True
+    return changed
+
+
 # ── State I/O (in dezelfde secret Gist) ────────────────────────────────────────────
 
 def load_state() -> dict:
@@ -1546,6 +1597,10 @@ def _room_dashboard_row(room: str, rooms_data: dict, prev_room_dash: dict,
                          bank_cooling=ctx["warm_ahead"], fresh_air_ok=fresh_air_ok)
     open_now = reason is not None
     predicted_open = intervals[0]["start"] if intervals else None
+    if ctx.get("heating_weather"):
+        # Stookweer: het koeladvies staat uit, dus het dashboard mag geen OPEN-chip of
+        # open-venster tonen dat de banner erboven tegenspreekt.
+        advice, reason, open_now, predicted_open, intervals = "dicht", None, False, None, []
 
     rh_veto = vent_rh is not None and vent_rh >= RH_HARD_CAP
     dryout = reason == "dryout"
@@ -1557,6 +1612,8 @@ def _room_dashboard_row(room: str, rooms_data: dict, prev_room_dash: dict,
 
     if inside is None:
         status_text = "Geen meting"
+    elif ctx.get("heating_weather"):
+        status_text = "Stookweer — dicht houden"
     elif reason == "bank":
         status_text = f"Nu open{tail} — koelte tanken"
     elif reason == "fresh_air":
@@ -1607,7 +1664,8 @@ def build_dashboard(now: datetime, rooms_data: dict, om: dict, outside: float | 
                     wu_solar: float | None = None,
                     bias: float | None = None, fc: list[dict] | None = None,
                     om_log: dict | None = None,
-                    om_learned: dict | None = None) -> dict:
+                    om_learned: dict | None = None,
+                    heating_weather: bool = False) -> dict:
     """Stel het publieke dashboard-artefact samen: stationsgeijkte forecast, per-kamer
     binnentrend + voorspelde open-momenten, en rollende historie voor de grafieken.
 
@@ -1687,6 +1745,7 @@ def build_dashboard(now: datetime, rooms_data: dict, om: dict, outside: float | 
 
     ctx = {
         "od": od, "prev_rooms": prev_rooms, "warm_ahead": warm_ahead, "gated": gated,
+        "heating_weather": heating_weather,
         "outside_rh": outside_rh, "outside_rh_temp": outside_rh_temp,
         "fc": fc, "hourly": om["hourly"],
     }
@@ -1699,6 +1758,7 @@ def build_dashboard(now: datetime, rooms_data: dict, om: dict, outside: float | 
         "source":         "window_advisor",
         "gated":          gated,
         "gate_reason":    gate_reason,
+        "heating_weather": heating_weather,   # additief (nov 2026): koeladvies uit bij stookweer
         "outside_now":    round(outside, 1) if outside is not None else None,
         "outside_smoothed": round(od, 1) if od is not None else None,
         "outside_source": outside_source,
@@ -1721,6 +1781,7 @@ def build_dashboard(now: datetime, rooms_data: dict, om: dict, outside: float | 
         "params": {
             "COMFORT_HIGH": COMFORT_HIGH, "OPEN_MARGIN": OPEN_MARGIN,
             "CLOSE_MARGIN": CLOSE_MARGIN, "WARM_DAY_MAX": WARM_DAY_MAX,
+            "HEATING_DAY_MAX": HEATING_DAY_MAX,
             "LOOKAHEAD_H": LOOKAHEAD_H,
             "RH_COMFORT": RH_COMFORT, "RH_HARD_CAP": RH_HARD_CAP, "RH_REF_T": RH_REF_T,
             "ROOM_COMFORT": {r: {"low": lo, "high": hi}
@@ -1837,8 +1898,8 @@ def main():
          and rooms_data[room]["inside"] > comfort_band(room)[1])
         for room in ROOMS
     )
-    gated = (dmax is None or dmax < WARM_DAY_MAX) and not warm_room
-    gate_reason = "koele dag — advies onderdrukt" if gated else "warme dag"
+    stookweer = heating_weather(dmax, upcoming_max)
+    gated, gate_reason = cooling_gate(dmax, upcoming_max, warm_room)
 
     # Dashboard altijd verversen (ook op onderdrukte dagen, zodat de historie en de
     # "vandaag dicht houden"-status zichtbaar blijven). Telegram blijft ongewijzigd.
@@ -1850,10 +1911,16 @@ def main():
         now, rooms_data, om, outside, outside_source, dmax, prev_rooms, gated, gate_reason,
         warm_ahead, outside_rh=outside_rh, outside_rh_temp=outside_rh_temp,
         outside_decide=outside_decide, wu_solar=wu_solar,
-        bias=bias, fc=fc, om_log=om_log, om_learned=om_learned)
+        bias=bias, fc=fc, om_log=om_log, om_learned=om_learned,
+        heating_weather=stookweer)
     write_dashboard(dash)
 
     if gated:
+        if stookweer:
+            print(f"[gate] Stookweer (max {dmax}°C) → koeladvies uit.")
+            if reset_for_heating(state):
+                save_state(state)
+            return
         print(f"[gate] Koele dag (max {dmax}°C) en geen warme kamer → geen advies.")
         # State niet wijzigen; ramen blijven op hun laatste advies staan.
         return
