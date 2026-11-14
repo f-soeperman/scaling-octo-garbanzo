@@ -67,3 +67,86 @@ def test_gh_token_fallback(monkeypatch):
     monkeypatch.setenv("ARTEFACT_GIST_ID", "abc123")
     monkeypatch.setenv("GH_TOKEN", "tok2")   # daily-check/mowing/gardena-naamgeving
     assert artefact_io.gist_active() is True
+
+
+# ── Zelf-uitvoerende migratie + maand-shards (security-scan nov 2026) ─────────
+
+class _FakeGist:
+    """In-memory artefact-gist: vervangt de drie transportfuncties van gist_io."""
+
+    def __init__(self, monkeypatch, files=None):
+        self.files = dict(files or {})
+        monkeypatch.setenv("ARTEFACT_GIST_ID", "abc123")
+        monkeypatch.setenv("GIST_TOKEN", "tok")
+        monkeypatch.setattr(artefact_io.gist_io, "read_file",
+                            lambda gid, name, token=None, timeout=20: self.files.get(name))
+        monkeypatch.setattr(artefact_io.gist_io, "read_files",
+                            lambda gid, token=None, timeout=20: dict(self.files))
+        monkeypatch.setattr(artefact_io.gist_io, "write_files",
+                            lambda gid, files, token=None, timeout=20: self.files.update(files))
+
+
+def test_state_migreert_van_gecommit_bestand_naar_de_gist(tmp_path, monkeypatch):
+    """Eerste gist-run: de gecommitte kopie is het startpunt (geen verloren
+    dag-geheugen → geen dubbel bericht), daarna is de gist de bron en is het
+    lokale bestand weg."""
+    gist = _FakeGist(monkeypatch)
+    local = tmp_path / "soil_state.json"
+    local.write_text('{"last_advice_date": "2026-01-02"}')
+    assert artefact_io.read_json_migrating("soil_state.json", str(local)) == {
+        "last_advice_date": "2026-01-02"}
+    artefact_io.write_json_str("soil_state.json", str(local), '{"last_advice_date": "2026-01-03"}')
+    assert artefact_io.retire_local(str(local)) is True
+    assert not local.exists()
+    assert json.loads(gist.files["soil_state.json"]) == {"last_advice_date": "2026-01-03"}
+    assert artefact_io.read_json_migrating("soil_state.json", str(local)) == {
+        "last_advice_date": "2026-01-03"}
+
+
+def test_retire_local_doet_niets_zonder_gist(tmp_path, monkeypatch):
+    _clear_env(monkeypatch)
+    local = tmp_path / "state.json"
+    local.write_text("{}")
+    assert artefact_io.retire_local(str(local)) is False
+    assert local.exists()
+
+
+def test_shards_lokaal_roundtrip(tmp_path, monkeypatch):
+    _clear_env(monkeypatch)
+    d = str(tmp_path / "hist")
+    assert artefact_io.load_shard("x", d, "2026-01") is None
+    artefact_io.save_shards("x", d, {"2026-01": {"month": "2026-01", "rows": [{"t": "a"}]}})
+    assert artefact_io.load_shard("x", d, "2026-01")["rows"] == [{"t": "a"}]
+    assert [s["month"] for s in artefact_io.load_all_shards("x", d)] == ["2026-01"]
+    assert artefact_io.migrate_shards("x", d, "rows", "t") == 0
+
+
+def test_shard_migratie_is_een_unie_waarin_de_gist_wint(tmp_path, monkeypatch):
+    d = tmp_path / "hist"
+    d.mkdir()
+    (d / "2026-01.json").write_text(json.dumps(
+        {"month": "2026-01", "rows": [{"t": "a", "v": 1}, {"t": "b", "v": 1}]}))
+    (d / "2026-02.json").write_text(json.dumps({"month": "2026-02", "rows": [{"t": "c", "v": 1}]}))
+    gist = _FakeGist(monkeypatch, {
+        "x_2026-01.json": json.dumps({"month": "2026-01", "rows": [{"t": "b", "v": 9}]}),
+        "anders.json": "{}"})
+    assert artefact_io.migrate_shards("x", str(d), "rows", "t") == 2
+    assert list(d.iterdir()) == []
+    jan = json.loads(gist.files["x_2026-01.json"])["rows"]
+    assert jan == [{"t": "a", "v": 1}, {"t": "b", "v": 9}]
+    assert [s["month"] for s in artefact_io.load_all_shards("x", str(d))] == ["2026-01", "2026-02"]
+    assert artefact_io.migrate_shards("x", str(d), "rows", "t") == 0   # idempotent
+
+
+def test_shard_migratie_laat_lokaal_staan_als_de_readback_niet_klopt(tmp_path, monkeypatch):
+    d = tmp_path / "hist"
+    d.mkdir()
+    (d / "2026-01.json").write_text(json.dumps({"month": "2026-01", "rows": [{"t": "a"}]}))
+    _FakeGist(monkeypatch)
+    # Een schrijf die stil niets opslaat: de read-back moet dat vangen.
+    monkeypatch.setattr(artefact_io.gist_io, "write_files",
+                        lambda gid, files, token=None, timeout=20: None)
+    import pytest
+    with pytest.raises(RuntimeError):
+        artefact_io.migrate_shards("x", str(d), "rows", "t")
+    assert (d / "2026-01.json").exists()

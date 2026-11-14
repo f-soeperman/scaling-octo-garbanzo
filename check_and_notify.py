@@ -87,18 +87,19 @@ def load_previous_theta() -> dict:
 
 def load_state() -> dict:
     """Meld-bookkeeping (spiegelt sandbox_state.json / mowing_state.json)."""
+    # Sinds nov 2026 in de privé artefact-gist (zelfde pad als mowing_state.json):
+    # `last_advice_priority` beweegt mee met het irrigatie-logboek, dus de
+    # dagelijkse commit was een zwakke afgeleide van een handmatige handeling.
+    # STATE_FILE blijft het lokale/test-pad en het startpunt van de migratie.
     defaults = {"last_advice_date": None, "last_advice_priority": None}
-    try:
-        with open(STATE_FILE) as f:
-            return {**defaults, **json.load(f)}
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return defaults
+    stored = artefact_io.read_json_migrating("soil_state.json", STATE_FILE, default=None)
+    return {**defaults, **stored} if isinstance(stored, dict) else defaults
 
 
 def save_state(state: dict) -> None:
     state["last_updated"] = utc_now_iso()
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f, indent=2, ensure_ascii=False)
+    body = json.dumps(state, indent=2, ensure_ascii=False)
+    artefact_io.write_state("soil_state.json", STATE_FILE, body)
     print("[state] opgeslagen.")
 
 

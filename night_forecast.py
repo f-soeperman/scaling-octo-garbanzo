@@ -62,14 +62,14 @@ een stabiele gestookte winternacht niet). Gaat naar de **groepschat**
 (`TELEGRAM_CHAT_GROUP_ID`), net als de weerbriefing — niet naar de privé-chat.
 """
 
-import json
 import os
 from datetime import datetime, timedelta
 
+import artefact_io
 import vent_forecast as vfc
 import vent_io as vio
 import vent_physics as vp
-from notify import run_guarded, send_telegram
+from notify import run_guarded, sanitize_error, send_telegram
 from shared_const import TZ, format_date_nl
 
 ROOM_ID = "nursery"                  # zone-id in house_model.json
@@ -91,6 +91,7 @@ NIGHT_INTEREST_C = 19.0          # daarbuiten: alleen bij een warme nacht
 # voorspelling precies één keer gevalideerd (9 held-out nachten, RMSE 0,86) en daarna
 # nooit meer — elke wijziging aan het ankerpad was "hopen" i.p.v. "meten".
 NIGHT_LOG_DIR = os.getenv("NIGHT_FC_LOG_DIR", "data/night_forecast_log")
+NIGHT_LOG_PREFIX = "night_forecast_log"
 
 # Standaard peuter-slaapzaktabel op het voorspelde nachtgemiddelde:
 # (ondergrens °C, tog, kleding) — eerste rij waarvan de grens gehaald wordt wint.
@@ -233,12 +234,13 @@ def append_night_log(now: datetime, stats: dict, series_dicht: list[tuple],
     privé openingen-log in een gecommit bestand. De verificatie (tools/night_verify.py)
     scoort toch onvoorwaardelijk tegen de ruwe metingen en leest het veld nergens."""
     month = now.strftime("%Y-%m")
-    path = os.path.join(NIGHT_LOG_DIR, f"{month}.json")
-    try:
-        with open(path, encoding="utf-8") as f:
-            shard = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        shard = {"schema": 1, "month": month, "forecasts": []}
+    # Sinds nov 2026 in de privé artefact-gist (`night_forecast_log_<YYYY-MM>.json`):
+    # elke rij is op de gemeten kinderkamertemperatuur geankerd, dus de reeks was een
+    # publieke dagelijkse binnentemperatuur. NIGHT_LOG_DIR is het lokale/test-pad en
+    # het startpunt van de zelf-uitvoerende migratie.
+    artefact_io.migrate_shards(NIGHT_LOG_PREFIX, NIGHT_LOG_DIR, "forecasts", "date")
+    shard = (artefact_io.load_shard(NIGHT_LOG_PREFIX, NIGHT_LOG_DIR, month)
+             or {"schema": 1, "month": month, "forecasts": []})
     rows = shard.setdefault("forecasts", [])
     today = now.date().isoformat()
     if any(r.get("date") == today for r in rows):
@@ -254,9 +256,7 @@ def append_night_log(now: datetime, stats: dict, series_dicht: list[tuple],
         "series_dicht": [[int(t.timestamp()), int(round(v * 10))]
                          for t, v in series_dicht if t >= now],
     })
-    os.makedirs(NIGHT_LOG_DIR, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(shard, f, ensure_ascii=False, separators=(",", ":"))
+    artefact_io.save_shards(NIGHT_LOG_PREFIX, NIGHT_LOG_DIR, {month: shard})
     return True
 
 
@@ -394,9 +394,15 @@ def main(now: datetime | None = None) -> None:
         print("[log] DRY_RUN=1 — voorspellingslog niet geschreven.")
     else:
         tog, _clothing = tog_advice(closed_stats["mean"])
-        wrote = append_night_log(now, stats, series_dicht, tog, sent)
-        print("[log] voorspelling vastgelegd." if wrote
-              else "[log] al een voorspelling voor vandaag — log ongemoeid.")
+        # Niet-fataal: het bericht is hierboven al verstuurd, en een rode run zou
+        # de in-job herkansing het nóg een keer laten sturen. Een gemiste logrij
+        # kost één verificatienacht; een dubbel avondbericht is erger.
+        try:
+            wrote = append_night_log(now, stats, series_dicht, tog, sent)
+            print("[log] voorspelling vastgelegd." if wrote
+                  else "[log] al een voorspelling voor vandaag — log ongemoeid.")
+        except Exception as e:  # noqa: BLE001
+            print(f"[log] vastleggen overgeslagen: {sanitize_error(e)}")
 
 
 if __name__ == "__main__":

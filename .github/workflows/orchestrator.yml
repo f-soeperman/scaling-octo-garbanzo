@@ -33,7 +33,8 @@ on:
         type: boolean
         default: false
 
-# De orchestrator dispatcht enkel andere workflows — geen app-secrets nodig.
+# De orchestrator dispatcht enkel andere workflows. Enige app-secret: het
+# Gist-token, read-only, voor het reminder-tijdstip van de zonwering.
 # actions:write mag workflow_dispatch triggeren (de gedocumenteerde uitzondering
 # op de "GITHUB_TOKEN-events starten geen runs"-anti-recursieregel) en impliceert
 # actions:read voor `gh run list`. contents:read voor de checkout is genoeg.
@@ -58,6 +59,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          # Alleen om shade_state.json (reminder-tijdstip) uit de privé
+          # artefact-gist te lezen — read-only, zie het zonwering-blok.
+          ARTEFACT_GIST_ID: ${{ secrets.ARTEFACT_GIST_ID }}
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
         run: |
           set -u
@@ -203,8 +208,20 @@ jobs:
             # alleen WANNEER — het script hervalideert alles zelf en is idempotent
             # (reminder_sent in de state), dus herhaalde dispatches tot de
             # state-commit landt zijn goedkope no-ops.
-            rem=$(gh api "repos/${GH_REPO}/contents/shade_state.json" --jq '.content' 2>/dev/null \
-                  | base64 -d 2>/dev/null \
+            # Sinds nov 2026 leeft de state in de privé artefact-gist (de
+            # dagelijkse commit was een afgeleide van de gemelde zonweringstanden).
+            # Zonder de gist-secrets: de oude gecommitte kopie (bootstrap).
+            if [ -n "${ARTEFACT_GIST_ID:-}" ] && [ -n "${GIST_TOKEN:-}" ]; then
+              shade_json=$(curl -sS --fail --max-time 20 \
+                    -H "Authorization: Bearer ${GIST_TOKEN}" \
+                    -H "Accept: application/vnd.github+json" \
+                    "https://api.github.com/gists/${ARTEFACT_GIST_ID}" 2>/dev/null \
+                  | jq -r '.files["shade_state.json"].content // empty' 2>/dev/null) || shade_json=""
+            else
+              shade_json=$(gh api "repos/${GH_REPO}/contents/shade_state.json" --jq '.content' 2>/dev/null \
+                  | base64 -d 2>/dev/null) || shade_json=""
+            fi
+            rem=$(printf '%s' "$shade_json" \
                   | jq -r --arg today "$(TZ=Europe/Amsterdam date +%F)" \
                       'select(.date == $today and .plan_sent == true and .reminder_sent != true)
                        | .reminder_at // empty' 2>/dev/null) || rem=""

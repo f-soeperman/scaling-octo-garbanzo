@@ -5,10 +5,18 @@ let charts = {};
 
 async function load() {
   let d;
+  $("verdict-banner").innerHTML = "";
+  // Privé sinds nov 2026: de scatter draagt de uurwaarden van het eigen station
+  // (temperatuur + pyranometer), en daarmee is het station herleidbaar via de
+  // openbare WU-historie. Zelfde token+artefact-gist-poort als window/vent.
+  if (!(CONFIG.githubToken && CONFIG.artefactGistId)) {
+    $("verdict-banner").innerHTML =
+      `<div class="banner banner-warn">🔒 Dit dashboard is privé — koppel je account (🔑 Account hierboven) ` +
+      `om de stations-ijking te zien.</div>`;
+    return;
+  }
   try {
-    const r = await fetch(`accuracy_data.json?t=${Date.now()}`);
-    if (!r.ok) throw new Error(r.status);
-    d = await r.json();
+    d = await artefactReadJSON("accuracy_data.json", "accuracy_data.json");
   } catch (e) {
     $("verdict-banner").innerHTML =
       `<div class="banner banner-error">Kon accuracy_data.json niet laden — draai eerst de workflow “Weerstation-nauwkeurigheid”. (${escA(e)})</div>`;

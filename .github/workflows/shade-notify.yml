@@ -99,6 +99,9 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GIST_ID: ${{ secrets.GIST_ID }}
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+          # shade_state.json leeft sinds nov 2026 in de privé artefact-gist;
+          # afwezig secret → het oude lokale pad.
+          ARTEFACT_GIST_ID: ${{ secrets.ARTEFACT_GIST_ID }}
           SHADE_MODE: ${{ inputs.mode || 'plan' }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
         # Eén herkansing na 10 min: een transiente Open-Meteo/Gist-hapering
@@ -115,7 +118,12 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add shade_state.json
+          # In gist-modus is er niets lokaals meer: de eerste run verwijdert de
+          # nog gecommitte kopie (zelf-uitvoerende migratie) en daarna is dit een
+          # no-op. Alleen een nog gevolgd bestand stagen (wijziging óf deletie).
+          if git ls-files --error-unmatch shade_state.json >/dev/null 2>&1; then
+            git add -A -- shade_state.json
+          fi
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else

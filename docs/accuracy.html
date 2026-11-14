@@ -9,7 +9,7 @@
   style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
   font-src https://fonts.gstatic.com;
   img-src 'self' data:;
-  connect-src 'self';
+  connect-src 'self' https://api.github.com https://gist.githubusercontent.com;
   frame-ancestors 'none';
   base-uri 'none';
   form-action 'none';
@@ -58,6 +58,7 @@
 
 <section style="padding:14px 40px 0;display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
   <button class="btn" id="refresh-btn">↻ Refresh</button>
+  <button class="btn btn-secondary" id="account-btn" title="Gist/token koppelen of wijzigen">🔑 Account</button>
   <span id="source-label" style="font-size:11px;color:var(--ink-soft);font-style:italic;"></span>
 </section>
 
@@ -147,6 +148,8 @@
   niet via een losse fit. Gegenereerd door <span class="num">station_accuracy.py</span>.
 </footer>
 
-<script src="js/accuracy.js?v=3"></script>
+<script src="js/theme.js?v=2"></script>
+<script src="js/shared.js?v=5"></script>
+<script src="js/accuracy.js?v=4"></script>
 </body>
 </html>

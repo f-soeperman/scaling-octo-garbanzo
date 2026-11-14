@@ -212,7 +212,7 @@ def main() -> None:
     # De tweeling volgt hetzelfde pad sinds de privatisering (aug 2026) — hij
     # publiceert de raamstanden zelf, niet alleen of het huis gepauzeerd is.
     learned = artefact_io.read_json("vent_learned.json", LEARNED_PATH, default=None)
-    acc = _load(ACCURACY_DATA_PATH)
+    acc = artefact_io.read_json_migrating("accuracy_data.json", ACCURACY_DATA_PATH, default=None)
 
     msg = build_message([
         garden_section(soil, today),

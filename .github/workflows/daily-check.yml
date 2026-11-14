@@ -129,7 +129,12 @@ jobs:
           # docs/data.json bestaat alleen nog in de bootstrap-terugval (zonder
           # ARTEFACT_GIST_ID); in gist-modus is er niets lokaals om te stagen en
           # zou een kale pathspec de stap laten falen.
-          git add soil_state.json
+          # soil_state.json leeft sinds nov 2026 in de artefact-gist; de eerste
+          # gist-run verwijdert de nog gecommitte kopie (zelf-uitvoerende
+          # migratie). Alleen een nog gevolgd bestand stagen (wijziging óf deletie).
+          if git ls-files --error-unmatch soil_state.json >/dev/null 2>&1; then
+            git add -A -- soil_state.json
+          fi
           [ ! -f docs/data.json ] || git add docs/data.json
           if git diff --staged --quiet; then
             echo "No changes to commit"

@@ -106,7 +106,12 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/night_forecast_log
+          # Het log leeft sinds nov 2026 in de privé artefact-gist; de eerste
+          # gist-run verwijdert de nog gecommitte maanden (zelf-uitvoerende
+          # migratie), daarna is deze stap een no-op.
+          if [ -n "$(git ls-files data/night_forecast_log)" ]; then
+            git add -A -- data/night_forecast_log
+          fi
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
