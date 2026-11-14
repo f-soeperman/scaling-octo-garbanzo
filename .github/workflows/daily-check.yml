@@ -68,8 +68,9 @@ jobs:
       contents: write
     # API-calls + commit duren normaal <5 min; zonder cap houdt een hangende
     # HTTP-call de runner 6 uur (GitHub-default) vast. De cap dekt ook de
-    # in-job herkansing (10 min slaap + tweede poging) bij een API-storing.
-    timeout-minutes: 35
+    # in-job herkansing (25 min slaap + tweede poging) bij een API-storing:
+    # 2 × ~3,5 min pogingen + 25 min slaap + setup/commit ≈ 33 min.
+    timeout-minutes: 45
     steps:
       # Op de branch-tip, niet op `github.sha` (= de stand bij het dispatchen).
       # Deze job leest zijn eigen gecommitte stand terug — `docs/data.json` voor
@@ -102,15 +103,22 @@ jobs:
           ARTEFACT_GIST_ID: ${{ secrets.ARTEFACT_GIST_ID }}
           DASHBOARD_URL: ${{ vars.DASHBOARD_URL }}
           FORCE_NOTIFY: ${{ github.event.inputs.force_notify }}
-        # Eén herkansing na 10 min: een transiente Open-Meteo-hapering op het
+        # Eén herkansing na 25 min: een transiente Open-Meteo-hapering op het
         # meldmoment kost dan geen advies. Blijft ook bij de uurlijkse cadans
         # staan — de volgende run is pas over een uur, en `fail_threshold=2`
         # telt in RUNNER_TEMP (per runner, dus per job): zonder de tweede
         # poging in dezelfde job zou een storing nooit meer alerten.
+        # Waarom 25 en niet 10 (nov 2026): Open-Meteo antwoordde rond het hele
+        # uur herhaaldelijk ~17 min lang niet (alle 2×5 pogingen read-timeout,
+        # ook de kleine call van de weerbriefing), terwijl de orchestrator-
+        # herhaling om :30 telkens slaagde. Met 10 min viel de herkansing nog
+        # ín dat venster en ging er een alert uit voor een storing die zichzelf
+        # al oploste. Een lopende run telt in de orchestrator als "gedaan"
+        # (`handled_since`), dus de langere slaap geeft geen dubbele dispatch.
         run: |
           python check_and_notify.py || {
-            echo "::warning::eerste poging mislukt — herkansing over 10 min"
-            sleep 600
+            echo "::warning::eerste poging mislukt — herkansing over 25 min"
+            sleep 1500
             python check_and_notify.py
           }
 
