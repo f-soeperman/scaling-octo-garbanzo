@@ -568,8 +568,10 @@ def main():
     baseline = None
     anomaly_state = dict(learned.get("anomaly") or {})
     if actual:
-        print(f"[leren] {sum(len(v) for v in actual.values())} samples over "
-              f"{len(actual)} kamers in het venster.")
+        # Vormvast: het aantal samples/kamers ná de AC-/stook-/pauzefilters is
+        # huisboekhouding (een gestookt of gepauzeerd huis telt lager) en hoort
+        # niet in het publieke kwartierlog.
+        print("[leren] kalibratievenster geladen.")
         # Anomalie-poort: hoe goed voorspellen de húidige parameters? Veel slechter dan
         # normaal → de openingen-log klopt vermoedelijk niet met de werkelijkheid.
         rmse_cur = rmse(_residuals(house, params, timeline, seed, ctx, actual,
@@ -735,7 +737,7 @@ def main():
             print(f"[shards] +{n_s} kamersamples, +{n_w} weer-uren, "
                   f"+{n_f} forecast-uren gelogd.")
     except Exception as e:  # noqa: BLE001 — shard-append mag de run nooit laten falen
-        print(f"[shards] append overgeslagen: {e}")
+        print(f"[shards] append overgeslagen: {sanitize_error(e)}")
     try:
         # Eenmalige zelf-uitvoerende migratie (shard-openings → Gist-archief, daarna
         # strippen; no-op zodra de shards schoon zijn), dan het lopende archief bijwerken.

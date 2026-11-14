@@ -683,16 +683,17 @@ def refine_outside_now(weather: dict) -> tuple[float | None, float | None]:
         out_rh_temp = wu_temp                 # rauwe WU-temp hoort bij de WU-RH (Magnus-paar)
         if wu_humid is not None:
             cur["relative_humidity_2m"] = wu_humid
-        print(f"[buiten] WU: {wu_temp}°C → gecorrigeerd {cur['temperature_2m']}°C "
-              f"(zon {solar_now} W/m², bron {src}); RH {wu_humid}%")
+        # Vormvast, zonder meetwaarden: een kwartierreeks van de eigen
+        # stationsmetingen in het publieke log maakt het (geheime) station
+        # herleidbaar door 'm naast de openbare WU-historie te leggen.
+        print(f"[buiten] WU-meting toegepast (zonbron {src}).")
         # WU-gemeten-zon herschaling van de glas-drive rond nu: k = WU_global/OM_global.
         om_solar_now = cur.get("shortwave_radiation")
         if (wu_solar is not None and om_solar_now and om_solar_now >= WU_SOLAR_MIN_WM2
                 and wu_solar >= WU_SOLAR_MIN_WM2):
             wu_solar_scale = min(WU_SOLAR_SCALE_MAX,
                                  max(WU_SOLAR_SCALE_MIN, wu_solar / om_solar_now))
-            print(f"[zon] WU/OM glas-drive-herschaling k={wu_solar_scale:.2f} "
-                  f"(WU {wu_solar}, OM {om_solar_now} W/m²)")
+            print("[zon] WU/OM glas-drive-herschaling toegepast.")
     else:
         cur["outside_source"] = "open-meteo"
         print("[buiten] WU niet beschikbaar → Open-Meteo buiten-nu.")

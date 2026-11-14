@@ -44,7 +44,7 @@ async function loadData() {
     state.data = await artefactReadJSON("vent_data.json", "vent_data.json");
   } catch (e) {
     document.getElementById("banner-slot").innerHTML =
-      `<div class="banner banner-error">Kon <code>vent_data.json</code> niet laden (${e.message}). ` +
+      `<div class="banner banner-error">Kon <code>vent_data.json</code> niet laden (${escHTML(e.message)}). ` +
       `Het model draait elk kwartier via GitHub Actions.</div>`;
     document.getElementById("source-label").textContent = "";
     document.getElementById("content").innerHTML = "";
@@ -80,7 +80,7 @@ async function loadData() {
     render();
   } catch (e) {
     document.getElementById("banner-slot").innerHTML =
-      `<div class="banner banner-warn">Deel van de pagina kon niet renderen: ${e.message}</div>`;
+      `<div class="banner banner-warn">Deel van de pagina kon niet renderen: ${escHTML(e.message)}</div>`;
   }
 }
 
@@ -428,8 +428,8 @@ async function openReport() {
       const cur = normState(stateOf(c), kind);
       state.pending[c.id] = cur;
       const sub = c.between ? c.between.join(" ↔ ") : (c.room||"");
-      html += `<div class="ctl-row"><div><div class="ctl-label">${c.label}</div><div class="ctl-sub">${sub}</div></div>
-        <div class="seg" data-id="${c.id}">${opts[kind].map(o =>
+      html += `<div class="ctl-row"><div><div class="ctl-label">${escHTML(c.label)}</div><div class="ctl-sub">${escHTML(sub)}</div></div>
+        <div class="seg" data-id="${escHTML(c.id)}">${opts[kind].map(o =>
           `<button data-v="${o}" class="${cur===o?'active':''}">${o}</button>`).join("")}</div></div>`;
     });
   });
@@ -542,7 +542,7 @@ function buildAcDropdown(live) {
   cur = (cur == null ? "" : ("" + cur).trim().toLowerCase());
   if (["geen", "none", "off", "uit", "-"].includes(cur)) cur = "";
   sel.innerHTML = `<option value="">geen</option>` +
-    rooms.map(r => `<option value="${r.id}">${r.label}</option>`).join("");
+    rooms.map(r => `<option value="${escHTML(r.id)}">${escHTML(r.label)}</option>`).join("");
   sel.value = cur;
   state.pending[AC_STATE_KEY] = sel.value;       // "" = geen airco
   sel.onchange = () => { state.pending[AC_STATE_KEY] = sel.value; };

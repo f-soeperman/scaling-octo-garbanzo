@@ -2,8 +2,10 @@
 // privé artefact lezen of naar de Gist schrijven (index, mowing, vent, window,
 // grafiek). Vóór het pagina-script laden.
 //
-// Het token staat alleen in déze browser (localStorage) en hoort een
-// fine-grained token te zijn dat tot de ene Gist is gescopet. De puur publieke
+// Het token staat alleen in déze browser (localStorage). LET OP: GitHub kent
+// géén per-gist-scoping — óók een fine-grained token met 'Gists: read & write'
+// kan bij álle gists van het account. Echte afbakening = een apart account dat
+// alleen de dashboard-gists bezit, plus een vervaldatum op het token. De puur publieke
 // pagina's (accuracy, model, camping) laden dit niet — die hebben geen
 // artefact-gist of token nodig.
 
@@ -29,18 +31,21 @@ function ensureGistConfig() {
     return false;
   }
   const token = prompt(
-    "Plak een GitHub fine-grained token met 'Gists: read & write' " +
-    "(scope dit token tot alleen deze gist).\n\n" +
-    "Let op: het token wordt in jouw browser opgeslagen — gebruik geen " +
-    "classic PAT met brede 'gist' scope, want die geeft toegang tot al je gists."
+    "Plak een GitHub fine-grained token met alléén 'Gists: read & write' " +
+    "en een vervaldatum.\n\n" +
+    "Let op: het token wordt in jouw browser opgeslagen en geeft toegang tot " +
+    "ál de gists van dat account (GitHub kan niet per gist afbakenen) — " +
+    "geef het dus geen andere rechten en bewaar geen andere geheimen in " +
+    "gists van hetzelfde account."
   );
   if (!token) return false;
   const cleanToken = token.trim();
   // github_pat_ = fine-grained, ghp_ = classic. Waarschuw bij classic.
   if (cleanToken.startsWith("ghp_")) {
     const ok = confirm(
-      "Dit lijkt een classic PAT (ghp_…). Die geeft toegang tot ÁL jouw gists, " +
-      "niet alleen deze. Liever een fine-grained token (github_pat_…) maken.\n\n" +
+      "Dit lijkt een classic PAT (ghp_…). Die heeft vaak méér rechten dan " +
+      "alleen gists en verloopt standaard niet. Liever een fine-grained token " +
+      "(github_pat_…) met alleen 'Gists' en een vervaldatum.\n\n" +
       "Toch doorgaan?"
     );
     if (!ok) return false;
@@ -94,15 +99,16 @@ function openAccountSettings() {
   }
   const tokenHint = CONFIG.githubToken ? " (leeg laten = ongewijzigd)" : "";
   const token = prompt(
-    "GitHub fine-grained token ('Gists: read & write', gescopet tot je gist(en))" +
+    "GitHub fine-grained token (alléén 'Gists: read & write', met vervaldatum)" +
     tokenHint + ":"
   );
   if (token === null) return;
   const cleanToken = token.trim();
   if (cleanToken.startsWith("ghp_")) {
     const ok = confirm(
-      "Dit lijkt een classic PAT (ghp_…). Die geeft toegang tot ÁL jouw gists, " +
-      "niet alleen deze. Liever een fine-grained token (github_pat_…) maken.\n\n" +
+      "Dit lijkt een classic PAT (ghp_…). Die heeft vaak méér rechten dan " +
+      "alleen gists en verloopt standaard niet. Liever een fine-grained token " +
+      "(github_pat_…) met alleen 'Gists' en een vervaldatum.\n\n" +
       "Toch doorgaan?"
     );
     if (!ok) return;

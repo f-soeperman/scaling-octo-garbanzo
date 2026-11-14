@@ -31,7 +31,7 @@ async function loadData() {
     render();
   } catch (e) {
     document.getElementById("banner-slot").innerHTML =
-      `<div class="banner banner-error"><strong>Kan data niet laden:</strong> ${e.message}. Heeft de GitHub Action al gedraaid?</div>`;
+      `<div class="banner banner-error"><strong>Kan data niet laden:</strong> ${escHTML(e.message)}. Heeft de GitHub Action al gedraaid?</div>`;
     document.getElementById("source-label").textContent = "";
   }
 }
@@ -384,7 +384,7 @@ function roomCardHTML(name, r) {
         <div style="padding-bottom:6px;font-family:'JetBrains Mono',monospace;font-size:12px;">${trendArrow(r.trend)}</div>
       </div>
       ${sparkSVG(r.history, comfortHigh, comfortLow, comfortHigh)}
-      <div class="status-line" style="color:${statusColor};">${r.status_text}</div>
+      <div class="status-line" style="color:${statusColor};">${escHTML(r.status_text)}</div>
       ${humidityChip(r, comfortHigh)}
       <div style="margin-top:14px;border-top:1px dashed #2a241b33;padding-top:10px;">
         <div class="stat-row"><span class="lbl">Luchtvochtigheid</span><span>${r.humidity == null ? "–" : r.humidity + "%"}${humidityNote(r.humidity)}${ventNote(r.humidity, r.vent_rh)}</span></div>

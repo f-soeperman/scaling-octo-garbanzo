@@ -1849,7 +1849,6 @@ def main():
         # wel dezelfde demping, en hij dekt de eerste runs na een lege checkout.
         # Laatste redmiddel: de instant-WU-waarde, dan Open-Meteo. Dit schoont meteen
         # de microklimaat-bias-blend, decide() en outside_history op.
-        raw = outside
         solar_recent = fetch_wu_recent_solar(now)
         solar_local  = smoothed_solar(prev_hist, now, wu_solar)
         if solar_recent is not None:
@@ -1861,8 +1860,10 @@ def main():
         else:
             solar_now, src = om.get("current_solar"), "om"
         outside = round(correct_temp(outside, solar_now), 1)
-        print(f"[buiten] WU: {raw}°C → gecorrigeerd {outside}°C "
-              f"(zon {solar_now} W/m², bron {src})")
+        # Vormvast, zonder meetwaarden: een kwartierreeks van de eigen
+        # stationsmetingen in het publieke log maakt het (geheime) station
+        # herleidbaar door 'm naast de openbare WU-historie te leggen.
+        print(f"[buiten] WU-meting toegepast (zonbron {src}).")
 
     # Anti-flapping: streek de actuele buitentemp glad met de mediaan over de laatste
     # SMOOTH_WINDOW_H aan metingen vóórdat we erop beslissen. Korte, hevige regenbuien
@@ -1874,7 +1875,7 @@ def main():
     # solar-mediaan).
     outside_decide = smoothed_outside(prev_hist, now, outside)
     if outside_decide is not None and outside is not None and abs(outside_decide - outside) >= 0.1:
-        print(f"[buiten] beslis-temp (mediaan {SMOOTH_WINDOW_H}u): {outside_decide:.1f}°C")
+        print(f"[buiten] beslis-temp gladgestreken (mediaan {SMOOTH_WINDOW_H}u).")
 
     # Open-Meteo-modelbias (zie om_bias.py): reken de forecasts af die we eerder
     # vastlegden en werk de geleerde nacht/dag-bias bij. Verificatie leunt op `prev_hist`

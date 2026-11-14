@@ -53,7 +53,7 @@ async function loadData() {
     render();
   } catch (e) {
     document.getElementById("banner-slot").innerHTML =
-      `<div class="banner banner-error"><strong>Kan data niet laden:</strong> ${e.message}. Heeft de GitHub Action al gedraaid?</div>`;
+      `<div class="banner banner-error"><strong>Kan data niet laden:</strong> ${escHTML(e.message)}. Heeft de GitHub Action al gedraaid?</div>`;
     document.getElementById("source-label").textContent = "";
   }
 }

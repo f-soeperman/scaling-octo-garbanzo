@@ -245,7 +245,15 @@ Twee gevolgen voor de workflow, allebei nodig zodra de cadans uurlijks is:
 - **CSS layout:** rules shared by the dashboard pages live in `docs/css/shared.css` (linked *before*
   the page `<style>` block, so page-specific deviations win at equal specificity). camping.html has
   its own posterthema and deliberately doesn't use it.
-- CDN scripts carry SRI `integrity` hashes (computed from the npm tarballs); bump version → recompute.
+- **Geen CDN-scripts meer (security-scan nov 2026):** Chart.js, de twee plugins en three.js staan
+  gevendord onder `docs/js/vendor/` (byte-identiek aan de npm-tarballs) en `script-src` is op elke
+  pagina exact `'self'`. De token-pagina's bewaren een Gist-token in localStorage; een hele CDN-host
+  toestaan maakte van elke HTML-injectie een scriptinjectie. De tags houden hun SRI `integrity`;
+  versie bijwerken → bestand vervangen + hash herberekenen (zie `docs/js/vendor/README.md`, test bewaakt).
+- **Niet-numerieke waarden in een `innerHTML`-template gaan door `escHTML()`** (theme.js; accuracy.js
+  heeft een lokale `escA`) — ook artefact-labels, foutteksten en Gist-waarden.
+- **Het Gist-token is account-breed:** GitHub kent geen per-gist-scoping, dus het browser-token kan bij
+  álle gists van het account. Bewaar daar geen andere geheimen; zie de prompttekst in shared.js.
 - Two zone columns side by side (gauge + recommendation + minutes advice)
 - "Ik heb water gegeven" modal: input in minutes → convert to mm → write to Gist via GitHub API. **Bewust géén workflow_dispatch meer** (aug 2026, geldt voor álle dashboards): een browser-getriggerde run is publiek zichtbaar in de Actions-lijst (actor + minuut) en dateert elke huiselijke interactie; de uurlijkse run pikt het logboek vanzelf op
 
@@ -1536,7 +1544,8 @@ Seven small cross-project Python modules (everything else is self-contained):
 - **Afwezigheid mag nergens publiek af te lezen zijn (aug 2026)** — de uitbreiding van de
   banner naar *gedrag*: geen pauze-/afwezigheidsmarkers of handmatige-actie-tijdstempels
   in publieke artefacten, gecommitte state of Actions-logs; scheduled stdout print nooit
-  berichtteksten, gemeten kamerwaarden of huisboekhouding (het `gardena_control`-patroon —
+  berichtteksten, gemeten kamerwaarden, **eigen stationsmetingen** (een kwartierreeks maakt het
+  geheime station herleidbaar via de openbare WU-historie) of huisboekhouding (het `gardena_control`-patroon —
   alleen een handmatige `DRY_RUN`-dispatch mag berichtinhoud tonen); de dashboards
   dispatchen géén workflows (een run-event dateert de interactie publiek); en élk
   code-pad dat door de stille modus (`notify_prefs.json`, zie notify.py) geraakt wordt

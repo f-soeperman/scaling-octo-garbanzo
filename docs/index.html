@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="Content-Security-Policy" content="
   default-src 'none';
-  script-src 'self' https://cdn.jsdelivr.net;
+  script-src 'self';
   style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
   font-src https://fonts.gstatic.com;
   img-src 'self' data:;
@@ -24,8 +24,8 @@
   pinnen zijn. Bij een versie-bump: nieuwe tarball → openssl dgst -sha384
   -binary | openssl base64 -A → integrity bijwerken (in alle dashboards).
 -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js" integrity="sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js" integrity="sha384-oNtu+d18330MVFpltUTve1DatxCkkctlpA2AC3GulbVFOSqhHdDat3qHse/Lbuek" crossorigin="anonymous"></script>
+<script src="js/vendor/chart.umd.js" integrity="sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG" crossorigin="anonymous"></script>
+<script src="js/vendor/chartjs-plugin-annotation.min.js" integrity="sha384-oNtu+d18330MVFpltUTve1DatxCkkctlpA2AC3GulbVFOSqhHdDat3qHse/Lbuek" crossorigin="anonymous"></script>
 <link rel="stylesheet" href="css/shared.css?v=2">
   <style>
     /* Palet komt uit css/shared.css (:root) — hier niet herdefiniëren. */
@@ -213,8 +213,8 @@
   <div><div class="rule-label" style="margin-bottom:6px;">Bronnen</div>Wunderground PWS voor regen en temperatuur. Open-Meteo voor zonnestraling en 7-daagse voorspelling. Irrigaties uit GitHub Gist.</div>
 </footer>
 
-<script src="js/theme.js"></script>
-<script src="js/shared.js?v=4"></script>
-<script src="js/index.js?v=3"></script>
+<script src="js/theme.js?v=2"></script>
+<script src="js/shared.js?v=5"></script>
+<script src="js/index.js?v=4"></script>
 </body>
 </html>

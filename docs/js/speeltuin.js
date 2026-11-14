@@ -732,7 +732,7 @@ function renderSandbox() {
     items.forEach(c => {
       const cur = states0[c.id];
       const sub = c.between ? c.between.join(" ↔ ") : (c.room || "");
-      html += `<div class="ctl-row"><div><div class="ctl-label">${c.label}</div><div class="ctl-sub">${sub}</div></div>
+      html += `<div class="ctl-row"><div><div class="ctl-label">${escHTML(c.label)}</div><div class="ctl-sub">${escHTML(sub)}</div></div>
         <div class="seg" data-id="${c.id}">${opts[kind].map(o =>
           `<button data-v="${o}" class="${cur===o?'active':''}">${o}</button>`).join("")}</div></div>`;
     });
@@ -988,7 +988,7 @@ function sandboxForecast() {
       .catch(e => {
         console.warn("vooruitblik mislukt:", e);
         const out = document.getElementById("sandbox-fc-out");
-        if (out) out.innerHTML = `<p class="ctl-sub">Vooruitblik kon niet rekenen (${e.message}).</p>`;
+        if (out) out.innerHTML = `<p class="ctl-sub">Vooruitblik kon niet rekenen (${escHTML(e.message)}).</p>`;
       });
   }, FC_DEBOUNCE_MS);
 }
