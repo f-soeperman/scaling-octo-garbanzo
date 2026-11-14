@@ -1,7 +1,7 @@
 // ===================== CONFIG =====================
 // COLORS-palet komt uit js/theme.js (geladen vóór dit script).
 const ROOM_COLORS = [COLORS.clay, COLORS.rain, COLORS.sun, COLORS.mossLight];
-const state = { data: null, chart: null, rhChart: null };
+const state = { data: null, vent: null, chart: null, rhChart: null };
 
 document.getElementById("folio-mark").textContent = `Terroir de Utrecht · Est. ${new Date().getFullYear()} · Ramen`;
 document.getElementById("today-date").textContent = new Date().toLocaleDateString("nl-NL", { weekday:"long", day:"numeric", month:"long", year:"numeric" });
@@ -24,6 +24,10 @@ async function loadData() {
   }
   try {
     state.data = await artefactReadJSON("window_data.json", "window_data.json");
+    // De tweeling levert de luchtverversing per kamer voor het schimmelpaneel. Puur
+    // aanvullend: ontbreekt het artefact, dan blijft die kolom leeg.
+    try { state.vent = await artefactReadJSON("vent_data.json", "vent_data.json"); }
+    catch (e) { state.vent = null; }
     render();
   } catch (e) {
     document.getElementById("banner-slot").innerHTML =
@@ -56,7 +60,9 @@ function render() {
   document.getElementById("content").innerHTML = `
     ${summaryHTML(d)}
     ${biasStripHTML(d)}
+    ${d.heating_weather ? mouldPanelHTML(d) : ""}
     <div class="grid grid-2">${ROOMS_ORDER(d).map(r => roomCardHTML(r, d.rooms[r])).join("")}</div>
+    ${d.heating_weather ? "" : mouldPanelHTML(d)}
     <div class="grid">
       <div class="specimen-card">
         <div class="corner-mark">Temperatuur buiten: weerstation vs. Open-Meteo · gemeten → geijkte voorspelling</div>
@@ -291,6 +297,69 @@ function sparkSVG(history, refTemp, bandLow = null, bandHigh = null) {
     <path d="${dpath}" fill="none" stroke="${COLORS.inkSoft}" stroke-width="1.5"/>
     <circle cx="${xs(pts.length-1).toFixed(1)}" cy="${ys(temps[temps.length-1]).toFixed(1)}" r="2.2" fill="${COLORS.clay}"/>
   </svg>`;
+}
+
+// ===================== SCHIMMELRISICO =====================
+// Schimmel groeit op de koudste plek van de kamer, niet in de lucht. Het paneel zet per
+// kamer de gemeten luchtvochtigheid naast de grens die bij het huidige weer nog veilig is
+// (`allowed_rh`, uit mould_risk.py). Status staat altijd in woorden, nooit alleen in kleur.
+const TWIN_ROOM = { "Living room": "living", "Nursery": "nursery", "bedroom": "bedroom",
+                    "office": "office", "Shower": "bath" };
+const MOULD_LEVEL = {
+  ok:     { txt: "✓ veilig",      color: "var(--moss)" },
+  let_op: { txt: "● krap",        color: "#8a6500" },
+  risico: { txt: "⚠ te vochtig",  color: "var(--dry)" },
+};
+function mouldRowHTML(name, r) {
+  const m = r && r.mould;
+  if (!m) return "";
+  const lv = MOULD_LEVEL[m.level] || MOULD_LEVEL.ok;
+  const twin = state.vent && state.vent.rooms && state.vent.rooms[TWIN_ROOM[name]];
+  const ach = twin && twin.ach != null ? `${twin.ach.toFixed(1)}×/u` : "–";
+  const wk = m.week || {};
+  const risk = wk.risk_h != null ? `${Math.round(wk.risk_h)} u` : "–";
+  const room = m.headroom >= 0 ? `${m.headroom}% marge` : `${-m.headroom}% erover`;
+  const airing = r.vent_rh != null && r.humidity != null && r.vent_rh < r.humidity - 2
+    ? `luchten → ${r.vent_rh}%` : "luchten helpt nu niet";
+  return `<tr>
+    <td style="text-align:left;">${name}</td>
+    <td style="color:${lv.color};font-weight:600;white-space:nowrap;">${lv.txt}</td>
+    <td>${r.humidity}%</td>
+    <td>${m.allowed_rh}%</td>
+    <td style="color:${lv.color};">${room}</td>
+    <td>${risk}</td>
+    <td>${ach}</td>
+    <td style="color:var(--ink-soft);white-space:nowrap;">${airing}</td>
+  </tr>`;
+}
+function mouldPanelHTML(d) {
+  const rows = ROOMS_ORDER(d).map(r => mouldRowHTML(r, d.rooms[r])).join("");
+  if (!rows) return "";
+  const out = d.outside_mean_24h != null ? `${d.outside_mean_24h.toFixed(1)}°` : "–";
+  return `
+    <div class="grid">
+      <div class="specimen-card" style="min-width:0;">
+        <div class="corner-mark">Schimmelrisico · koudste plek per kamer</div>
+        <div class="mould-scroll">
+          <table class="mould-table">
+            <thead><tr>
+              <th style="text-align:left;">Kamer</th><th>Oordeel</th><th>Vocht nu</th>
+              <th title="De luchtvochtigheid waarbij de koudste plek van de kamer op 80% komt.">Mag tot</th>
+              <th>Verschil</th>
+              <th title="Uren in de afgelopen 7 dagen dat de koudste plek boven 80% stond.">Te vochtig, 7 d</th>
+              <th title="Verse buitenlucht per uur volgens de ventilatie-tweeling.">Verse lucht</th>
+              <th>Effect van luchten</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <div class="status-line" style="color:var(--ink-soft);font-size:12px;margin-top:10px;">
+          Een kamer is veilig zolang "vocht nu" onder "mag tot" blijft. Die grens zakt
+          naarmate het buiten kouder is (gemiddeld ${out} over het laatste etmaal) en stijgt
+          als de kamer warmer wordt. De koude plek zelf is een aanname, geen meting.
+        </div>
+      </div>
+    </div>`;
 }
 
 function roomCardHTML(name, r) {

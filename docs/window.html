@@ -35,6 +35,11 @@
     .badge-cool { color: var(--rain); }
     .stat-row { display: flex; justify-content: space-between; align-items: baseline; padding: 5px 0; border-bottom: 1px dashed #2a241b22; font-family: "JetBrains Mono", monospace; font-size: 12px; }
     .stat-row .lbl { color: var(--ink-soft); }
+    .mould-scroll { overflow-x: auto; }
+    .mould-table td, .mould-table th { white-space: nowrap; }
+    .mould-table { width: 100%; border-collapse: collapse; font-family: "JetBrains Mono", monospace; font-size: 12px; margin-top: 10px; }
+    .mould-table th { font-weight: 500; color: var(--ink-soft); text-align: right; padding: 5px 8px; border-bottom: 1px solid #2a241b33; white-space: nowrap; }
+    .mould-table td { text-align: right; padding: 7px 8px; border-bottom: 1px dashed #2a241b22; font-variant-numeric: tabular-nums; }
     .status-line { font-size: 19px; font-style: italic; margin-top: 12px; }
     .chart-box { position: relative; height: 340px; margin-top: 10px; }
     /* vochtgrafiek: twee lijnen op één as — lager dan de temperatuurgrafiek volstaat */
@@ -116,6 +121,6 @@
 
 <script src="js/theme.js"></script>
 <script src="js/shared.js?v=4"></script>
-<script src="js/window.js?v=5"></script>
+<script src="js/window.js?v=6"></script>
 </body>
 </html>

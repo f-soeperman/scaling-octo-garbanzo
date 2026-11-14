@@ -447,6 +447,26 @@ The dashboard predicts, per room, *when* the window can be opened today (or "kee
 - **Humidity trend (scatter `dy`):** the rolling history additively records `hum` (indoor RH per room, measured outside RH in `outside_history`); `room_trend(history, now, key="hum", clamp=RH_TREND_MAX)` reuses the temp least-squares slope to give `hum_trend`/`outside_hum_trend` (%RH/h). Like `om`, older samples lack `hum`, so arrows are temp-only until history fills.
 - **`outside_history[].solar`** (additive): the raw WU pyranometer reading (pre-biascorrectie) at each sample, persisted purely so `smoothed_solar()` has a rolling window to average — see the Hourly-flow bullet above. Not otherwise surfaced on the dashboard; older samples lack it, same additive-gap pattern as `om`/`hum`.
 
+### Schimmelrisico-index (`mould_risk.py`, nov 2026) — uitlezing, stuurt niets aan
+Stap 1 van het winter-vochtspoor: eerst meten, dan pas melden. Schimmel groeit waar een
+*oppervlak* dagenlang boven ~80 % RH staat, niet waar de lucht vochtig is; de koudste plek
+van een kamer volgt uit de temperatuurfactor `Ts = Tin − (1 − f)·(Tin − Tbuiten)`, met voor
+`Tbuiten` het **etmaalgemiddelde** uit `outside_history` (een muur volgt de dag, niet het
+moment). Daaruit per kamer (alle `SENSOR_ROOMS`): `surface_rh`, de kamer-RH die bij dit
+weer nog veilig is (`allowed_rh` — zakt met de buitentemperatuur, dus een vaste "60 % is
+goed" is op een vriesdag te ruim), `headroom` en een oordeel (`ok` < 70 ≤ `let_op` < 80 ≤
+`risico`). Een rollend daglogboek (`mould.days`, 14 dagen, uren boven de grenzen; een gat
+tussen runs telt hooguit een halfuur) geeft de weeksom per kamer.
+- **`FRSI_DEFAULT` 0.65 is een aanname, geen meting** — de ondergrens voor nieuwbouw; een
+  oudere koudebrug zit lager. Bijstellen per kamer kan via `ROOM_FRSI`, maar alleen op een
+  waarneming (condens op een dag waarop de index "veilig" zei), niet op gevoel.
+- Paneel op `window.html` (bovenaan bij stookweer, anders onder de kamerkaarten): oordeel
+  in woorden, vocht nu vs. "mag tot", uren te vochtig over 7 dagen, de verse-lucht-ACH uit
+  `vent_data.json` (best-effort tweede artefact-read) en wat luchten nu zou opleveren
+  (`vent_rh`). Het advies (`decide()`), de berichten en de state blijven onaangeroerd —
+  bewaakt door `test_schimmelindex_stuurt_het_advies_niet_aan`.
+- Alles blijft in het privé artefact: een vocht-daglogboek per kamer is gedragsdata.
+
 #### window_data.json schema (additive only — never break existing fields; privé artefact sinds aug 2026)
 ```json
 {
@@ -455,6 +475,8 @@ The dashboard predicts, per room, *when* the window can be opened today (or "kee
   "outside_now": 26.5, "outside_smoothed": 26.2, "outside_source": "wu | open-meteo", "om_now": 25.0,
   "outside_humidity": 60,
   "outside_trend": -0.05, "outside_hum_trend": 1.2, "bias": 1.5, "day_max": 27.0, "warm_day": true, "warm_ahead": true,
+  "heating_weather": false, "outside_mean_24h": 6.2,
+  "mould": {"last_t": "ISO+01:00", "days": {"YYYY-MM-DD": {"bedroom": {"h": 24.0, "watch_h": 3.5, "risk_h": 0.0, "max": 76}}}},
   "om_bias": {"night": 1.5, "day": 0.5, "n_night": 109, "n_day": 181, "updated_at": "ISO+02:00",
               "window_d": 14, "pending": [{"t": "ISO", "fc": 27.5}], "errors": [{"t": "ISO", "e": 1.6}]},
   "params": {"COMFORT_HIGH": 23.5, "OPEN_MARGIN": 1.5, "CLOSE_MARGIN": 0.5, "WARM_DAY_MAX": 22.0, "LOOKAHEAD_H": 12,
@@ -471,6 +493,9 @@ The dashboard predicts, per room, *when* the window can be opened today (or "kee
     "open_now": false, "predicted_open": "20:00",
     "open_intervals": [{"start": "20:00", "end": "08:00", "start_h": 5.0, "end_h": 17.0}],
     "status_text": "Open rond 20:00",
+    "mould": {"surface_temp": 12.1, "surface_rh": 74, "allowed_rh": 62, "headroom": 4,
+              "level": "ok | let_op | risico", "frsi": 0.65,
+              "week": {"h": 160.0, "watch_h": 12.5, "risk_h": 0.0, "max": 76}},
     "history": [{"t": "ISO", "temp": 26.0, "hum": 48, "heat": 1}], "proj": [26.2]
   }}
 }

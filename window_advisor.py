@@ -41,6 +41,7 @@ from datetime import datetime, timedelta
 
 import artefact_io
 import gist_io
+import mould_risk
 import om_bias
 from http_util import get_json
 from notify import run_guarded, sanitize_error, send_telegram
@@ -1650,6 +1651,7 @@ def _room_dashboard_row(room: str, rooms_data: dict, prev_room_dash: dict,
         "predicted_open": predicted_open,
         "open_intervals": intervals,
         "status_text":    status_text,
+        "mould":          mould_risk.assess(room, inside, humidity, ctx.get("out_mean")),
         "history":        hist,
         "proj":           proj,
     }
@@ -1743,7 +1745,10 @@ def build_dashboard(now: datetime, rooms_data: dict, om: dict, outside: float | 
 
     warm_day = dmax is not None and dmax >= WARM_DAY_MAX
 
+    # Schimmelrisico (additief, nov 2026): puur een uitlezing, stuurt geen advies aan.
+    out_mean = mould_risk.outside_mean(out_hist, now, outside)
     ctx = {
+        "out_mean": out_mean,
         "od": od, "prev_rooms": prev_rooms, "warm_ahead": warm_ahead, "gated": gated,
         "heating_weather": heating_weather,
         "outside_rh": outside_rh, "outside_rh_temp": outside_rh_temp,
@@ -1751,6 +1756,11 @@ def build_dashboard(now: datetime, rooms_data: dict, om: dict, outside: float | 
     }
     rooms_out = {room: _room_dashboard_row(room, rooms_data, prev_room_dash, now, ctx)
                  for room in SENSOR_ROOMS}
+    mould_tally = mould_risk.update_tally(
+        prev.get("mould"), now, {r: row.get("mould") for r, row in rooms_out.items()})
+    for r, row in rooms_out.items():
+        if row.get("mould"):
+            row["mould"]["week"] = mould_risk.week_summary(mould_tally, now, r)
 
     return {
         "generated_at":   utc_now_iso(),
@@ -1775,6 +1785,8 @@ def build_dashboard(now: datetime, rooms_data: dict, om: dict, outside: float | 
                            "window_d": om_bias.LEARN_WINDOW_D,
                            "pending": (om_log or {}).get("pending", []),
                            "errors":  (om_log or {}).get("errors", [])},
+        "outside_mean_24h": round(out_mean, 1) if out_mean is not None else None,
+        "mould":          mould_tally,
         "day_max":        round(dmax, 1) if dmax is not None else None,
         "warm_day":       warm_day,
         "warm_ahead":     warm_ahead,
@@ -1782,6 +1794,8 @@ def build_dashboard(now: datetime, rooms_data: dict, om: dict, outside: float | 
             "COMFORT_HIGH": COMFORT_HIGH, "OPEN_MARGIN": OPEN_MARGIN,
             "CLOSE_MARGIN": CLOSE_MARGIN, "WARM_DAY_MAX": WARM_DAY_MAX,
             "HEATING_DAY_MAX": HEATING_DAY_MAX,
+            "SURFACE_RH_RISK": mould_risk.SURFACE_RH_RISK,
+            "SURFACE_RH_WATCH": mould_risk.SURFACE_RH_WATCH,
             "LOOKAHEAD_H": LOOKAHEAD_H,
             "RH_COMFORT": RH_COMFORT, "RH_HARD_CAP": RH_HARD_CAP, "RH_REF_T": RH_REF_T,
             "ROOM_COMFORT": {r: {"low": lo, "high": hi}

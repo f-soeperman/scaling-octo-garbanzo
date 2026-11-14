@@ -1259,3 +1259,17 @@ def test_dashboard_toont_bij_stookweer_geen_open_kamer():
     assert met["advice"] == "dicht" and met["open_now"] is False
     assert met["open_reason"] is None and met["open_intervals"] == []
     assert met["status_text"] == "Stookweer — dicht houden"
+
+
+def test_schimmelindex_stuurt_het_advies_niet_aan():
+    now = datetime(2026, 1, 10, 12, 0, tzinfo=wa.TZ)
+    rooms = {"bedroom": {"inside": 16.0, "humidity": 66}}
+    ctx = {"od": 2.0, "prev_rooms": {}, "warm_ahead": False, "gated": True,
+           "heating_weather": True, "outside_rh": 85, "outside_rh_temp": 2.0,
+           "fc": [], "hourly": []}
+    zonder = wa._room_dashboard_row("bedroom", rooms, {}, now, ctx)
+    met = wa._room_dashboard_row("bedroom", rooms, {}, now, {**ctx, "out_mean": 1.0})
+    assert zonder["mould"] is None
+    assert met["mould"]["level"] == "risico" and met["mould"]["headroom"] < 0
+    assert {k: v for k, v in met.items() if k != "mould"} == \
+           {k: v for k, v in zonder.items() if k != "mould"}
