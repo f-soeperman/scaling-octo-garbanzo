@@ -46,8 +46,9 @@ jobs:
     needs: guard
     if: needs.guard.outputs.handled != '1'
     runs-on: ubuntu-latest
-    # Cap dekt ook de in-job herkansing (10 min slaap + tweede poging).
-    timeout-minutes: 25
+    # Cap dekt ook de in-job herkansing (25 min slaap + tweede poging; per
+    # poging tot ~7 min voor weer + pollen, elk 5 pogingen met backoff).
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
 
@@ -70,12 +71,14 @@ jobs:
           # privacy-grens, zelfde status als TADO_ZONE_ALIASES (privacy-sweep
           # aug 2026). Afwezig → generieke dagdelen, briefing draait gewoon door.
           BRIEFING_BLOCKS: ${{ secrets.BRIEFING_BLOCKS }}
-        # Eén herkansing na 10 min: een transiente Open-Meteo-hapering kost dan
+        # Eén herkansing na 25 min: een transiente Open-Meteo-hapering kost dan
         # geen run. run_guarded telt mee in RUNNER_TEMP (zelfde job) en alert
-        # pas bij de 2e mislukking (fail_threshold=2).
+        # pas bij de 2e mislukking (fail_threshold=2). 25 en niet 10 min: zie
+        # daily-check.yml — Open-Meteo viel rond het hele uur ~17 min stil en
+        # een herkansing na 10 min landde nog in dat venster.
         run: |
           python weather_briefing.py || {
-            echo "::warning::eerste poging mislukt — herkansing over 10 min"
-            sleep 600
+            echo "::warning::eerste poging mislukt — herkansing over 25 min"
+            sleep 1500
             python weather_briefing.py
           }

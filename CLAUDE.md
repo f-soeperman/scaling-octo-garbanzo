@@ -1434,7 +1434,8 @@ Seven small cross-project Python modules (everything else is self-contained):
   `fail_threshold=6` so a transient hiccup doesn't page — only ~1.5h of consecutive failures does
   (counter in `RUNNER_TEMP`, reset on success, alert only on the first crossing; silent under `DRY_RUN=1`).
   The one-shot runners that call an API (soil check, zandbak, weerbriefing, grasmaai) pass
-  `fail_threshold=2`, paired with their workflow's one in-job retry after 10 min — a single API blip
+  `fail_threshold=2`, paired with their workflow's one in-job retry after 10 min (soil check + weerbriefing: 25 min, nov 2026 —
+  Open-Meteo viel rond het hele uur ~17 min stil, een herkansing na 10 min landde nog in dat venster) — a single API blip
   retries silently; only a persistent outage pages. (`verwarming` calls no API and keeps default 1.)
 - **`gist_io.py`** — shared **read-only** Gist helpers (`read_file` raises, `read_json` is
   graceful, `read_files` haalt alle bestanden in één call). Volgt bij de ~1 MB-truncation

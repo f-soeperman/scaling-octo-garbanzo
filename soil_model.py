@@ -604,13 +604,8 @@ def fetch_open_meteo(days_past: int = 30, days_forecast: int = 7) -> List[Dict]:
         "forecast_days": days_forecast,
         "timezone": "Europe/Amsterdam",
     }
-    # 60s i.p.v. de 20s-default: dit is de zwaarste Open-Meteo-call van de repo
-    # (37 dagen uurdata incl. bodemvocht-/bodemtemperatuurlagen). Bij drukte
-    # antwoordt Open-Meteo traag maar wél, en 20s liet dan alle tien pogingen
-    # (2 runs × 5) aflopen. Budget blijft binnen timeout-minutes 35 van
-    # daily-check.yml: 2 × (5×60s + 101s backoff) + 600s herkansing ≈ 23 min.
     j = get_json("https://api.open-meteo.com/v1/forecast", params,
-                 timeout=60, label="open-meteo")
+                 timeout=20, label="open-meteo")
     d = j["daily"]
     today = local_today().isoformat()
     # Voor "vandaag" gebruiken we alleen de regen die al daadwerkelijk is
