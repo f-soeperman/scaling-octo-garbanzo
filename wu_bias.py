@@ -28,17 +28,27 @@ GEKALIBREERD (periode 2026-05-02…05-31, n=718 gekoppelde uren):
   - WU-pyranometer : +0.421 °C/100 W/m², corr(bias) 0.652  → GEKOZEN driver
   - Open-Meteo grid: +0.365 °C/100 W/m², corr(bias) 0.617
 De co-located WU-driver vangt de bias het strakst (zoals verwacht), dus
-SOLAR_BIAS_SLOPE = 0.421/100 = 0.00421. Driver-veld in soil/window = WU-eigen
-instraling met Open-Meteo als fallback. Recalibreren: draai de workflow
-"Weerstation-nauwkeurigheid" en plak de geprinte `SOLAR_BIAS_SLOPE`.
+Dat gaf 0.00421, de waarde tot nov 2026.
+
+HERIJKT (nov 2026, 2026-04…10, n=4797 uren, referentie KNMI, eigen pyranometer):
+  - intercept + helling : +0.29 °C + 0.289 °C/100 W/m²   → GEKOZEN helling
+  - helling alleen      : 0.349 °C/100 W/m² (de helling slokt dan de offset op)
+De +0.29 °C die er ook zonder zon staat is het gedeelde microklimaat (buur-
+coherentietoets: GEDEELD) en wordt bewust níet gecorrigeerd. Alleen wat met de
+zon meeschaalt is de fout van de kap, en dat is de helling uit de fit mét
+intercept: per maand stabiel 0.24–0.31 °C/100 W/m². De oude 0.00421 kwam uit
+één meimaand tegen ERA5 en trok op een zonnige middag (800 W/m²) ruim 1 °C te
+veel af. SOLAR_BIAS_SLOPE = 0.0029. De vorm blijft een zuivere zon-term.
+Recalibreren: `python tools/bias_backtest.py --reference knmi --driver wu_solar`
+en de helling van "intercept + helling" overnemen.
 """
 
 from __future__ import annotations
 
 from typing import Optional
 
-# °C per W/m². WU-pyranometer-fit, zie kalibratie-noot hierboven.
-SOLAR_BIAS_SLOPE = 0.00421
+# °C per W/m². WU-pyranometer-fit tegen KNMI, zie kalibratie-noot hierboven.
+SOLAR_BIAS_SLOPE = 0.0029
 
 
 def correct_temp(temp_c: Optional[float],

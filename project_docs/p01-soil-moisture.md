@@ -77,7 +77,7 @@ Twee gevolgen voor de workflow, allebei nodig zodra de cadans uurlijks is:
 - Kc_max = 1.20 (sub-humide klimaat, u2 ≈ 2 m/s, FAO-56 Eq. 72)
 - Soil params: FC 0.20, WP 0.09 v/v — clay-amended sand (ophoogzand) calibration for Utrecht Oost
 - Zones: lawn (Zr 0.20m), shrubs (Zr 0.50m — gewogen sierbeplanting + 25% volwassen fruitbomen) — each with own Kcb curve
-- Irrigation rates: sprinkler 20mm/hr (lawn), drip 2mm/hr (shrubs)
+- Irrigation rates: sprinkler 20mm/hr (lawn) — **door de bewoner gemeten**; drip 2mm/hr (shrubs) — een aanname, nog niet gemeten
 - Wind: anemometers (Open-Meteo + WU PWS) zijn op 10m; FAO-56 Eq. 47 log-law correctie naar 2m wordt toegepast (u2 = u10 × ~0.748)
 - **WU stralingsbiascorrectie (`wu_bias.py`):** het WU-station heeft een radiatieve warm-bias die lineair met de instraling meeschaalt (gediagnosticeerd in Project 7). Op WU-gemeten, niet-forecast dagen wordt `Tmax` gecorrigeerd met `T − SOLAR_BIAS_SLOPE · max(0, instraling_W/m²)` vóór ET0; driver = de eigen WU-pyranometer (`solarRadiationHigh`, dagpiek — valt op Tmax-piek), met de Open-Meteo dagpiek als fallback. `Tmean` wordt gecorrigeerd met de Open-Meteo 24u-mean (laag-risico: enkel de koude `temp_factor`); `Tmin` (nacht) blijft ongemoeid. Rauwe `Tmax/Tmin/Tmean` blijven behouden; correcties zijn additief (`Tmax_corr`, `Tmean_corr`, `bias_corr`, `bias_solar_src`). Forecast/pre-WU/archief-dagen blijven ongecorrigeerd. `SOLAR_BIAS_SLOPE` wordt gekalibreerd door Project 7 (zie daar).
 - **State carry-over:** `theta_end` per zone wordt elke run weggeschreven in data.json. De volgende run leest dit als `seed_theta` zodat het 35-daagse warmup-venster niet elke run vanaf 30%-uitputting hoeft te starten — convergeert naar consistente initiële conditie.

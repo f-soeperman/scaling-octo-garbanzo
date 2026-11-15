@@ -70,8 +70,11 @@ motive. This is not negotiable.**
 
 **Before every commit and push, re-check the actual diff against this section** — do not rely
 on having kept it in mind while writing. When in doubt, don't write it: stop and ask.
-`tests/test_privacy.py` enforces much of this in CI; if it fails, fix the content and never
-loosen the test.
+`tests/test_privacy.py` enforces much of this, and CI only runs *after* the push — too late on
+a public repo. `.githooks/pre-push` therefore runs it (plus a branch-name check) before anything
+leaves the machine: enable it once per clone with `git config core.hooksPath .githooks` (Claude
+sessions do so via `.claude/settings.json`). Never push with `--no-verify`. If the test fails,
+fix the content and never loosen the test.
 
 **Accepted residual risks** (resident decisions — do not re-raise without new information):
 the base64 name denylist in `tests/test_privacy.py`; the house geometry and orientation in
