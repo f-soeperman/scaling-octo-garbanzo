@@ -197,7 +197,9 @@ them. Their schemas are **additive only** — never rename or remove a field.
   with both arms re-seeded (`tools/horizon_backtest.py`); otherwise you measure the parameter
   reset, not the physics.
 - Never report the twin's nowcast RMSE (~0.5 °C) as a forecast score. The forecast score is
-  `tools/horizon_backtest.py` (~0.70 °C at 12 h).
+  `tools/horizon_backtest.py`, tracked weekly in `docs/twin_eval.json`. The old ~0.70 °C
+  headline was a summer hindcast; on issued forecasts (aug–nov 2026) the twin scored
+  0.56–0.77 °C and beat persistence in only 5 of 10 weeks — quote the live trend, not 0.70.
 - `bath` is deliberately out of scope: no modelling or tuning time, do not report it as a
   regression. A room exception goes through the generic flags in `house_model.json`
   (`exclude_from_fit`, `hide_in_charts`, `exclude_from_shards`) or not at all.

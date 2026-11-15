@@ -374,7 +374,12 @@ def get_access_token() -> str:
             "token-keten verbroken — draai `tado_auth_bootstrap.py` opnieuw.",
             file=sys.stderr,
         )
-        sys.exit(1)
+        # Een exceptie, geen sys.exit: run_guarded laat SystemExit ongemoeid door,
+        # en de loop-workflow maakt van elke exit een ::warning::. Een verbroken
+        # keten bleef zo eindeloos stil. Nu alerteert run_guarded na
+        # fail_threshold opeenvolgende kwartieren één keer (privé-chat).
+        raise RuntimeError(f"tado token-refresh mislukt (HTTP {r.status_code}) — "
+                           "draai tado_auth_bootstrap.py opnieuw")
     tok = r.json()
 
     # Rotatie: bewaar de nieuwe refresh token onmiddellijk (de oude is herroepen).

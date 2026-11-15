@@ -286,6 +286,12 @@ hindcast-weer af); die fout is nog ongemeten, maar sinds aug 2026 **wordt de dat
 meten verzameld**: het forecast-log (`data/forecast_log`, elke 3 klokuren een snapshot van de
 échte Open-Meteo-voorspelling) + `horizon_backtest --weather forecast`, wekelijks gedraaid
 door twin-eval.yml. Na ~4–6 weken accumulatie levert dat het eerste live-foutgetal.
+**Stand nov 2026 (`docs/twin_eval.json`, 10 weken):** op de échte gelogde forecasts scoort de
+tweeling 0.56–0.77 °C tegen persistentie 0.58–0.77 en wint in 5 van de 10 weken — op de 12u-
+horizon is hij dus nog niet aantoonbaar beter dan "het blijft zoals het is". De hindcast-reeks
+zelf loopt sinds aug 0.81–1.08 (niet 0.70; de herfst is lastiger dan de zomerset). Bekend
+voorbehoud bij de backtest: hij ziet raammeldingen van ná de oorsprong en slaat de routines en
+de om_bias-correctie uit productie over, dus hij is optimistischer dan de live-situatie.
 
 ## Bewijsstatus eenzijdige ventilatie (§6.2-verplichting — afgerond aug 2026)
 De open meetverplichting uit `AIRFLOW2_ASSESSMENT.md` §6.2 is met `tools/vent_experiment.py`
@@ -401,7 +407,8 @@ Geen tado-auth, geen nieuwe secrets (WU-, privé-chat-Telegram- en Gist-secrets 
   parameter-reset i.p.v. de fysica. Zie AIRFLOW3_ASSESSMENT.md §2.
 - **Never re-report the twin's nowcast RMSE as a forecast score** — `vent_learned.json`'s ~0.5 °C
   is een nowcast over een venster dat elk kwartier op verse metingen wordt gezet. De
-  voorspelscore is `tools/horizon_backtest.py`, en die is ~0.70 °C op 12u.
+  voorspelscore is `tools/horizon_backtest.py` (wekelijks in `docs/twin_eval.json`; zie
+  "Gemeten" voor de live stand — de oude 0.70 °C was een zomer-hindcast).
 - **`bath` is bewust buiten scope — laat 'm met rust.** De badkamer wordt gewoon meegesimuleerd
   (ze is een zone in het druknetwerk) en staat op de plattegrond, op haar eigen kamerkaart en in
   de meldmodal, maar er gaat géén modelleer- of afsteltijd naar. Ze is raamloos met 0.62 °C
