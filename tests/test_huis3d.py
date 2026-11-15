@@ -3,7 +3,7 @@
 Ze toont de gemelde raamstanden en kamertemperaturen, dus ze moet dezelfde
 token-poort dragen als vent.html en mag — net als elk ander dashboard — niets
 schrijven. Bewaakt verder de CSP-/SRI-afspraken uit CLAUDE.md voor de enige
-pagina die three.js van de CDN laadt.
+pagina die three.js uit js/vendor laadt.
 """
 
 import os

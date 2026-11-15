@@ -223,7 +223,7 @@ def test_load_learned_leest_uit_de_artefact_gist(tmp_path, monkeypatch):
     monkeypatch.setenv("ARTEFACT_GIST_ID", "abc123")
     monkeypatch.setenv("GIST_TOKEN", "tok")
     monkeypatch.setattr(vio.artefact_io.gist_io, "read_json",
-                        lambda gid, fn, token=None, default=None, label=None:
+                        lambda gid, fn, token=None, default=None, label=None, **_k:
                             {"params": {"cp_shelter": 0.9}} if fn == "vent_learned.json" else default)
     assert vio.load_learned()["params"]["cp_shelter"] == 0.9
 

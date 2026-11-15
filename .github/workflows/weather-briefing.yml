@@ -30,7 +30,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          since=$(TZ=Europe/Amsterdam date -d "today 00:00" +%s)
+          # GitHub's scheduler vertraagt crons soms uren. Vóór het doelmoment
+          # (05:00) is een schedule-run altijd een verlate cron van gisteren —
+          # overslaan (zelfde klokpoort als night-forecast.yml).
+          nowm=$(( 10#$(TZ=Europe/Amsterdam date +%H) * 60 + 10#$(TZ=Europe/Amsterdam date +%M) ))
+          if [ "$nowm" -lt 300 ]; then
+            echo "handled=1" >> "$GITHUB_OUTPUT"
+            echo "Verlate fallback-cron (vóór 05:00 lokaal) — sla over."
+            exit 0
+          fi
+          # Venster vanaf het doelmoment (min een minuut klokspeling), niet vanaf
+          # middernacht: een verlate cron van gisteren die ná middernacht
+          # binnenkwam is hierboven overgeslagen, maar staat als "success" in het
+          # ledger en zou anders als "vandaag al gedaan" tellen.
+          since=$(( $(TZ=Europe/Amsterdam date -d "today 05:00" +%s) - 60 ))
           others=$(gh run list --workflow weather-briefing.yml -L 40 \
             --json databaseId,createdAt,conclusion \
             --jq "[.[] | select(.databaseId != ${{ github.run_id }}

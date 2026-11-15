@@ -130,7 +130,7 @@ async function loadData() {
     document.getElementById("source-label").textContent = `bijgewerkt ${hhmm(new Date())}`;
     renderAll();
   } catch (e) {
-    banner.innerHTML = `<div class="banner banner-error"><strong>Kan het logboek niet laden:</strong> ${e.message}</div>`;
+    banner.innerHTML = `<div class="banner banner-error"><strong>Kan het logboek niet laden:</strong> ${escHTML(e.message)}</div>`;
     document.getElementById("source-label").textContent = "";
   }
 }

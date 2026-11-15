@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Privacy-poort vóór de push. Deze repo is publiek: wat gepusht is, is niet meer
+# terug te halen, en CI draait pas daarna. Daarom hier, lokaal, vóór het weg is.
+#
+# Eenmalig per kloon aanzetten:  git config core.hooksPath .githooks
+# (Claude-sessies doen dat zelf via .claude/settings.json.)
+#
+# 1. Branchnaam: geen woord dat een huishoud-intentie of -periode noemt
+#    (CLAUDE.md §1). Een gepushte naam blijft in het publieke events-spoor.
+# 2. tests/test_privacy.py op de werkboom.
+set -u
+
+verboden='pauze|pause|stop|stil|weg|afwezig|vakantie|vacation|thuis|terug|resume|hervat'
+while read -r local_ref _local_sha remote_ref _remote_sha; do
+  for ref in "$local_ref" "$remote_ref"; do
+    name=${ref#refs/heads/}
+    if printf '%s\n' "$name" | tr '/_.' '---' | grep -Eiq "(^|-)(${verboden})(-|$)"; then
+      echo "pre-push: branchnaam '${name}' bevat een verboden woord (CLAUDE.md §1)." >&2
+      echo "          Hernoem met 'git branch -m' en push opnieuw." >&2
+      exit 1
+    fi
+  done
+done
+
+root=$(git rev-parse --show-toplevel) || exit 1
+cd "$root" || exit 1
+if ! python -c "import pytest" 2>/dev/null; then
+  echo "pre-push: pytest ontbreekt — 'pip install -r requirements.txt -r requirements-dev.txt'." >&2
+  echo "          De privacy-test moet vóór de push draaien; push geblokkeerd." >&2
+  exit 1
+fi
+if ! python -m pytest -q -x tests/test_privacy.py >/tmp/pre-push-privacy.log 2>&1; then
+  tail -n 30 /tmp/pre-push-privacy.log >&2
+  echo "pre-push: tests/test_privacy.py faalt — push geblokkeerd. Los de inhoud op, niet de test." >&2
+  exit 1
+fi
+echo "pre-push: privacy-test groen."

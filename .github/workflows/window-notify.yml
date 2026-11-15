@@ -22,7 +22,7 @@ on:
         default: false
 
 permissions:
-  contents: write
+  contents: read
 
 # Serialize runs: exactly one loop alive at a time. The advisor rotates the tado
 # refresh token on every run (tado revokes the previous one), so two overlapping
@@ -80,39 +80,13 @@ jobs:
           ARTEFACT_GIST_ID:       ${{ secrets.ARTEFACT_GIST_ID }}
           DRY_RUN:                ${{ inputs.dry_run && '1' || '' }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # One advice cycle: run the advisor, then commit/push the dashboard JSON
-          # if it changed. A transient failure (network, tado hiccup) must not kill
-          # the whole loop — log it and let the next hour retry.
+          # One advice cycle. Het artefact (window_data.json) gaat naar de privé
+          # artefact-gist, dus er valt hier niets te committen: de lokale terugval
+          # (zonder ARTEFACT_GIST_ID) staat in .gitignore en hoort nooit in de repo.
+          # A transient failure (network, tado hiccup) must not kill the whole
+          # loop — log it and let the next iteration retry.
           run_once () {
             python window_advisor.py || echo "::warning::window_advisor.py failed this iteration, continuing"
-            # docs/window_data.json bestaat alleen nog in de bootstrap-terugval
-            # (zonder ARTEFACT_GIST_ID) — normaal schrijft artefact_io naar de
-            # privé-gist en valt er hier niets te committen.
-            [ ! -f docs/window_data.json ] || git add docs/window_data.json
-            if git diff --staged --quiet; then
-              echo "No changes to commit"
-            else
-              git commit -m "data: window advisor refresh $(date -u +%Y-%m-%dT%H:%M) [skip ci]"
-              # Andere workflows kunnen in hetzelfde venster gepusht hebben — rebase eerst.
-              # window_data.json wordt elke run volledig opnieuw gegenereerd, dus een
-              # content-conflict op main is onvermijdelijk. Ruim een eventueel vastgelopen
-              # rebase van een vorige iteratie eerst op (anders blijft .git/rebase-merge
-              # staan en raakt de HEAD detached → alle latere pushes falen), en los het
-              # conflict op door altijd onze vers gegenereerde versie te houden
-              # (-X theirs houdt tijdens een rebase de commit die opnieuw wordt afgespeeld).
-              git rebase --abort 2>/dev/null || true
-              if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}"; then
-                git push || echo "::warning::push failed this iteration, continuing"
-              else
-                # Rebase kon niet schoon afronden — afbreken zodat we op een branch
-                # blijven (geen detached HEAD) en de volgende iteratie het opnieuw probeert.
-                git rebase --abort 2>/dev/null || true
-                echo "::warning::rebase failed this iteration, skipping push, continuing"
-              fi
-            fi
           }
 
           # Dry run = a single manual test, no hourly loop.

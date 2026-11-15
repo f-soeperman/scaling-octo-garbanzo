@@ -43,6 +43,7 @@ lines — is public the moment it is pushed.
 - **Absence must not be inferable from behaviour either:**
   - No pause/absence markers in public artefacts, committed state or Actions logs.
   - Scheduled-run stdout is form-fixed: it never prints message text, measured room values,
+    the own station's readings (a quarter-hour series can be matched against public WU history),
     decisions or household bookkeeping (the `gardena_control` pattern). Only a manual `DRY_RUN`
     dispatch may show message content.
   - Dashboards never dispatch workflows — a run event publicly dates the interaction.
@@ -69,14 +70,18 @@ motive. This is not negotiable.**
 
 **Before every commit and push, re-check the actual diff against this section** — do not rely
 on having kept it in mind while writing. When in doubt, don't write it: stop and ask.
-`tests/test_privacy.py` enforces much of this in CI; if it fails, fix the content and never
-loosen the test.
+`tests/test_privacy.py` enforces much of this, and CI only runs *after* the push — too late on
+a public repo. `.githooks/pre-push` therefore runs it (plus a branch-name check) before anything
+leaves the machine: enable it once per clone with `git config core.hooksPath .githooks` (Claude
+sessions do so via `.claude/settings.json`). Never push with `--no-verify`. If the test fails,
+fix the content and never loosen the test.
 
 **Accepted residual risks** (resident decisions — do not re-raise without new information):
 the base64 name denylist in `tests/test_privacy.py`; the house geometry and orientation in
 `house_model.json` + `speeltuin.js` (inherent to the sun/facade physics); the committed
-zandbak and heating state (weather- and date-driven automata); and everything committed
-before the fixes, which stays in public history unless the owner decides on a history squash.
+zandbak and heating state (weather- and date-driven automata); the station archive, night
+forecast log and soil/shade state months committed before their move to the artefact gist
+(nov 2026); and everything committed before the fixes, which stays in public history unless the owner decides on a history squash.
 
 Full rationale and incident history: `project_docs/privacy.md`.
 
@@ -129,6 +134,22 @@ later fallback cron plus a dedup guard job. P1, P5 and P16 run hourly so their d
 with the day; their *messages* do not scale with that — each script decides its one message
 slot per day (`shared_const.past_local_time` + a per-project day memory).
 
+**Dedup-anker = het doelmoment, niet middernacht (nov 2026).** GitHub fires fallback crons
+hours late at times. A late run that lands after midnight is skipped by its guard's clock gate,
+but still ends as a successful run in the ledger; with a midnight anchor it then counted as
+"already handled today" for both the orchestrator and that day's own fallback. That silently
+dropped the night forecast for days and the morning sandbox run after every late evening cron.
+Every daily dedup — `handled_since … "$(anchor HH:MM)"` in the orchestrator and `since=` in
+the guards — therefore counts from the job's own target time. A new daily job needs both: a
+clock gate in its guard and a target-time anchor on both sides. The orchestrator also
+dispatches its own successor at the end of a loop (the potty-loop pattern), so a dropped cron
+kick no longer leaves a hole in the clock. `tests/test_workflow_guards.py` replays the real
+scripts against a simulated ledger.
+
+**Committing workflows** retry `pull --rebase` + `push` up to three times, and never
+`git add` a gitignored path (that fails instead of doing nothing): the privatised artefacts are
+not staged anywhere.
+
 **Deliberate hand-offs — all read-only, everything else is independent:**
 
 - P5 reads P1's `data.json`. P16 reads it too and is the only *second writer* of
@@ -143,10 +164,10 @@ slot per day (`shared_const.past_local_time` + a per-project day memory).
 
 | Store | Contents |
 |---|---|
-| Private artefact gist (`ARTEFACT_GIST_ID`, via `artefact_io.py`) | `data.json`, `mowing_data.json`, `mowing_state.json`, `window_data.json`, `vent_data.json`, `vent_forecast.json`, `vent_learned.json`, `night_verify.json`, `huis3d_layout.json`, the gardena sensor-eval report |
+| Private artefact gist (`ARTEFACT_GIST_ID`, via `artefact_io.py`) | `data.json`, `mowing_data.json`, `mowing_state.json`, `window_data.json`, `vent_data.json`, `vent_forecast.json`, `vent_learned.json`, `night_verify.json`, `huis3d_layout.json`, the gardena sensor-eval report; since nov 2026 also `accuracy_data.json`, `station_history_<YYYY-MM>.json`, `night_forecast_log_<YYYY-MM>.json`, `soil_state.json`, `shade_state.json` (self-migrating: the first gist run deletes the committed copy) |
 | Private data gist (`GIST_ID`) | `irrigations.json`, `mowings.json`, `house_openings*.json`, `twin2_history_<YYYY-MM>.json`, `notify_prefs.json`, `gardena_*.json`, `potty_log.json`, `potty_state.json` |
 | Secret tado gist (`TADO_GIST_ID`) | `tado_token.json` (rotating refresh token), `window_state.json` |
-| Committed, public | `docs/camping_data.json`, `docs/accuracy_data.json`, `docs/twin_eval.json`, `docs/js/uncertainty.json`, `docs/js/surrogate.json`, `data/station_history/`, `data/forecast_log/`, `data/night_forecast_log/`, and the state files `sandbox_state.json`, `soil_state.json`, `shade_state.json`, `heating_experiment_state.json` |
+| Committed, public | `docs/camping_data.json`, `docs/twin_eval.json`, `docs/js/uncertainty.json`, `docs/js/surrogate.json`, `data/forecast_log/`, and the state files `sandbox_state.json`, `heating_experiment_state.json` |
 
 Without `ARTEFACT_GIST_ID`, `artefact_io` falls back to the old local path — that is the
 test/bootstrap path, and those local copies are gitignored. Dashboards read private artefacts
@@ -179,7 +200,9 @@ them. Their schemas are **additive only** — never rename or remove a field.
   with both arms re-seeded (`tools/horizon_backtest.py`); otherwise you measure the parameter
   reset, not the physics.
 - Never report the twin's nowcast RMSE (~0.5 °C) as a forecast score. The forecast score is
-  `tools/horizon_backtest.py` (~0.70 °C at 12 h).
+  `tools/horizon_backtest.py`, tracked weekly in `docs/twin_eval.json`. The old ~0.70 °C
+  headline was a summer hindcast; on issued forecasts (aug–nov 2026) the twin scored
+  0.56–0.77 °C and beat persistence in only 5 of 10 weeks — quote the live trend, not 0.70.
 - `bath` is deliberately out of scope: no modelling or tuning time, do not report it as a
   regression. A room exception goes through the generic flags in `house_model.json`
   (`exclude_from_fit`, `hide_in_charts`, `exclude_from_shards`) or not at all.
@@ -240,7 +263,9 @@ them. Their schemas are **additive only** — never rename or remove a field.
   on `vent.html` and `huis3d.html`.
 - CSP has no `unsafe-inline`: no inline `<script>`, no `onclick=`-style attributes. Wire
   events with `addEventListener` and `data-*` attributes.
-- CDN scripts carry SRI `integrity` hashes; a version bump means recomputing the hash.
+- No CDN scripts: libraries are vendored under `docs/js/vendor/` and `script-src` is exactly
+  `'self'`. Vendored tags keep their SRI hash (test-enforced). Non-numeric values in an
+  `innerHTML` template go through `escHTML()`.
 - Dashboards write only to the Gist and never dispatch a workflow (section 1).
 - `camping.html` (on purpose) and `docs/oppad/` are standalone: own theme, no `shared.css`
   or `theme.js`, no nav links to or from the other pages.

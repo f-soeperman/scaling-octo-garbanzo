@@ -104,6 +104,10 @@ _SECRET_PATTERNS = (
     # Gist-ID in API-URLs: GIST_ID/TADO_GIST_ID zijn secrets en een requests-
     # exceptie op een Gist-call bevat de volledige URL.
     (re.compile(r"(gists/)[0-9a-f]{16,}", re.IGNORECASE), r"\1***"),
+    # …en in de raw-URL die gist_io volgt voor een afgekapt (>~1 MB) bestand:
+    # gist.githubusercontent.com/<gebruiker>/<gist-id>/raw/… — gebruiker én id weg.
+    (re.compile(r"(gist\.githubusercontent\.com/)[^/\s\"']+/[0-9a-f]{16,}", re.IGNORECASE),
+     r"\1***"),
 )
 
 

@@ -16,7 +16,7 @@ const state = { data: null, selectedZone: "lawn", charts: {}, irrigations: {} };
 // =======================================================================
 document.getElementById("folio-mark").textContent = `Terroir de Utrecht · Est. ${new Date().getFullYear()} · Fol. I`;
 document.getElementById("today-date").textContent = new Date().toLocaleDateString("nl-NL", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-document.getElementById("water-date").value = new Date().toISOString().slice(0,10);
+document.getElementById("water-date").value = localIsoDate();
 
 document.getElementById("refresh-btn").addEventListener("click", loadData);
 document.getElementById("water-btn").addEventListener("click", openWaterModal);
@@ -59,7 +59,7 @@ async function loadData() {
       return loadData();
     }
     document.getElementById("banner-slot").innerHTML =
-      `<div class="banner banner-error"><strong>Kan data niet laden:</strong> ${e.message}. ` +
+      `<div class="banner banner-error"><strong>Kan data niet laden:</strong> ${escHTML(e.message)}. ` +
       `Dit dashboard is privé — koppel je Gist-gegevens (token + artefact-gist) om de data te zien.</div>`;
     document.getElementById("source-label").textContent = "";
   }
@@ -70,7 +70,7 @@ function render() {
   const generated = new Date(d.generated_at);
   const ageHours = (Date.now() - generated.getTime()) / 3600000;
   const banner = d.wu_days > 0
-    ? `<div class="banner banner-ok">✓ <strong>${d.wu_days} dagen</strong> van jouw Wunderground station + Open-Meteo solar. Data van ${generated.toLocaleString("nl-NL")} (${ageHours < 1 ? "net bijgewerkt" : Math.round(ageHours) + " uur geleden"}).</div>`
+    ? `<div class="banner banner-ok">✓ <strong>${escHTML(d.wu_days)} dagen</strong> van jouw Wunderground station + Open-Meteo solar. Data van ${generated.toLocaleString("nl-NL")} (${ageHours < 1 ? "net bijgewerkt" : Math.round(ageHours) + " uur geleden"}).</div>`
     : `<div class="banner banner-warn">Open-Meteo only. Data van ${generated.toLocaleString("nl-NL")}.</div>`;
   document.getElementById("banner-slot").innerHTML = banner;
   document.getElementById("source-label").textContent = "✓ " + d.source;
@@ -345,7 +345,7 @@ function buildMonthlyBalance(data) {
   const days = data.days || [];
   const cold = data.monthly_totals || {};
   const hasCold = Object.keys(cold).length > 0;
-  const currentYm = new Date().toISOString().slice(0, 7);
+  const currentYm = localIsoDate().slice(0, 7);
 
   // Warme data: bij koude opslag alleen huidige maand; anders alle maanden (fallback)
   const warm = {};
@@ -689,8 +689,8 @@ function updateWaterLog() {
   log.innerHTML = entries.map(date => {
     const m = meta[date];
     const parts = [];
-    if (m.minLawn > 0) parts.push(`Gras ${m.minLawn}min (${m.mmLawn}mm)`);
-    if (m.minShrubs > 0) parts.push(`Struiken ${m.minShrubs}min (${m.mmShrubs}mm)`);
+    if (m.minLawn > 0) parts.push(`Gras ${escHTML(m.minLawn)}min (${escHTML(m.mmLawn)}mm)`);
+    if (m.minShrubs > 0) parts.push(`Struiken ${escHTML(m.minShrubs)}min (${escHTML(m.mmShrubs)}mm)`);
     return `<div class="log-entry">
       <span>${date} · ${parts.join(' · ')}</span>
       <span class="rm" data-date="${date}">×</span>

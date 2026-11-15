@@ -27,16 +27,16 @@ JSON of logs geschreven.
 
 from __future__ import annotations
 
-import glob
 import json
 import math
 import os
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
 import requests
 
+import artefact_io
 import bias_eval
 import knmi_ref
 import neighbour_pws
@@ -190,17 +190,18 @@ def pair_hours(wu: Dict[str, dict], om: Dict[str, dict]) -> List[dict]:
 ARCHIVE_FIELDS = ("wu", "om", "knmi", "solar", "wu_solar", "cloud", "wind", "rh")
 
 
-def _shard_path(month: str) -> str:
-    return os.path.join(HISTORY_DIR, f"{month}.json")
+# Sinds nov 2026 leeft het archief als `station_history_<YYYY-MM>.json` in de
+# privé artefact-gist: de uurreeks van temperatuur + pyranometer maakt het
+# (geheime) station herleidbaar door 'm naast de openbare WU-historie van de
+# stations in de buurt te leggen. HISTORY_DIR is het lokale/test-pad en het
+# startpunt van de zelf-uitvoerende migratie (artefact_io.migrate_shards).
+HISTORY_PREFIX = "station_history"
 
 
 def load_shard(month: str) -> dict:
-    try:
-        with open(_shard_path(month), encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return {"schema": SHARD_SCHEMA, "month": month,
-                "reference": "open-meteo ERA5 archive", "rows": []}
+    return (artefact_io.load_shard(HISTORY_PREFIX, HISTORY_DIR, month)
+            or {"schema": SHARD_SCHEMA, "month": month,
+                "reference": "open-meteo ERA5 archive", "rows": []})
 
 
 def append_archive(rows: List[dict]) -> Tuple[int, int]:
@@ -211,29 +212,36 @@ def append_archive(rows: List[dict]) -> Tuple[int, int]:
     opgeslagen — die is `wu − om` en zou bij een herziening uit de pas kunnen gaan
     lopen met zijn eigen operanden. Geeft (nieuw, bijgewerkt) terug.
 
+    Bijwerken neemt alleen velden over die deze run ook écht heeft: een kolom die
+    nu ontbreekt (KNMI-service hapert → `knmi` None) mag de eerder gearchiveerde
+    waarde niet wissen — het overlappende venster wordt maar één keer opnieuw
+    bezocht, dus zo'n gat bleef voorgoed.
+
     VEILIGHEID: hier gaat alleen meetdata in, nooit WU_STATION_ID.
     """
     by_month: Dict[str, dict] = {}
+    indexes: Dict[str, dict] = {}
     fresh = updated = 0
     for r in rows:
         month = r["t"][:7]
         if month not in by_month:
             by_month[month] = load_shard(month)
-        shard = by_month[month]
-        index = {row["t"]: row for row in shard["rows"]}
+            indexes[month] = {row["t"]: row for row in by_month[month]["rows"]}
+        shard, index = by_month[month], indexes[month]
         row = {"t": r["t"], **{k: r.get(k) for k in ARCHIVE_FIELDS}}
-        if r["t"] in index:
-            if index[r["t"]] != row:
-                index[r["t"]].update(row)
-                updated += 1
-        else:
+        existing = index.get(r["t"])
+        if existing is None:
             shard["rows"].append(row)
+            index[r["t"]] = row
             fresh += 1
-    os.makedirs(HISTORY_DIR, exist_ok=True)
+            continue
+        known = {k: v for k, v in row.items() if v is not None}
+        if any(existing.get(k) != v for k, v in known.items()):
+            existing.update(known)
+            updated += 1
     for shard in by_month.values():
         shard["rows"].sort(key=lambda row: row["t"])
-        with open(_shard_path(shard["month"]), "w", encoding="utf-8") as f:
-            json.dump(shard, f, ensure_ascii=False, separators=(",", ":"))
+    artefact_io.save_shards(HISTORY_PREFIX, HISTORY_DIR, by_month)
     return fresh, updated
 
 
@@ -241,12 +249,7 @@ def load_archive() -> List[dict]:
     """Alle gearchiveerde uren over alle shards, op tijd gesorteerd, met `bias`
     en `hour` (lokaal) opnieuw afgeleid — de vorm die `analyse()` verwacht."""
     out: Dict[str, dict] = {}
-    for path in sorted(glob.glob(os.path.join(HISTORY_DIR, "*.json"))):
-        try:
-            with open(path, encoding="utf-8") as f:
-                shard = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            continue
+    for shard in artefact_io.load_all_shards(HISTORY_PREFIX, HISTORY_DIR):
         for row in shard.get("rows", []):
             if row.get("wu") is None or row.get("om") is None:
                 continue
@@ -360,7 +363,11 @@ def neighbour_coherence(api_key: str, start: str, end: str, days: int,
     code, uitleg = neighbour_pws.verdict(ours, others)
     print(f"[buur] {code.upper()}: {uitleg}")
     return {"verdict": code, "explanation": uitleg,
-            "window": {"start": start, "end": end, "days": window},
+            # Het venster dat de buren écht kregen (`window` dagen t/m `end`) — niet
+            # de start van de hoofdrun, die tot 40 dagen terug kan liggen.
+            "window": {"start": (date.fromisoformat(end)
+                                 - timedelta(days=window - 1)).isoformat(),
+                       "end": end, "days": window},
             "ours": {"label": "ons station", **ours}, "others": others,
             "spread_night": neighbour_pws.spread(others, "night_bias"),
             "spread_slope": neighbour_pws.spread(others, "slope_per_100")}
@@ -568,7 +575,11 @@ def build_report(stats: dict) -> str:
     if rec:
         L.append(f"   → aanbevolen driver: {rec['driver'].upper()}  "
                  f"({rec['slope_per_100']:+.3f} °C/100W/m²)")
-        L.append(f"   → zet  SOLAR_BIAS_SLOPE = {rec['slope_per_wm2']}  in wu_bias.py")
+        # Dit is de fit op alléén dit venster. Of de constante in wu_bias.py bijgesteld
+        # moet worden beslist het evaluatieprotocol hieronder (recalibration_signal,
+        # op het hele archief) — niet deze regel.
+        L.append(f"   → venster-fit: SOLAR_BIAS_SLOPE zou {rec['slope_per_wm2']} zijn "
+                 f"(zie het herijkingsoordeel hieronder)")
     L.append("═" * 56)
     return "\n".join(L)
 
@@ -703,13 +714,15 @@ def main() -> None:
         neighbours = None
         print(f"[buur] coherentietoets overgeslagen ({sanitize_error(e)})")
 
+    # Gecommitte maanden eerst naar de gist (no-op zodra de boom schoon is).
+    moved = artefact_io.migrate_shards(HISTORY_PREFIX, HISTORY_DIR, "rows", "t")
+    if moved:
+        print(f"[archief] {moved} maandbestand(en) naar de artefact-gist gemigreerd")
     fresh, updated = append_archive(rows)
-    print(f"[archief] {HISTORY_DIR}: {fresh} nieuwe uren, {updated} bijgewerkt "
-          f"({len(load_archive())} totaal)")
-
     # Herijkingssignaal: draait op het hele archief (niet alleen dit venster) en
     # meldt alleen als het protocol de herijking dráágt — zie recalibration_signal.
     archive = load_archive()
+    print(f"[archief] {fresh} nieuwe uren, {updated} bijgewerkt ({len(archive)} totaal)")
     signal = recalibration_signal(archive)
 
     stats = analyse(rows)
@@ -739,10 +752,12 @@ def main() -> None:
         "neighbours": neighbours,
         **stats,
     }
-    os.makedirs("docs", exist_ok=True)
-    with open(OUT_PATH, "w") as f:
-        json.dump(payload, f, indent=2, ensure_ascii=False)
-    print(f"[OUT] {OUT_PATH} geschreven ({len(rows)} paren)")
+    # Naar de privé artefact-gist (nov 2026): de `scatter` draagt dezelfde
+    # uurwaarden als het archief. Zonder het secret het oude lokale pad.
+    dest = artefact_io.write_json_str("accuracy_data.json", OUT_PATH,
+                                      json.dumps(payload, indent=2, ensure_ascii=False))
+    artefact_io.retire_local(OUT_PATH)
+    print(f"[OUT] {dest} geschreven ({len(rows)} paren)")
 
     if os.environ.get("DRY_RUN") == "1":
         return

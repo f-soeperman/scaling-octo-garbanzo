@@ -37,7 +37,7 @@ def main() -> None:
     args = ap.parse_args()
 
     end = local_today() - timedelta(days=7)          # ERA5 loopt ~5 dagen achter
-    start = end.replace(year=end.year - args.years)
+    start = end - timedelta(days=round(365.25 * args.years))   # geen .replace(year=): 29 feb
     print(f"[probe] ERA5-archief {start} t/m {end} ({args.years} jaar), "
           f"diepte {args.depth} ({DEPTH_FIELD[args.depth]})")
 
@@ -63,8 +63,9 @@ def main() -> None:
         mark = "  ← huidig" if r["window"] == SOIL_TEMP_WINDOW else ""
         med = "—" if r["median_abs_shift"] is None else f"{r['median_abs_shift']:.1f} d"
         gem = "—" if r["mean_abs_shift"] is None else f"{r['mean_abs_shift']:.1f}"
+        corr = "—" if f["corr"] is None else f"{f['corr']:.3f}"
         print(f"{r['window']:6d} d {f['rmse']:7.2f} {f['bias']:+7.2f} "
-              f"{f['corr']:6.3f} {d['n_disagree']:9d}/{d['n']:<4d} {med:>14s} {gem:>7s}{mark}")
+              f"{corr:>6s} {d['n_disagree']:9d}/{d['n']:<4d} {med:>14s} {gem:>7s}{mark}")
 
     huidig = next(r for r in results if r["window"] == SOIL_TEMP_WINDOW)
     print(f"\nSeizoensgrenzen bij het huidige venster van {SOIL_TEMP_WINDOW} dagen "
@@ -84,7 +85,7 @@ def main() -> None:
         return sum(1 for a, b in zip(richting, richting[1:]) if a * b < 0)
 
     beste = stp.best_window(results)
-    if beste:
+    if beste and huidig["median_abs_shift"] is not None:
         venster, shift = beste
         huidig_med = huidig["median_abs_shift"]
         print(f"\n[uitkomst] kleinste MEDIANE verschuiving: {venster} dagen ({shift:.1f} d) — "

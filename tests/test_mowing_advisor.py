@@ -5,6 +5,7 @@ effective_threshold, is_dormant, recommend_length, predict_ready_date.
 Asserties tegen de moduleconstanten, niet tegen hardcoded tuningwaarden.
 """
 
+import json
 from datetime import date, datetime, timedelta
 
 import pytest
@@ -372,3 +373,70 @@ def test_return_nudge_venster_verloopt_en_eist_maairijp():
     vers = {"quiet": False, "cleared_at": "2026-08-14T19:00:00.000Z"}
     assert ma.return_nudge_due(vers, False, "2026-08-13",
                                date(2026, 8, 15), _nu(15)) is False    # niet maairijp
+
+
+def test_drempel_telt_geen_door_het_venster_afgekapt_interval():
+    """Een interval dat vóór het datavenster begon telde alleen de dagen die er
+    nog in zaten — een echte groei van 12 kwam dan als 2 binnen en trok de
+    mediaan omlaag. Zo'n interval telt niet mee."""
+    alle = _dagen(70)
+    mowings = _mows_elke(12, ma.CALIBRATE_MIN_MOWS + 2, alle)   # dag 0,12,…,60
+    venster = alle[10:]            # het eerste interval (0→12) is afgekapt tot 2 dagen
+    geleerd, gekalibreerd = effective_threshold(mowings, venster, "soil")
+    assert gekalibreerd is True
+    assert geleerd == pytest.approx(12.0)
+    # …en met te weinig VOLLEDIGE intervallen wordt er niet geleerd.
+    krap = _mows_elke(12, ma.CALIBRATE_MIN_MOWS + 1, alle)
+    assert effective_threshold(krap, venster, "soil") == (ma.READY_GU, False)
+
+
+# ── main(): de publieke log is vormvast ────────────────────────────────────────
+
+def _run_main(monkeypatch, tmp_path, capsys, *, kind, mowings, state=None, slot=True):
+    tmp_path.mkdir()
+    for k in ("ARTEFACT_GIST_ID", "GIST_ID", "DRY_RUN"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(ma, "MOWING_DATA_PATH", str(tmp_path / "mowing_data.json"))
+    monkeypatch.setattr(ma, "STATE_FILE", str(tmp_path / "mowing_state.json"))
+    if state is not None:
+        (tmp_path / "mowing_state.json").write_text(json.dumps(state))
+    today = date(2026, 6, 20)
+    res = {"today": today, "days": [{}], "series": [], "today_idx": 0, "source": "soil",
+           "generated_at": "", "mowings": mowings, "last_mow": date(2026, 6, 1),
+           "assumed": False, "threshold": 11.0, "calibrated": False, "accum_today": 12.0,
+           "dormant": False, "ready": kind == "ready", "almost": False, "optimal": None,
+           "predicted": None, "length": {"length_mm": 40}, "kind": kind}
+    monkeypatch.setattr(ma, "run", lambda: res)
+    monkeypatch.setattr(ma, "build_message", lambda *a, **k: "bericht")
+    monkeypatch.setattr(ma, "advice_slot_open",
+                        lambda st, td: slot and st.get("last_advice_date") != td.isoformat())
+    monkeypatch.setattr(ma, "read_notify_prefs", lambda: {})
+    sent = []
+
+    def fake_send(text, **k):
+        print("[telegram] ✓ verzonden")
+        sent.append(text)
+        return True
+
+    monkeypatch.setattr(ma, "send_telegram", fake_send)
+    ma.main()
+    return capsys.readouterr().out.replace(str(tmp_path), "<tmp>"), sent
+
+
+def test_publieke_log_is_gelijk_bij_bericht_stilte_en_nieuwe_maaibeurt(
+        monkeypatch, tmp_path, capsys):
+    """De run is publiek en draait elk uur. Een zojuist gelogde maaibeurt
+    heropent het advies-slot en laat het artefact een regel groeien; een
+    verzonden por om de drie dagen leest als "maairijp en niet gemaaid". Geen
+    van die drie mag in de log te zien zijn."""
+    log = {"2026-06-01": {"length_mm": 40}}
+    gezien = {"last_seen_mow_date": "2026-06-01", "last_advice_date": "2026-06-20"}
+    stil, s1 = _run_main(monkeypatch, tmp_path / "a", capsys, kind="none",
+                         mowings=log, state=gezien)
+    luid, s2 = _run_main(monkeypatch, tmp_path / "b", capsys, kind="ready",
+                         mowings=log, state={"last_seen_mow_date": "2026-06-01"})
+    nieuw, s3 = _run_main(monkeypatch, tmp_path / "c", capsys, kind="none",
+                          mowings={**log, "2026-06-19": {"length_mm": 40}}, state=gezien)
+    assert s1 == [] and s2 == ["bericht"] and s3 == []
+    assert stil == luid == nieuw
+    assert "verzonden" not in luid and "bytes" not in luid

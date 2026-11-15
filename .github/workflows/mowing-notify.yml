@@ -56,8 +56,10 @@ jobs:
     needs: guard
     if: needs.guard.outputs.handled != '1'
     runs-on: ubuntu-latest
+    # Commit niets meer: mowing_data.json én mowing_state.json leven in de privé
+    # artefact-gist (de lokale terugval staat in .gitignore).
     permissions:
-      contents: write
+      contents: read
     # Cap dekt ook de in-job herkansing (10 min slaap + tweede poging).
     timeout-minutes: 30
     steps:
@@ -97,35 +99,3 @@ jobs:
             sleep 600
             python mowing_advisor.py
           }
-
-      - name: Commit updated data
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          # docs/mowing_data.json én mowing_state.json bestaan alleen nog in de
-          # bootstrap-terugval (zonder ARTEFACT_GIST_ID) — zie daily-check.yml.
-          # De state ging mee naar de privé-gist omdat `last_seen_mow_date` een
-          # handmatige actie dateerde (privacy-sweep aug 2026).
-          [ ! -f mowing_state.json ] || git add mowing_state.json
-          [ ! -f docs/mowing_data.json ] || git add docs/mowing_data.json
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "data: mowing advisor refresh $(date -u +%Y-%m-%dT%H:%M) [skip ci]"
-            # De uurlijkse soil-run en de window/vent-loops committen de hele
-            # dag door naar main — rebase vóór push. De artefacten worden elke
-            # run volledig opnieuw gegenereerd, dus bij conflict wint onze
-            # verse versie (-X theirs). Falen blijft hard en zichtbaar
-            # (exit 1), niet stil via `|| true`: een rode run houdt
-            # `handled_since` in de orchestrator op "niet gedaan", zodat de
-            # volgende tick het opnieuw probeert — en het meldslot in
-            # mowing_state.json niet uiteenloopt met wat er verstuurd is.
-            git rebase --abort 2>/dev/null || true
-            if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}"; then
-              git push
-            else
-              git rebase --abort 2>/dev/null || true
-              echo "::error::rebase failed, mowing data not pushed"
-              exit 1
-            fi
-          fi

@@ -62,18 +62,26 @@ def fetch_data(out_path: str) -> bool:
     return True
 
 
+_GIST_CACHE: dict = {}
+
+
 def _gist_files(label: str):
-    """Alle bestanden uit de GIST_ID-gist, of None zonder creds/bij een fout."""
+    """Alle bestanden uit de GIST_ID-gist, of None zonder creds/bij een fout.
+    Eén download per run: beide afnemers (sensor-shards, twin2-weer) lezen
+    dezelfde gist."""
     gist_id = os.getenv("GIST_ID")
     token = os.getenv("GIST_TOKEN") or os.getenv("GH_TOKEN")
     if not (gist_id and token):
         print(f"[fetch] geen GIST_ID/GIST_TOKEN — {label} overgeslagen.")
         return None
-    try:
-        return gist_io.read_files(gist_id, token=token)
-    except Exception as e:
-        print(f"[fetch] {label} lezen mislukt: {sanitize_error(e)}")
-        return None
+    key = (gist_id, token)
+    if key not in _GIST_CACHE:
+        try:
+            _GIST_CACHE[key] = gist_io.read_files(gist_id, token=token)
+        except Exception as e:
+            print(f"[fetch] {label} lezen mislukt: {sanitize_error(e)}")
+            return None
+    return _GIST_CACHE[key]
 
 
 def fetch_sensor_shards(out_dir: str) -> int:

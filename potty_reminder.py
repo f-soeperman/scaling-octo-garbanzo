@@ -260,7 +260,9 @@ def run(now: datetime | None = None) -> None:
     dry = os.getenv("DRY_RUN") == "1"
     now = now or datetime.now(TZ)
     if gist_id:
-        files = gist_io.read_files(gist_id, token=token)
+        # Alleen de twee eigen bestanden: de Gist draagt ook de grote maand-shards,
+        # en zonder filter volgt de reader elke 5 minuten al hun raw-URL's.
+        files = gist_io.read_files(gist_id, token=token, names=(LOG_FILE, STATE_FILE))
         events = parse_events(_loads(files.get(LOG_FILE)))
         state = _loads(files.get(STATE_FILE))
         if not dry:
@@ -281,7 +283,7 @@ def _act(gist_id, token, state, decision, text, now) -> None:
     (een FATAL alleen op send-iteraties is zelf een publiek signaal)."""
     try:
         new_state = record_reminder(state, decision, now)
-        gist_io.write_files(gist_id, {STATE_FILE: _dump(new_state)}, token=token)
+        _quiet_write(gist_id, {STATE_FILE: _dump(new_state)}, token=token)
     except Exception as e:
         _quiet_send(f"⚠ <b>Potje-herinnering</b>: state niet opgeslagen, "
                     f"herinnering overgeslagen.\n<code>{html.escape(sanitize_error(e))}</code>",
@@ -294,7 +296,7 @@ def _act(gist_id, token, state, decision, text, now) -> None:
     if type(mid) is int:   # bool is ook een int: alleen een échte message_id
         # Mislukt dit, dan krijgt alleen dit bericht later geen vinkje.
         with contextlib.suppress(Exception):
-            gist_io.write_files(gist_id, {STATE_FILE: _dump(attach_message(new_state, mid, text))},
+            _quiet_write(gist_id, {STATE_FILE: _dump(attach_message(new_state, mid, text))},
                                 token=token)
 
 
@@ -318,10 +320,20 @@ def _ack(gist_id, token, events, state, now) -> dict:
         if not done:
             return state
         new_state = mark_acked(state, done)
-        gist_io.write_files(gist_id, {STATE_FILE: _dump(new_state)}, token=token)
+        _quiet_write(gist_id, {STATE_FILE: _dump(new_state)}, token=token)
         return new_state
     except Exception:
         return state
+
+
+def _quiet_write(gist_id, files: dict, token) -> None:
+    """Gist-PATCH zonder stdout. `gist_io.write_files` logt een 409-herkansing, en
+    hier wordt alléén geschreven als er een herinnering uitgaat of een registratie
+    wordt afgevinkt — die regel zou dat moment in het publieke log dateren. De drie
+    schrijfacties van één iteratie volgen elkaar bovendien snel op, dus een 409 is
+    hier juist te verwachten."""
+    with contextlib.redirect_stdout(io.StringIO()):
+        gist_io.write_files(gist_id, files, token=token)
 
 
 def _dump(state: dict) -> str:

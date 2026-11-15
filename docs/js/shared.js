@@ -2,8 +2,10 @@
 // privé artefact lezen of naar de Gist schrijven (index, mowing, vent, window,
 // grafiek). Vóór het pagina-script laden.
 //
-// Het token staat alleen in déze browser (localStorage) en hoort een
-// fine-grained token te zijn dat tot de ene Gist is gescopet. De puur publieke
+// Het token staat alleen in déze browser (localStorage). LET OP: GitHub kent
+// géén per-gist-scoping — óók een fine-grained token met 'Gists: read & write'
+// kan bij álle gists van het account. Echte afbakening = een apart account dat
+// alleen de dashboard-gists bezit, plus een vervaldatum op het token. De puur publieke
 // pagina's (accuracy, model, camping) laden dit niet — die hebben geen
 // artefact-gist of token nodig.
 
@@ -29,18 +31,21 @@ function ensureGistConfig() {
     return false;
   }
   const token = prompt(
-    "Plak een GitHub fine-grained token met 'Gists: read & write' " +
-    "(scope dit token tot alleen deze gist).\n\n" +
-    "Let op: het token wordt in jouw browser opgeslagen — gebruik geen " +
-    "classic PAT met brede 'gist' scope, want die geeft toegang tot al je gists."
+    "Plak een GitHub fine-grained token met alléén 'Gists: read & write' " +
+    "en een vervaldatum.\n\n" +
+    "Let op: het token wordt in jouw browser opgeslagen en geeft toegang tot " +
+    "ál de gists van dat account (GitHub kan niet per gist afbakenen) — " +
+    "geef het dus geen andere rechten en bewaar geen andere geheimen in " +
+    "gists van hetzelfde account."
   );
   if (!token) return false;
   const cleanToken = token.trim();
   // github_pat_ = fine-grained, ghp_ = classic. Waarschuw bij classic.
   if (cleanToken.startsWith("ghp_")) {
     const ok = confirm(
-      "Dit lijkt een classic PAT (ghp_…). Die geeft toegang tot ÁL jouw gists, " +
-      "niet alleen deze. Liever een fine-grained token (github_pat_…) maken.\n\n" +
+      "Dit lijkt een classic PAT (ghp_…). Die heeft vaak méér rechten dan " +
+      "alleen gists en verloopt standaard niet. Liever een fine-grained token " +
+      "(github_pat_…) met alleen 'Gists' en een vervaldatum.\n\n" +
       "Toch doorgaan?"
     );
     if (!ok) return false;
@@ -94,15 +99,16 @@ function openAccountSettings() {
   }
   const tokenHint = CONFIG.githubToken ? " (leeg laten = ongewijzigd)" : "";
   const token = prompt(
-    "GitHub fine-grained token ('Gists: read & write', gescopet tot je gist(en))" +
+    "GitHub fine-grained token (alléén 'Gists: read & write', met vervaldatum)" +
     tokenHint + ":"
   );
   if (token === null) return;
   const cleanToken = token.trim();
   if (cleanToken.startsWith("ghp_")) {
     const ok = confirm(
-      "Dit lijkt een classic PAT (ghp_…). Die geeft toegang tot ÁL jouw gists, " +
-      "niet alleen deze. Liever een fine-grained token (github_pat_…) maken.\n\n" +
+      "Dit lijkt een classic PAT (ghp_…). Die heeft vaak méér rechten dan " +
+      "alleen gists en verloopt standaard niet. Liever een fine-grained token " +
+      "(github_pat_…) met alleen 'Gists' en een vervaldatum.\n\n" +
       "Toch doorgaan?"
     );
     if (!ok) return;
@@ -163,16 +169,30 @@ function ensureArtefactConfig() {
   return true;
 }
 
+// Lokale kalenderdatum (YYYY-MM-DD). `toISOString()` geeft de UTC-datum: tussen
+// middernacht en 01:00/02:00 lokaal is dat nog gisteren (en op de 1e de vorige maand).
+function localIsoDate(d = new Date()) {
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 async function artefactReadJSON(filename, fallbackUrl) {
   if (CONFIG.artefactGistId && CONFIG.githubToken) {
     const r = await fetch(`https://api.github.com/gists/${CONFIG.artefactGistId}`,
       { headers: { Authorization: `token ${CONFIG.githubToken}` }, cache: "no-store" });
-    if (r.ok) {
-      const content = await gistFileText((await r.json()).files?.[filename]);
-      if (content) return JSON.parse(content);
+    // Met een gekoppelde gist is dát de bron — geen terugval op het lokale pad. Dat
+    // pad bestaat niet meer (de artefacten zijn privé), dus de terugval maakte van
+    // elk echt probleem (verlopen token, rate limit) een nietszeggend "HTTP 404".
+    if (!r.ok) {
+      throw new Error(r.status === 401 || r.status === 403
+        ? `artefact-gist weigert het token (HTTP ${r.status}) — controleer 🔑 Account`
+        : `artefact-gist niet bereikbaar (HTTP ${r.status})`);
     }
-    // Gist geconfigureerd maar (tijdelijk) onbereikbaar → probeer het lokale pad.
+    const content = await gistFileText((await r.json()).files?.[filename]);
+    if (!content) throw new Error(`${filename} staat (nog) niet in de artefact-gist`);
+    return JSON.parse(content);
   }
+  // Geen gist gekoppeld: alleen nog het lokale pad (bootstrap/lokale ontwikkeling).
   const res = await fetch(bust(fallbackUrl));
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();

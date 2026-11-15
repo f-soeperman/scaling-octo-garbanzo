@@ -44,7 +44,7 @@ async function loadData() {
     state.data = await artefactReadJSON("vent_data.json", "vent_data.json");
   } catch (e) {
     document.getElementById("banner-slot").innerHTML =
-      `<div class="banner banner-error">Kon <code>vent_data.json</code> niet laden (${e.message}). ` +
+      `<div class="banner banner-error">Kon <code>vent_data.json</code> niet laden (${escHTML(e.message)}). ` +
       `Het model draait elk kwartier via GitHub Actions.</div>`;
     document.getElementById("source-label").textContent = "";
     document.getElementById("content").innerHTML = "";
@@ -80,7 +80,7 @@ async function loadData() {
     render();
   } catch (e) {
     document.getElementById("banner-slot").innerHTML =
-      `<div class="banner banner-warn">Deel van de pagina kon niet renderen: ${e.message}</div>`;
+      `<div class="banner banner-warn">Deel van de pagina kon niet renderen: ${escHTML(e.message)}</div>`;
   }
 }
 
@@ -428,8 +428,8 @@ async function openReport() {
       const cur = normState(stateOf(c), kind);
       state.pending[c.id] = cur;
       const sub = c.between ? c.between.join(" ↔ ") : (c.room||"");
-      html += `<div class="ctl-row"><div><div class="ctl-label">${c.label}</div><div class="ctl-sub">${sub}</div></div>
-        <div class="seg" data-id="${c.id}">${opts[kind].map(o =>
+      html += `<div class="ctl-row"><div><div class="ctl-label">${escHTML(c.label)}</div><div class="ctl-sub">${escHTML(sub)}</div></div>
+        <div class="seg" data-id="${escHTML(c.id)}">${opts[kind].map(o =>
           `<button data-v="${o}" class="${cur===o?'active':''}">${o}</button>`).join("")}</div></div>`;
     });
   });
@@ -450,19 +450,23 @@ function buildPauseToggle(live) {
   if (!seg) return;
   const d = state.data || {};
   const liveHas = live && (PAUSE_STATE_KEY in live);
-  const cur = liveHas ? !!live[PAUSE_STATE_KEY] : !!d.paused;
+  const cur = liveHas ? !!live[PAUSE_STATE_KEY] : false;
   state.pending[PAUSE_STATE_KEY] = cur;
   applyPauseGrayOut(cur);
   seg.querySelectorAll("button").forEach(b => {
     b.classList.toggle("active", (b.dataset.v === "true") === cur);
   });
-  seg.querySelectorAll("button").forEach(b => b.addEventListener("click", e => {
-    const v = e.target.dataset.v === "true";
+  // Eén handler via onclick (zoals de stille-modus-knop): de knoppen zijn statisch,
+  // dus addEventListener stapelde bij elke keer openen van de modal een extra handler.
+  seg.onclick = e => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    const v = btn.dataset.v === "true";
     seg.querySelectorAll("button").forEach(x => x.classList.remove("active"));
-    e.target.classList.add("active");
+    btn.classList.add("active");
     state.pending[PAUSE_STATE_KEY] = v;
     applyPauseGrayOut(v);
-  }));
+  };
 }
 // ── Stille modus (notify_prefs.json — eigen Gist-bestand, browser = enige schrijver) ──
 // De keuze leeft bewust BUITEN state.pending: hij mag nooit als sleutel in de
@@ -531,18 +535,15 @@ function buildAcDropdown(live) {
   const sel = document.getElementById("ac-select");
   if (!sel) return;
   const d = state.data || {};
-  let rooms = (d.ac && d.ac.rooms) || [];
-  if (!rooms.length) {
-    const meta = (d.house_meta && d.house_meta.rooms) || {};
-    rooms = Object.entries(meta).filter(([, r]) => r.sensor)
-                  .map(([id, r]) => ({ id, label: r.label || id }));
-  }
+  const meta = (d.house_meta && d.house_meta.rooms) || {};
+  const rooms = Object.entries(meta).filter(([, r]) => r.sensor)
+                      .map(([id, r]) => ({ id, label: r.label || id }));
   const liveHas = live && (AC_STATE_KEY in live);
-  let cur = liveHas ? live[AC_STATE_KEY] : ((d.ac && d.ac.room) || "");
+  let cur = liveHas ? live[AC_STATE_KEY] : "";
   cur = (cur == null ? "" : ("" + cur).trim().toLowerCase());
   if (["geen", "none", "off", "uit", "-"].includes(cur)) cur = "";
   sel.innerHTML = `<option value="">geen</option>` +
-    rooms.map(r => `<option value="${r.id}">${r.label}</option>`).join("");
+    rooms.map(r => `<option value="${escHTML(r.id)}">${escHTML(r.label)}</option>`).join("");
   sel.value = cur;
   state.pending[AC_STATE_KEY] = sel.value;       // "" = geen airco
   sel.onchange = () => { state.pending[AC_STATE_KEY] = sel.value; };

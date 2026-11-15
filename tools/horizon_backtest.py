@@ -62,7 +62,6 @@ import vent_io as vio          # noqa: E402
 import vent_physics as vp      # noqa: E402
 
 WARMUP_H = vio.WARMUP_H        # 24u — massaknoop-equilibratie vóór de oorsprong
-STEP_MIN = 15                  # het tijdlijn-raster
 EWMA_TAU_H = 8.0               # tm-mode "ewma": night_forecast.MASS_ANCHOR_TAU_H gerepliceerd
 FC_SNAPSHOT_MAX_AGE_H = 3.75   # forecast-modus: max leeftijd van het snapshot op de oorsprong
                                # (log-cadans is 3u — ouder betekent een gat in het log)

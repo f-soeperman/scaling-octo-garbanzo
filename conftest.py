@@ -10,6 +10,16 @@ import pytest
 sys.path.insert(0, os.path.dirname(__file__))
 
 
+@pytest.fixture(autouse=True)
+def _geen_wachttijd_op_gist_herkansing(monkeypatch):
+    """gist_io herkanst een GET op transiënte fouten met echte pauzes (2+6 s).
+    De herkansing zelf blijft in tests actief; alleen het wachten vervalt —
+    anders kost elke test die een netwerkfout nabootst acht seconden."""
+    import gist_io
+    monkeypatch.setattr(gist_io, "READ_RETRY_DELAYS",
+                        (0,) * len(gist_io.READ_RETRY_DELAYS))
+
+
 @pytest.fixture
 def assert_checkout_pinned():
     """Bewaakt dat een workflow zijn checkout op de branch-tip pint.

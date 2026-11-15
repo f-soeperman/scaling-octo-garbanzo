@@ -18,10 +18,13 @@ Three states in `sandbox_state.json`:
 State updates automatically after each notification. Manual override via `workflow_dispatch` with `override_status` dropdown.
 
 ## Timing
-Two crons in `Europe/Amsterdam` time: `08:00` (morning) and `19:00` (evening). GitHub Actions' native `timezone:` field handles DST automatically, so no UTC drift. The workflow itself decides `morning` vs `evening` based on the local hour (`< 12` → morning) — `sandbox_notify.py` does not contain its own skip-window logic.
+Two crons in `Europe/Amsterdam` time: `08:00` (morning) and `20:00` (evening) — de orchestrator-doelen; de eigen fallback-crons vallen 40 min later. GitHub Actions' native `timezone:` field handles DST automatically, so no UTC drift. The workflow itself decides `morning` vs `evening` based on the local hour (`< 12` → morning) — `sandbox_notify.py` does not contain its own skip-window logic.
 
 ## Rain threshold
 ≥30% probability OR ≥1mm expected.
 
 ## Relation to other projects
 Fully independent — does not touch `soil_model.py`, `check_and_notify.py`, `daily-check.yml`, or `data.json`. Shares Telegram secrets only.
+
+### Avondbelofte volgt de ochtendregel (nov 2026)
+De ochtendrun opent alleen vanaf `MIN_TEMP_LUCHTEN`. De avondtak voor `afgedekt` + droog kondigde tot nov 2026 tóch elke avond "morgenochtend een berichtje" aan — in een koude droge periode dus dagelijks een belofte die nooit werd ingelost. De avond toetst nu dezelfde drempel op de dag van morgen en zwijgt eronder.

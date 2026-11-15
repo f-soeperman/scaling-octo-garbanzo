@@ -49,7 +49,7 @@ dag — generaliseren wél, en pakken het leeuwendeel van de winst.
 Dus ~30% minder fout in de nacht, en geen verslechtering overdag.
 
 Zuivere functies over gewone dicts; de logboekopslag zelf leeft additief in
-`docs/window_data.json` (veld `om_bias`), waar de aanroeper hem persisteert.
+`window_data.json` (veld `om_bias`, privé artefact-gist), waar de aanroeper hem persisteert.
 """
 
 from __future__ import annotations
@@ -222,12 +222,21 @@ def learn(log: dict) -> dict:
 def night_weight(dt: datetime) -> float:
     """Hoe "nacht" is dit tijdstip? 1,0 midden in de nacht, 0,0 midden op de dag, met een
     lineaire overgang van TRANSITION_H rond beide emmergrenzen (zie daar waarom)."""
-    length = (NIGHT_END - NIGHT_START) % 24          # duur van de nachtemmer in uren
-    u = ((dt.hour + dt.minute / 60.0) - NIGHT_START) % 24   # uren sinds het nachtbegin
+    h = dt.hour + dt.minute / 60.0
     half = TRANSITION_H / 2.0
-    rise = (u + half) / TRANSITION_H                 # inloop bij NIGHT_START
-    fall = (length - u + half) / TRANSITION_H        # uitloop bij NIGHT_END
-    return max(0.0, min(1.0, min(rise, fall)))
+
+    def signed(ref: float) -> float:
+        """Uren ná `ref`, in (−12, 12] — negatief = ervóór. Met een kale modulo
+        telde het halfuur vóór NIGHT_START als "23,5 uur erna" en viel de
+        inloop weg: het gewicht sprong op de grens van 0 naar 0,5."""
+        return (h - ref + 12.0) % 24.0 - 12.0
+
+    since_start, since_end = signed(NIGHT_START), signed(NIGHT_END)
+    if abs(since_start) <= abs(since_end):               # dichtst bij het nachtbegin
+        w = (since_start + half) / TRANSITION_H          # inloop bij NIGHT_START
+    else:
+        w = (half - since_end) / TRANSITION_H            # uitloop bij NIGHT_END
+    return max(0.0, min(1.0, w))
 
 
 def bias_for(dt: datetime, learned: dict | None) -> float:

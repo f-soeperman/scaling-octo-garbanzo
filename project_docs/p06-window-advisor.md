@@ -153,9 +153,21 @@ Per-room state machine like the sandbox project, één controle per 15 minuten. 
   "open_since": {"office": "ISO+02:00"},
   "day": {"date": "YYYY-MM-DD", "plan_sent": true,
           "rooms": {"office": {"urgent": 0, "last_urgent": null}}},
-  "last_updated": "ISO", "last_notification": "ISO"
+  "last_updated": "ISO"
 }
 ```
 
 ## Relation to other projects
 Independent. **Schrijft `window_data.json` elke run naar de privé artefact-gist** (privacy-sweep aug 2026) — daarvóór werd het onder `docs/` gecommit en publiek geserveerd. De tado **refresh token and per-room advice state still live only in the secret Gist** (`tado_token.json`, `window_state.json`) and are **never committed**. Reuses Telegram: raam-advies, dagplan en operational alerts allemaal naar de privé-chat (`TELEGRAM_CHAT_ID`). Verder `GIST_TOKEN` en de WU-secrets.
+
+### Doorlichting nov 2026
+- **Workflow:** `window-notify.yml` commit niets meer en draait met `contents: read`. De oude bootstrap-terugval (`git add docs/window_data.json`) kon nooit werken: het pad staat in `.gitignore` en `git add` op een genegeerd pad faalt.
+- **Vorig artefact:** één `strict` read per run (was twee graceful reads). Een léésfout breekt de iteratie af i.p.v. de 48u-historie, het schimmellogboek en het om_bias-leerboek met een lege basis te overschrijven.
+- **Meldgeheugen:** `notified`/`msg_at` en `day.plan_sent` worden alleen nog gestempeld als `send_telegram` slaagt (de stille modus geeft True — as-if-sent blijft dus gelden). Het ongelezen `last_notification` en de oude `open`/`close`-tellers in het dagblok worden niet meer geschreven.
+- **Horizon:** `open_end_is_horizon` rekent met één rasterstap marge; met 0,01 u werkte de herkenning alleen als de run op het kwartier startte.
+- **Korte-warmte-instroom-hold** draait nu op de geijkte forecast (`corrected_hourly`), zoals de andere vier consumenten.
+- **Sensor-only kamer:** de raamloze badkamer liep mee door `decide()` en kreeg op het dashboard een OPEN-stempel. Ze draagt nu `sensor_only: true` (additief), advies `dicht`, geen vensters, statusregel "Alleen sensor — geen raam"; `window.js` toont geen stempel of tijdlijnrij en geeft haar een eigen kleur.
+- **Sluitbericht:** "koel genoeg — niet verder afkoelen" wanneer het buiten nog koeler is dan binnen; "buiten wordt warmer dan binnen" alleen bij echte warmte-instroom.
+- **Schimmellogboek:** telt op het oordeel (`level`), niet op de afgeronde `surface_rh`.
+- **Stdout:** geen ruwe stationstemperatuur/-instraling meer per kwartier (alleen de bron), en de per-kamer "frisse lucht overgeslagen"-regel alleen onder `DRY_RUN`.
+- **Niet gewijzigd, wel gezien** (beslissemantiek — bewonerskeuze): bij het ingaan van stookweer zet `reset_for_heating` een open-gemelde kamer zonder bericht op dicht; de koele-dag-poort kijkt niet naar `warm_ahead`. Een mislukte tado-token-refresh raist sinds de consolidatie (nov 2026) een `RuntimeError` i.p.v. `sys.exit(1)`, zodat `run_guarded` na zes opeenvolgende kwartieren één privé-alert stuurt; de twee bootstrap-paden (geen tokenbestand) blijven een bewuste exit.

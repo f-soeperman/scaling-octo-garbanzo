@@ -26,7 +26,6 @@ Gebruik (wekelijks via twin-eval.yml, of los):
 from __future__ import annotations
 
 import argparse
-import glob
 import json
 import math
 import os
@@ -38,7 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import artefact_io               # noqa: E402
 import vent_io as vio            # noqa: E402
-from night_forecast import MARKS, NIGHT_LOG_DIR, ROOM_ID  # noqa: E402
+from night_forecast import MARKS, NIGHT_LOG_DIR, NIGHT_LOG_PREFIX, ROOM_ID  # noqa: E402
 from shared_const import TZ, utc_now_iso  # noqa: E402
 
 JOIN_TOL_MIN = 10.0     # kwartierpunt ↔ dichtstbijzijnde meting
@@ -47,13 +46,9 @@ AGG_RECENT_N = 14       # "recent"-venster in de samenvatting
 
 
 def load_night_log(log_dir: str = NIGHT_LOG_DIR) -> list[dict]:
+    # Artefact-gist (sinds nov 2026) plus lokale maanden die daar nog niet staan.
     rows = []
-    for path in sorted(glob.glob(os.path.join(log_dir, "*.json"))):
-        try:
-            with open(path, encoding="utf-8") as f:
-                shard = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            continue
+    for shard in artefact_io.load_all_shards(NIGHT_LOG_PREFIX, log_dir):
         rows.extend(shard.get("forecasts") or [])
     rows.sort(key=lambda r: r.get("date") or "")
     return rows

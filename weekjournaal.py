@@ -1,8 +1,8 @@
 """Weekjournaal (Project 11) — zondagavond-digest over alle pijplijnen.
 
 Eén Telegram-bericht per week (orchestrator-doel zondag 20:00) dat de week
-samenvat uit de al-gepubliceerde artefacten in docs/ — puur aggregatie, geen
-nieuwe datavergaring:
+samenvat uit de artefacten die de pijplijnen al schrijven — puur aggregatie,
+geen nieuwe datavergaring:
 
 - 🌱 tuinwater  — regen vs. beregening vs. verdamping + actuele uitputting (data.json)
 - 🌾 maaien     — maaibeurten deze week, groei vs. drempel, volgende maaidag (mowing_data.json)
@@ -13,8 +13,10 @@ nieuwe datavergaring:
 Elke sectie is een pure functie die None teruggeeft als haar artefact ontbreekt
 of onbruikbaar is — het journaal degradeert per sectie i.p.v. te falen. Alles
 None → geen bericht. Stateless: de guard-job in de workflow dedupt, er is geen
-state-bestand. Artefacten worden uit de lokale checkout gelezen (zoals
-mowing_advisor data.json leest), met env-pad-overrides voor tests.
+state-bestand. De bodem-, maai- en tweeling-artefacten komen uit de privé
+artefact-gist (één call, `artefact_io.read_many`); alleen `accuracy_data.json`
+staat nog in de checkout. Zonder ARTEFACT_GIST_ID gelden de lokale paden
+(env-overrides voor tests).
 """
 
 import json
@@ -205,14 +207,17 @@ def main() -> None:
     today = now.date()
     print(f"[weekjournaal] Start — {now.isoformat()}")
 
-    # Bodem/maai: sinds de privatisering (aug 2026) uit de artefact-gist
-    # (ARTEFACT_GIST_ID), met het lokale pad als test-/bootstrap-terugval.
-    soil = artefact_io.read_json("data.json", SOIL_DATA_PATH, default=None)
-    mow = artefact_io.read_json("mowing_data.json", MOWING_DATA_PATH, default=None)
-    # De tweeling volgt hetzelfde pad sinds de privatisering (aug 2026) — hij
-    # publiceert de raamstanden zelf, niet alleen of het huis gepauzeerd is.
-    learned = artefact_io.read_json("vent_learned.json", LEARNED_PATH, default=None)
-    acc = _load(ACCURACY_DATA_PATH)
+    # Bodem, maai, tweeling en (sinds nov 2026) het stationsrapport leven in de
+    # artefact-gist (ARTEFACT_GIST_ID) — één call voor alle vier; het lokale pad
+    # is de test-/bootstrap-terugval. accuracy_data.json valt daarbij terug op de
+    # nog gecommitte kopie zolang station_accuracy de gist niet gevuld heeft.
+    arte = artefact_io.read_many({"data.json": SOIL_DATA_PATH,
+                                  "mowing_data.json": MOWING_DATA_PATH,
+                                  "vent_learned.json": LEARNED_PATH,
+                                  "accuracy_data.json": ACCURACY_DATA_PATH})
+    soil, mow, learned = (arte["data.json"], arte["mowing_data.json"],
+                          arte["vent_learned.json"])
+    acc = arte["accuracy_data.json"] or _load(ACCURACY_DATA_PATH)
 
     msg = build_message([
         garden_section(soil, today),

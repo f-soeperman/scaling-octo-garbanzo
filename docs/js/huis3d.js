@@ -85,7 +85,7 @@ function overlay(html, pulse = false) {
 
 async function h3Load() {
   if (!window.THREE || !THREE.OrbitControls) {
-    overlay("De 3D-bibliotheek kon niet geladen worden (cdn.jsdelivr.net geblokkeerd?)."); return;
+    overlay("De 3D-bibliotheek kon niet geladen worden (js/vendor ontbreekt?)."); return;
   }
   // Zelfde poort als vent.html: zonder token + artefact-gist is er niets te tonen.
   if (!(CONFIG.githubToken && CONFIG.artefactGistId)) {

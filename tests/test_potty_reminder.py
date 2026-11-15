@@ -147,10 +147,13 @@ class FakeGist:
         self.files = dict(files)
         self.writes = []
 
-    def read_files(self, gist_id, token=None):
-        return dict(self.files)
+    def read_files(self, gist_id, token=None, names=None):
+        self.gevraagd = None if names is None else set(names)
+        return {k: v for k, v in self.files.items() if names is None or k in names}
 
     def write_files(self, gist_id, files, token=None):
+        # Zoals de echte helper bij een 409: die regel mag de log niet bereiken.
+        print("[gist] 409 Conflict op PATCH-poging 1, retry")
         self.writes.append(files)
         self.files.update(files)
 
@@ -197,7 +200,16 @@ def test_stdout_is_gelijk_met_en_zonder_herinnering(env, monkeypatch, capsys):
     gist = FakeGist({pr.LOG_FILE: log})
     out_send = _run(monkeypatch, capsys, gist, at(11, 30))
     assert len(env) == 1, "er had een herinnering moeten uitgaan"
-    assert out_quiet == out_send
+    assert gist.writes, "er had een state-schrijf moeten zijn"
+    assert out_quiet == out_send == "potje: controle klaar\n"
+
+
+def test_leest_alleen_de_eigen_bestanden(env, monkeypatch, capsys):
+    """De Gist draagt ook de maand-shards; die hoeft de 5-minutenloop niet mee te
+    downloaden."""
+    gist = FakeGist({pr.LOG_FILE: json.dumps({"events": []}), "groot_shard.json": "x"})
+    _run(monkeypatch, capsys, gist, at(10, 0))
+    assert gist.gevraagd == {pr.LOG_FILE, pr.STATE_FILE}
 
 
 def test_herinnering_naar_de_groep_en_muted_in_quiet(env, monkeypatch, capsys):

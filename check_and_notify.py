@@ -1,19 +1,22 @@
 """
-Daily check & notify script.
+Bodemcheck & notify script.
 
-Runs in GitHub Actions every morning. Doet:
+Draait elk uur in GitHub Actions (zie "Meldmoment" hieronder). Doet:
   1. Haalt WU + Open-Meteo data
   2. Haalt irrigatie-log uit GitHub Gist
   3. Rekent soil water balance uit voor lawn + shrubs
-  4. Als water geven nodig → stuurt Telegram
-  5. Schrijft verse data.json terug (voor de GitHub Pages dashboard)
+  4. Schrijft verse data.json naar de privé artefact-gist (voor het dashboard)
+  5. Alleen in het advies-slot, en als water geven nodig is → stuurt Telegram
 
 Benodigde env vars (in GitHub Secrets):
   WU_STATION_ID, WU_API_KEY
   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID      (optioneel)
-  GIST_ID, GITHUB_TOKEN                     (voor irrigatie-log)
+  GIST_ID, GH_TOKEN                         (irrigatie-log)
+  ARTEFACT_GIST_ID                          (data.json; afwezig → docs/data.json)
 """
 
+import contextlib
+import io
 import json
 import os
 from datetime import date, timedelta
@@ -48,18 +51,29 @@ STATE_FILE = os.getenv("SOIL_STATE_FILE", "soil_state.json")
 
 # =============================================================================
 
-def load_existing_monthly_totals() -> dict:
-    """Laad bestaande maandtotalen uit data.json (koude opslag) — sinds de
-    privatisering (aug 2026) uit de artefact-gist, met het lokale pad als
-    bootstrap-/test-terugval. Dit pad missen zou élke uurlijkse run de
-    13-maands archief-bootstrap laten draaien."""
-    prev = artefact_io.read_json("data.json", "docs/data.json", default={}) or {}
-    return prev.get("monthly_totals", {})
+def load_previous_data() -> dict:
+    """De data.json van de vorige run — sinds de privatisering (aug 2026) uit
+    de artefact-gist, met het lokale pad als bootstrap-/test-terugval. Eén keer
+    per run gelezen; zowel de koude opslag als de θ-seed komen eruit.
+
+    `strict`: dit is de basis waarop de run verder bouwt. Een léésfout als
+    "leeg" laten doorgaan zou de 13-maands archief-bootstrap starten en de op
+    WU-metingen gebouwde maandtotalen met ERA5-waarden overschrijven — dan
+    liever een mislukte run, die de workflow zelf herkanst."""
+    prev = artefact_io.read_json("data.json", "docs/data.json", default=None,
+                                 strict=True)
+    return prev if isinstance(prev, dict) else {}
 
 
-def load_previous_theta() -> dict:
-    """Laad de laatst-geregistreerde θ per zone uit docs/data.json zodat de
-    volgende run niet vanaf de generieke 30%-uitputting hoeft te starten.
+def load_existing_monthly_totals(prev: dict) -> dict:
+    """De bevroren maandtotalen (koude opslag) uit de vorige data.json. Dit pad
+    missen zou élke uurlijkse run de 13-maands archief-bootstrap laten draaien."""
+    return prev.get("monthly_totals") or {}
+
+
+def load_previous_theta(prev: dict) -> dict:
+    """De laatst-geregistreerde θ per zone uit de vorige data.json, zodat deze
+    run niet vanaf de generieke 30%-uitputting hoeft te starten.
 
     Geeft een dict zoals {"lawn": 0.14, "shrubs": 0.16} terug, of {} als
     er geen vorige run is. We accepteren elke datum: de vorige run heeft
@@ -67,9 +81,6 @@ def load_previous_theta() -> dict:
     op de eerste dag van de nieuwe run — het is een betere prior dan de
     statische 30%-uitputting.
     """
-    prev = artefact_io.read_json("data.json", "docs/data.json", default=None)
-    if not isinstance(prev, dict):
-        return {}
     te = prev.get("theta_end") or {}
     seed = {k: te[k] for k in ("lawn", "shrubs") if te.get(k) is not None}
     # Een corrupte/handmatig bewerkte data.json mag de waterbalans niet met
@@ -87,18 +98,23 @@ def load_previous_theta() -> dict:
 
 def load_state() -> dict:
     """Meld-bookkeeping (spiegelt sandbox_state.json / mowing_state.json)."""
-    defaults = {"last_advice_date": None, "last_advice_priority": None}
-    try:
-        with open(STATE_FILE) as f:
-            return {**defaults, **json.load(f)}
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return defaults
+    # Sinds nov 2026 in de privé artefact-gist (zelfde pad als mowing_state.json);
+    # STATE_FILE blijft het lokale/test-pad en het startpunt van de migratie.
+    defaults = {"last_advice_date": None}
+    stored = artefact_io.read_json_migrating("soil_state.json", STATE_FILE, default=None)
+    state = {**defaults, **stored} if isinstance(stored, dict) else dict(defaults)
+    # `last_advice_priority` stond tot nov 2026 in het publiek gecommitte
+    # bestand en werd nergens gelezen: een dagelijkse afgeleide van het
+    # irrigatie-logboek zonder functie. Niet meer geschreven; hier weggehaald
+    # uit bestaande state.
+    state.pop("last_advice_priority", None)
+    return state
 
 
 def save_state(state: dict) -> None:
     state["last_updated"] = utc_now_iso()
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f, indent=2, ensure_ascii=False)
+    body = json.dumps(state, indent=2, ensure_ascii=False)
+    artefact_io.write_state("soil_state.json", STATE_FILE, body)
     print("[state] opgeslagen.")
 
 
@@ -142,20 +158,22 @@ def bootstrap_monthly_totals(irrigations_raw: dict) -> dict:
 def load_irrigations_from_gist() -> dict:
     """Haalt irrigatie-log uit GitHub Gist. Format: {"YYYY-MM-DD": mm}."""
     gist_id = os.getenv("GIST_ID")
-    token = os.getenv("GH_TOKEN") or os.getenv("GITHUB_TOKEN")
+    token = os.getenv("GH_TOKEN") or os.getenv("GIST_TOKEN")
     if not gist_id:
         print("[irrigations] geen GIST_ID, overslaan")
         return {}
+    # strict: een léésfout is geen leeg logboek. Zonder de gelogde beurten
+    # rekent de balans te droog, en dat stuurt zowel het advies als de
+    # bewatering-automaat (Project 16) — dan liever een herkanste run.
     data = gist_read_json(gist_id, "irrigations.json", token=token,
-                          default={}, label="irrigations")
+                          default={}, label="irrigations", strict=True)
     # Bewust geen event-telling in het publieke log: het verschil tussen twee uurlijkse
     # runs zou elke handmatige registratie op de minuut dateren.
     print("[irrigations] logboek geladen")
     return data
 
 
-def format_telegram(status_lawn: dict, status_shrubs: dict,
-                    generated_at: str) -> str:
+def format_telegram(status_lawn: dict, status_shrubs: dict) -> str:
     icons = {"high": "🚨", "medium": "💧", "low": "⏳", "none": "✓"}
 
     def zone_line(label: str, status: dict) -> list[str]:
@@ -191,7 +209,7 @@ def format_telegram(status_lawn: dict, status_shrubs: dict,
         f"🌧️ Regen komende 7d: <b>{status_lawn['rain7_mm']:.1f} mm</b>",
     ]
 
-    # Effectief netto (na probability + canopy-interceptie) — toon alleen
+    # Effectief netto (na canopy-interceptie) — toon alleen
     # als het wezenlijk afwijkt van de ruwe regen, anders is het ruis.
     raw7 = status_lawn["rain7_mm"]
     eff7_lawn = status_lawn.get("eff_rain_7d_mm", raw7)
@@ -236,12 +254,13 @@ def main():
     irrigations_raw = load_irrigations_from_gist()
 
     # Bootstrap maandtotalen als er nog geen koude opslag is
-    existing_monthly = load_existing_monthly_totals()
+    prev = load_previous_data()
+    existing_monthly = load_existing_monthly_totals(prev)
     if not existing_monthly:
         print("→ Geen maandtotalen gevonden — eenmalige bootstrap...")
         existing_monthly = bootstrap_monthly_totals(irrigations_raw)
 
-    seed_theta = load_previous_theta()
+    seed_theta = load_previous_theta(prev)
     print(f"→ Data bouwen (WU={bool(station)}, Open-Meteo forecast, 35 warme dagen)...")
     data = build_full_dataset(station, key, irrigations=irrigations_raw,
                               days_past=35, seed_theta=seed_theta or None)
@@ -255,9 +274,10 @@ def main():
 
     status_lawn = assess_status(data, "lawn")
     status_shrubs = assess_status(data, "shrubs")
-    # Alleen de prioriteit in het publieke log; de aanbevelingstekst (hoeveelheden,
-    # beurt-timing) blijft Telegram-only.
-    print(f"   Gras: {status_lawn['priority']} · Struiken: {status_shrubs['priority']}")
+    # Bewust géén prioriteit in het publieke log: die kantelt van medium/high
+    # naar none zodra er een beurt water gelogd is, en bij een uurlijkse run
+    # dateert dat de handeling op het uur — hetzelfde spoor dat het logboek
+    # hierboven al verzwijgt. Het dashboard (privé artefact) toont de stand.
 
     # Publish a trimmed status per zone so the dashboard reads the same facts
     # the Telegram message does, instead of re-deriving thresholds in JS.
@@ -276,7 +296,7 @@ def main():
     # irrigatie-logboek), anders het oude lokale pad.
     payload = json.dumps(data, separators=(",", ":"))
     dest = artefact_io.write_json_str("data.json", "docs/data.json", payload)
-    print(f"→ {dest} geschreven ({len(payload)} bytes)")
+    print(f"→ {dest} geschreven")
 
     # --- Meldmoment + notificatie-logica ---
     # De uurlijkse runs verversen alleen data.json; alleen de advies-run van
@@ -290,31 +310,33 @@ def main():
     priorities = {status_lawn["priority"], status_shrubs["priority"]}
     needs_advice = ("high" in priorities) or ("medium" in priorities)
 
+    # De logvorm is constant: het slot zelf is een klokvraag (publiek prima),
+    # maar óf er in dat slot iets te melden viel is de waterbalans — en dus
+    # het irrigatie-logboek. Geen "nodig/niet nodig"-regel, en de
+    # "[telegram] ✓ verzonden"-regel van notify.py wordt onderdrukt (zelfde
+    # patroon als sandbox_notify._send).
     if not (slot or force):
         print(f"→ Geen advies-slot (data ververst; bericht valt om "
               f"{NOTIFY_AT[0]:02d}:{NOTIFY_AT[1]:02d})")
-    elif needs_advice or force:
-        print("→ Notificatie nodig, versturen...")
-        tg_text = format_telegram(status_lawn, status_shrubs, data["generated_at"])
-        send_telegram(tg_text, muted_in_quiet=True)
     else:
-        print("→ Geen notificatie nodig (alles rustig)")
+        print("→ Advies-slot afgehandeld")
+        if needs_advice or force:
+            tg_text = format_telegram(status_lawn, status_shrubs)
+            with contextlib.redirect_stdout(io.StringIO()):
+                send_telegram(tg_text, muted_in_quiet=True)
 
     if slot:
         # Slot verbruikt, ook als er niets te melden viel — anders zou een
         # rustige ochtend de rest van de dag alsnog een bericht kunnen
         # afvuren zodra de prioriteit omslaat.
         state["last_advice_date"] = today.isoformat()
-        state["last_advice_priority"] = (
-            "high" if "high" in priorities else
-            "medium" if "medium" in priorities else "low")
         save_state(state)
 
     print("✓ klaar")
 
 
 if __name__ == "__main__":
-    # fail_threshold=2: de workflow doet bij falen één herkansing na 10 min
+    # fail_threshold=2: de workflow doet bij falen één herkansing na 25 min
     # (zelfde job, dus zelfde RUNNER_TEMP-teller) — alleen als die óók faalt
     # is de dag echt verloren en komt er één alert.
     run_guarded(main, "Pineapple Under The Sea check", fail_threshold=2)

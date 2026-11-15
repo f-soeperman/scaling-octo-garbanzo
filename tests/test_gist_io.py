@@ -145,3 +145,70 @@ def test_read_json_default_bij_kapotte_json(monkeypatch):
     monkeypatch.setattr(gist_io.requests, "get",
                         lambda *a, **k: _Resp(_gist({"d.json": "{niet: geldig"})))
     assert gist_io.read_json("gid", "d.json", default=None) is None
+
+
+# ── leesfouten: herkansen, en "kon niet lezen" is niet "leeg" ───────────────────
+# Eén netwerk-blip maakte van een graceful reader een lege basis, die de run
+# daarna terugschreef (maandtotalen, kamerhistorie, meldgeheugen).
+
+def test_read_file_herkanst_een_transiente_fout(monkeypatch):
+    calls = []
+
+    def fake_get(url, headers=None, timeout=None):
+        calls.append(url)
+        if len(calls) == 1:
+            raise requests.ConnectionError("reset")
+        if len(calls) == 2:
+            return _Resp({}, status_ok=False, status_code=503)
+        return _Resp(_gist({"x.json": "hallo"}))
+
+    monkeypatch.setattr(gist_io.requests, "get", fake_get)
+    assert gist_io.read_file("gid", "x.json") == "hallo"
+    assert len(calls) == 3
+
+
+def test_read_file_herkanst_geen_harde_http_fout(monkeypatch):
+    calls = []
+
+    def fake_get(url, headers=None, timeout=None):
+        calls.append(url)
+        return _Resp({}, status_ok=False, status_code=401)
+
+    monkeypatch.setattr(gist_io.requests, "get", fake_get)
+    with pytest.raises(requests.HTTPError):
+        gist_io.read_file("gid", "x.json")
+    assert len(calls) == 1
+
+
+def test_read_json_strict_raist_bij_leesfout_maar_niet_bij_afwezig(monkeypatch):
+    def kapot(*a, **k):
+        raise requests.ConnectionError("down")
+
+    monkeypatch.setattr(gist_io.requests, "get", kapot)
+    with pytest.raises(requests.ConnectionError):
+        gist_io.read_json("gid", "d.json", default={}, strict=True)
+
+    monkeypatch.setattr(gist_io.requests, "get",
+                        lambda *a, **k: _Resp(_gist({"ander.json": "{}"})))
+    assert gist_io.read_json("gid", "d.json", default={}, strict=True) == {}
+
+
+def test_read_files_filtert_op_naam_en_volgt_dan_alleen_die_raw_urls(monkeypatch):
+    gevolgd = []
+
+    def fake_get(url, headers=None, timeout=None):
+        if "raw" in url:
+            gevolgd.append(url)
+            r = _Resp({})
+            r.text = "groot"
+            return r
+        return _Resp({"files": {
+            "klein.json": {"content": "1"},
+            "shard.json": {"truncated": True, "raw_url": "https://x/raw/shard"},
+            "ander.json": {"truncated": True, "raw_url": "https://x/raw/ander"},
+        }})
+
+    monkeypatch.setattr(gist_io.requests, "get", fake_get)
+    assert gist_io.read_files("gid", names=["klein.json", "shard.json"]) == {
+        "klein.json": "1", "shard.json": "groot"}
+    assert gevolgd == ["https://x/raw/shard"]

@@ -97,6 +97,27 @@ fixes gecommit is — inclusief de twin2-maanden mei–aug 2026 — blijft in de
 git-historie staan; volledig verwijderen kan alleen met een nieuwe history-squash
 (eigenaarsbeslissing, zie ook AUDIT2.md §(b)).
 
+## Security-scan (nov 2026)
+
+- **Het eigen station is herleidbaar uit zijn meetreeks, niet alleen uit zijn id.** Een
+  uurreeks temperatuur + pyranometer is naast de openbare WU-historie van de stations in de
+  buurt te leggen. Daarom leven het stations-archief en `accuracy_data.json` (de `scatter`) in
+  de privé artefact-gist, is `accuracy.html` token-gated, en print scheduled stdout geen
+  stationsmetingen.
+- **Ook naar de artefact-gist:** het nachtvoorspellingslog (op de gemeten kamertemperatuur
+  geankerd), `soil_state.json` en `shade_state.json` (dagelijkse commits die afgeleiden van
+  handmatige meldingen dateerden). Zelf-uitvoerende migratie; tot de eerste gist-run staan de
+  kopieën nog in de boom (`_MIGRATING_ARTEFACTS` in `tests/test_privacy.py` — daarna naar
+  `_PRIVATE_ARTEFACTS`).
+- **Dashboards:** geen CDN-scripts, `escHTML()` op elke niet-numerieke waarde in een
+  HTML-template. Het Gist-token is account-breed: aparte tokens met vervaldatum voor browser
+  en Actions. De orchestrator krijgt het Actions-token read-only voor het reminder-tijdstip
+  van de zonwering.
+- **Geaccepteerd restrisico (bewonersbesluit):** de al gecommitte maanden van het
+  stations-archief, het nachtlog en de twee state-bestanden blijven in de publieke
+  git-historie. `ml-dataset.yml` blijft een bewuste handmatige export: het run-artefact
+  meteen na het downloaden verwijderen.
+
 ## From the former ground rules (verbatim)
 - **Controleer de branchnaam als éérste handeling van een sessie, vóór de eerste push.**
   Hij komt uit de openingsprompt, dus een vraag als "kun je X pauzeren" levert een publieke

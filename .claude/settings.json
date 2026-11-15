@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && git config core.hooksPath .githooks && (python -c 'import pytest' 2>/dev/null || pip install -q -r requirements.txt -r requirements-dev.txt >/dev/null 2>&1 || true)"
+          }
+        ]
+      }
+    ]
+  }
+}

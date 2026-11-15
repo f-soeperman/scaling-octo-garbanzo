@@ -11,7 +11,6 @@ from datetime import datetime
 import pytest
 
 import weather_briefing as wb
-import wu_bias
 from weather_briefing import cloud_corrected_uv, hours_in_window, uv_windows
 
 
@@ -96,22 +95,18 @@ def test_geen_vakantiemodus_meer():
     assert wb.LOCATION["label"] == "Utrecht"
 
 
-# ── wu_bias ────────────────────────────────────────────────────────────────────
+# ── eenheden ───────────────────────────────────────────────────────────────────
 
-def test_correct_temp_none_handling():
-    assert wu_bias.correct_temp(None, 500.0) is None
-    assert wu_bias.correct_temp(20.0, None) == 20.0
+def test_wind_wordt_in_meter_per_seconde_opgevraagd(monkeypatch):
+    """De vlaag-drempels en de berichttekst rekenen in m/s; Open-Meteo levert
+    zonder expliciete eenheid km/u — elke vlaag vanaf 20 km/u werd dan "Storm"."""
+    gevraagd = {}
 
+    def fake_get_json(url, params, **k):
+        gevraagd.update(params)
+        return {}
 
-def test_correct_temp_trekt_zonsurplus_af():
-    verwacht = 20.0 - wu_bias.SOLAR_BIAS_SLOPE * 500.0
-    assert wu_bias.correct_temp(20.0, 500.0) == pytest.approx(verwacht)
-
-
-def test_correct_temp_negatieve_instraling_geklemd():
-    assert wu_bias.correct_temp(20.0, -50.0) == 20.0
-
-
-def test_bias_estimate():
-    assert wu_bias.bias_estimate(None) == 0.0
-    assert wu_bias.bias_estimate(200.0) == pytest.approx(wu_bias.SOLAR_BIAS_SLOPE * 200.0)
+    monkeypatch.setattr(wb, "get_json", fake_get_json)
+    wb.fetch_forecast(wb.LOCATION)
+    assert gevraagd["wind_speed_unit"] == "ms"
+    assert "wind_gusts_10m" in gevraagd["hourly"]

@@ -288,3 +288,30 @@ def test_buurvenster_wordt_begrensd(monkeypatch):
     gevraagd.clear()
     sa.neighbour_coherence("key", "2026-08-01", "2026-08-10", 10, frame)
     assert gevraagd == [10] * 4
+
+
+def test_bijwerken_wist_geen_eerder_gearchiveerde_kolom(archive):
+    """Een haperende KNMI-fetch levert `knmi: None` voor het hele venster. Dat mag
+    de waarde uit een eerdere run niet overschrijven — het overlappende venster
+    wordt maar één keer opnieuw bezocht, dus het gat bleef voorgoed."""
+    sa.append_archive([{**_row("2026-08-01T10"), "knmi": 20.4, "rh": 71.0}])
+    zonder_knmi = {**_row("2026-08-01T10"), "knmi": None, "rh": 71.0}
+    assert sa.append_archive([zonder_knmi]) == (0, 0)
+    assert sa.load_archive()[0]["knmi"] == 20.4
+    # Een échte herziening komt nog wel door.
+    assert sa.append_archive([{**zonder_knmi, "rh": 73.0}]) == (0, 1)
+    rij = sa.load_archive()[0]
+    assert rij["rh"] == 73.0 and rij["knmi"] == 20.4
+
+
+def test_buurvenster_meldt_zijn_eigen_begindatum(monkeypatch):
+    monkeypatch.setenv("WU_NEIGHBOUR_IDS", "A")
+    frame = _knmi_frame()
+    monkeypatch.setattr(sa, "fetch_wu_hourly", lambda sid, key, days: {
+        t: {"temp": v["temp"] + 0.5, "solar": v["solar"], "wind": v["wind"]}
+        for t, v in frame.items()})
+    out = sa.neighbour_coherence("key", "2026-04-09", "2026-08-06", 120, frame)
+    venster = out["window"]
+    assert venster["days"] == sa.NEIGHBOUR_DAYS and venster["end"] == "2026-08-06"
+    start = sa.date.fromisoformat(venster["start"])
+    assert (sa.date(2026, 8, 6) - start).days == sa.NEIGHBOUR_DAYS - 1

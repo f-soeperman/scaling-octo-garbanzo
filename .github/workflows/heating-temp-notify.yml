@@ -63,7 +63,11 @@ jobs:
             echo "Verlate fallback-cron (vóór 21:00 lokaal) — sla over."
             exit 0
           fi
-          since=$(TZ=Europe/Amsterdam date -d "today 00:00" +%s)
+          # Venster vanaf het doelmoment (min een minuut klokspeling), niet vanaf
+          # middernacht: een verlate cron van gisteren die ná middernacht
+          # binnenkwam is hierboven overgeslagen, maar staat als "success" in het
+          # ledger en zou anders als "vandaag al gedaan" tellen.
+          since=$(( $(TZ=Europe/Amsterdam date -d "today 21:00" +%s) - 60 ))
           others=$(gh run list --workflow heating-temp-notify.yml -L 40 \
             --json databaseId,createdAt,conclusion \
             --jq "[.[] | select(.databaseId != ${{ github.run_id }}
@@ -83,9 +87,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Gepind op de branch-tip: de job leest zijn eigen gecommitte logboek terug
+      # (`previous_arm`) en commit het weer — zelfde reden als de andere
+      # state-committende workflows (zie sandbox-notify.yml).
       - uses: actions/checkout@v5
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.ref_name }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -125,8 +132,21 @@ jobs:
             # rebase raced deze push en faalt hij. De weekregel is idempotent
             # (upsert op weeklabel), dus bij conflict wint onze verse versie.
             git rebase --abort 2>/dev/null || true
-            if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}"; then
-              git push
+            # Tot drie pogingen: tussen pull en push zit een venster van ~1 s waarin
+            # een andere pijplijn naar main kan pushen (de bodem- en kampeer-run
+            # committen elke ochtend seconden na elkaar). Eén verloren race maakte de
+            # run rood, en de herkansing herhaalde dan wat al verstuurd was.
+            pushed=""
+            for attempt in 1 2 3; do
+              if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}" && git push; then
+                pushed=1
+                break
+              fi
+              git rebase --abort 2>/dev/null || true
+              sleep $(( attempt * 5 ))
+            done
+            if [ -n "$pushed" ]; then
+              :
             else
               git rebase --abort 2>/dev/null || true
               echo "::error::rebase failed, heating experiment state not pushed"

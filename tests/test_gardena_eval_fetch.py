@@ -12,6 +12,8 @@ import importlib.util
 import json
 import os
 
+import pytest
+
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -25,6 +27,23 @@ def _load(name: str):
 
 fetch = _load("gardena_eval_fetch")
 ev = _load("gardena_sensor_eval")
+
+
+@pytest.fixture(autouse=True)
+def _verse_gist_cache():
+    """De fetch-tool downloadt de gist één keer per run; elke test begint leeg."""
+    fetch._GIST_CACHE.clear()
+
+
+def test_beide_afnemers_delen_een_download(tmp_path, monkeypatch):
+    monkeypatch.setenv("GIST_ID", "g")
+    monkeypatch.setenv("GIST_TOKEN", "t")
+    calls = []
+    monkeypatch.setattr(fetch.gist_io, "read_files",
+                        lambda gid, token=None: calls.append(gid) or {})
+    fetch.fetch_sensor_shards(str(tmp_path / "s"))
+    fetch.fetch_twin_weather(str(tmp_path / "w"))
+    assert calls == ["g"]
 
 # Synthetisch (vóór de installatie van de sensor) — geen echte meetwaarden in fixtures.
 _ROWS = [{"t": "2026-07-01T00:00:00+00:00", "soil_hum": 31, "soil_temp": 12},

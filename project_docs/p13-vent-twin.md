@@ -35,7 +35,7 @@
   concurrency group `airflow-advisor` (**deliberately kept name** — serializes against any
   pre-rename loop run still alive).
 - `docs/vent.html` + `docs/js/vent.js` — dashboard: **meldmodal** (writes `house_openings.json`
-  in the non-secret `GIST_ID` Gist + `workflow_dispatch`; incl. de airco-dropdown en de
+  in the non-secret `GIST_ID` Gist — bewust zónder workflow-dispatch; incl. de airco-dropdown en de
   huis-brede pauze-toggle), plattegrond met stroompijlen, kamerkaarten, temperatuurgrafiek
   (**24u terug + 12u vooruit**, met sinds aug 2026 een **p10/p90-band** om de vooruitblik per
   kamer uit `docs/js/uncertainty.json` — hulpdatasets met een "_"-label, gefilterd uit
@@ -286,6 +286,12 @@ hindcast-weer af); die fout is nog ongemeten, maar sinds aug 2026 **wordt de dat
 meten verzameld**: het forecast-log (`data/forecast_log`, elke 3 klokuren een snapshot van de
 échte Open-Meteo-voorspelling) + `horizon_backtest --weather forecast`, wekelijks gedraaid
 door twin-eval.yml. Na ~4–6 weken accumulatie levert dat het eerste live-foutgetal.
+**Stand nov 2026 (`docs/twin_eval.json`, 10 weken):** op de échte gelogde forecasts scoort de
+tweeling 0.56–0.77 °C tegen persistentie 0.58–0.77 en wint in 5 van de 10 weken — op de 12u-
+horizon is hij dus nog niet aantoonbaar beter dan "het blijft zoals het is". De hindcast-reeks
+zelf loopt sinds aug 0.81–1.08 (niet 0.70; de herfst is lastiger dan de zomerset). Bekend
+voorbehoud bij de backtest: hij ziet raammeldingen van ná de oorsprong en slaat de routines en
+de om_bias-correctie uit productie over, dus hij is optimistischer dan de live-situatie.
 
 ## Bewijsstatus eenzijdige ventilatie (§6.2-verplichting — afgerond aug 2026)
 De open meetverplichting uit `AIRFLOW2_ASSESSMENT.md` §6.2 is met `tools/vent_experiment.py`
@@ -401,7 +407,8 @@ Geen tado-auth, geen nieuwe secrets (WU-, privé-chat-Telegram- en Gist-secrets 
   parameter-reset i.p.v. de fysica. Zie AIRFLOW3_ASSESSMENT.md §2.
 - **Never re-report the twin's nowcast RMSE as a forecast score** — `vent_learned.json`'s ~0.5 °C
   is een nowcast over een venster dat elk kwartier op verse metingen wordt gezet. De
-  voorspelscore is `tools/horizon_backtest.py`, en die is ~0.70 °C op 12u.
+  voorspelscore is `tools/horizon_backtest.py` (wekelijks in `docs/twin_eval.json`; zie
+  "Gemeten" voor de live stand — de oude 0.70 °C was een zomer-hindcast).
 - **`bath` is bewust buiten scope — laat 'm met rust.** De badkamer wordt gewoon meegesimuleerd
   (ze is een zone in het druknetwerk) en staat op de plattegrond, op haar eigen kamerkaart en in
   de meldmodal, maar er gaat géén modelleer- of afsteltijd naar. Ze is raamloos met 0.62 °C
@@ -415,3 +422,10 @@ Geen tado-auth, geen nieuwe secrets (WU-, privé-chat-Telegram- en Gist-secrets 
   draagt `exclude_from_fit` + `hide_in_charts` in `house_model.json`, dus ze leert niet meer mee
   en staat in geen enkele grafiek. Dat zijn de twee generieke vlaggen — géén bath-specifieke
   code — en een nieuwe uitzondering hoort langs dezelfde weg te lopen of helemaal niet.
+
+### Doorlichting nov 2026
+- **Stdout is nu echt vormvast.** De regel "N samples over K kamers", de RMSE-regel, de aparte regel voor een venster zonder samples en de byte-telling van `vent_data.json` hingen allemaal af van `actual` ná de pauze-/airco-/verwarmingsfilters: het sample-aantal zakte per kwartier zodra een pauze inging, het kameraantal was "alle min de airco-/gestookte kamers". Eén regel `[leren] kalibratiestap afgerond.` voor elke uitkomst; `tests/test_vent_twin.py` draait `main()` met en zonder pauze/airco en vergelijkt de logs.
+- **`load_learned` is strict**: een léésfout op de artefact-gist breekt de iteratie af i.p.v. de params naar de priors te zetten en leercurve + anomalie-state te wissen (en de nachtvoorspelling op priors te laten rekenen).
+- **`vent-notify.yml`** staget alleen nog `data/forecast_log`.
+- **Open — te méten, niet aangenomen:** `calibrate` geeft `measured=` (de γ-waarneming) wél door aan de eerste residuen maar niet aan de Jacobiaan-kolommen, de proefstap en de eind-RMSE; de fit mengt daardoor twee modelvarianten. Rechtzetten verandert het fit-traject en hoort dus met een re-seed + `tools/horizon_backtest.py` (beide armen), niet als bijvangst.
+- **Open — tools:** `tools/vent_diagnostics.py` leest nog de lokale `docs/vent_*.json` (nu gist-only) en gescrubde velden; `tools/horizon_backtest.py` past `om_learned` en de routines niet toe en scoort dus niet exact de productie-vooruitblik; `tools/export_uncertainty.py` zet `heating_season_observed` hard op False terwijl het record inmiddels november bereikt; `tools/airflow_distill.py` bemonstert de stand `"half"`, die geen openingsstand is (fractie 0).

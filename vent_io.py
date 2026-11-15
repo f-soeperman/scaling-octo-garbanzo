@@ -91,11 +91,9 @@ CALIB_WINDOW_H = 48.0    # uur historie waarover we de fout minimaliseren (~2 da
                          # ua_party/q_int/c_mass worden identificeerbaar i.p.v. naar hun grens
                          # te driften op een half-daags venster)
 WARMUP_H       = 24.0    # uur sim-only aanloop vóór het residu-venster: de trage massaknoop
-
                          # equilibreert zodat zijn beginwaarde geen vrije laagfrequente bias is.
                          # Drivers reiken ver genoeg terug via Open-Meteo past_days; residuen
                          # tellen alleen waar tado-samples bestaan (≤CALIB_WINDOW_H terug)
-CALIB_COVERAGE_WARN_H = 24.0   # effectieve grond-waarheid-spanwijdte (na AC-/verwarmings-/
 
 def openings_at(log: list[dict], when: datetime) -> dict:
     """Actieve gerapporteerde toestand per element op tijdstip `when`, voorwaarts
@@ -315,7 +313,12 @@ def load_learned() -> dict:
     met LEARNED_FILE als lokaal/test-pad zolang het secret niet bestaat. Dit is de
     read-back die de online kalibratie van run naar run laat doorlopen — zonder
     gist-uitlezing zou elke run vanaf de priors herstarten."""
-    d = artefact_io.read_json("vent_learned.json", LEARNED_FILE, default={})
+    # strict: dit is de basis die de runner terugschrijft. Een léésfout als "leeg"
+    # laten doorgaan zet de params terug op de priors en wist leercurve + anomalie-
+    # state — en de nachtvoorspelling zou op priors naar de groep gaan. Dan liever
+    # een gemiste iteratie (run_guarded telt 'm; de volgende haalt bij). Een
+    # ontbrekend bestand is gewoon {} (koude start).
+    d = artefact_io.read_json("vent_learned.json", LEARNED_FILE, default={}, strict=True)
     return d if isinstance(d, dict) else {}
 
 def default_params(house: dict) -> dict:
@@ -683,16 +686,17 @@ def refine_outside_now(weather: dict) -> tuple[float | None, float | None]:
         out_rh_temp = wu_temp                 # rauwe WU-temp hoort bij de WU-RH (Magnus-paar)
         if wu_humid is not None:
             cur["relative_humidity_2m"] = wu_humid
-        print(f"[buiten] WU: {wu_temp}°C → gecorrigeerd {cur['temperature_2m']}°C "
-              f"(zon {solar_now} W/m², bron {src}); RH {wu_humid}%")
+        # Alleen de bron in het publieke log, niet de meetwaarden — zie dezelfde regel
+        # in window_advisor.main(): de ruwe stationsreeks is een vingerafdruk van het
+        # (geheime) station.
+        print(f"[buiten] WU, stralingscorrectie toegepast (bron {src})")
         # WU-gemeten-zon herschaling van de glas-drive rond nu: k = WU_global/OM_global.
         om_solar_now = cur.get("shortwave_radiation")
         if (wu_solar is not None and om_solar_now and om_solar_now >= WU_SOLAR_MIN_WM2
                 and wu_solar >= WU_SOLAR_MIN_WM2):
             wu_solar_scale = min(WU_SOLAR_SCALE_MAX,
                                  max(WU_SOLAR_SCALE_MIN, wu_solar / om_solar_now))
-            print(f"[zon] WU/OM glas-drive-herschaling k={wu_solar_scale:.2f} "
-                  f"(WU {wu_solar}, OM {om_solar_now} W/m²)")
+            print("[zon] WU/OM glas-drive-herschaling toegepast.")
     else:
         cur["outside_source"] = "open-meteo"
         print("[buiten] WU niet beschikbaar → Open-Meteo buiten-nu.")

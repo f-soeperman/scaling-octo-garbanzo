@@ -5,20 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="Content-Security-Policy" content="
   default-src 'none';
-  script-src 'self' https://cdn.jsdelivr.net;
+  script-src 'self';
   style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
   font-src https://fonts.gstatic.com;
   img-src 'self' data:;
   connect-src 'self' https://api.github.com https://gist.githubusercontent.com;
-  frame-ancestors 'none';
   base-uri 'none';
   form-action 'none';
 ">
 <title>Ventilatie-tweeling · Pineapple Under The Sea</title>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" crossorigin="anonymous">
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js" integrity="sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js" integrity="sha384-oNtu+d18330MVFpltUTve1DatxCkkctlpA2AC3GulbVFOSqhHdDat3qHse/Lbuek" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js" integrity="sha384-cVMg8E3QFwTvGCDuK+ET4PD341jF3W8nO1auiXfuZNQkzbUUiBGLsIQUE+b1mxws" crossorigin="anonymous"></script>
+<script src="js/vendor/chart.umd.js" integrity="sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG" crossorigin="anonymous"></script>
+<script src="js/vendor/chartjs-plugin-annotation.min.js" integrity="sha384-oNtu+d18330MVFpltUTve1DatxCkkctlpA2AC3GulbVFOSqhHdDat3qHse/Lbuek" crossorigin="anonymous"></script>
+<script src="js/vendor/chartjs-adapter-date-fns.bundle.min.js" integrity="sha384-cVMg8E3QFwTvGCDuK+ET4PD341jF3W8nO1auiXfuZNQkzbUUiBGLsIQUE+b1mxws" crossorigin="anonymous"></script>
 <link rel="stylesheet" href="css/shared.css?v=2">
   <style>
     h1 { font-size: clamp(38px, 5vw, 64px); line-height: 0.95; margin: 8px 0 4px; font-weight: 500; letter-spacing: -0.02em; font-style: italic; }
@@ -125,26 +124,29 @@
       <span class="grp-title" style="margin:0;">Tijdstip van wijziging</span>
       <input type="datetime-local" id="report-when">
     </label>
-    <label class="when-row" id="pause-row">
+    <!-- Bewust een <div> en geen <label>: een label om een knoppengroep activeert bij
+         een tik op de titel de EERSTE knop erin (bij "Meldingen" was dat "Aan" — een
+         tik op het woord schakelde de stille modus dus uit). -->
+    <div class="when-row" id="pause-row">
       <span class="grp-title" style="margin:0;">⏸️ Huis-status</span>
       <div class="seg" id="pause-seg">
         <button type="button" data-v="false">Normaal</button>
         <button type="button" data-v="true">Gepauzeerd</button>
       </div>
-    </label>
+    </div>
     <p style="font-style:italic;color:var(--ink-soft);font-size:12px;margin:6px 0 0;" id="pause-explain">
       Pauzeer als iemand anders thuis is en de standen niet betrouwbaar te melden zijn: het
       model voorspelt door maar leert dit venster niet. De velden hieronder worden dan grijs —
       alleen tijdstip en deze knop blijven bedienbaar. Ga je later terug om de écht opgetreden
       standen alsnog (teruggedateerd) te melden, zet dan op dat tijdstip ook de pauze zelf uit,
       anders blijft dat venster uit de kalibratie.</p>
-    <label class="when-row" id="quiet-row">
+    <div class="when-row" id="quiet-row">
       <span class="grp-title" style="margin:0;">🔕 Meldingen</span>
       <div class="seg" id="quiet-seg">
         <button type="button" data-v="false">Aan</button>
         <button type="button" data-v="true">Stil</button>
       </div>
-    </label>
+    </div>
     <p style="font-style:italic;color:var(--ink-soft);font-size:12px;margin:6px 0 0;">
       <em>Stil</em> onderdrukt de adviesberichten (weerbericht, raam-advies + dagplan,
       maai-, zandbak- en zonwering-advies, nachtvoorspelling) tot je ze weer
@@ -168,10 +170,10 @@
   </div>
 </div>
 
-<script src="js/theme.js"></script>
-<script src="js/shared.js?v=4"></script>
+<script src="js/theme.js?v=2"></script>
+<script src="js/shared.js?v=5"></script>
 <script src="js/vent_core.js?v=1"></script>
-<script src="js/speeltuin.js?v=8"></script>
-<script src="js/vent.js?v=8"></script>
+<script src="js/speeltuin.js?v=9"></script>
+<script src="js/vent.js?v=9"></script>
 </body>
 </html>

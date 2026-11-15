@@ -5,18 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="Content-Security-Policy" content="
   default-src 'none';
-  script-src 'self' https://cdn.jsdelivr.net;
+  script-src 'self';
   style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
   font-src https://fonts.gstatic.com;
   img-src 'self' data:;
   connect-src 'self' https://api.github.com https://gist.githubusercontent.com;
-  frame-ancestors 'none';
   base-uri 'none';
   form-action 'none';
 ">
 <title>Potje · Pineapple Under The Sea</title>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" crossorigin="anonymous">
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js" integrity="sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG" crossorigin="anonymous"></script>
+<script src="js/vendor/chart.umd.js" integrity="sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG" crossorigin="anonymous"></script>
 <link rel="stylesheet" href="css/shared.css?v=2">
   <style>
     /* Categoriekleuren: gevalideerd met de dataviz-validator op #f3ecd9
@@ -95,7 +94,7 @@
     <div>
       <div class="corner-mark" id="folio-mark"></div>
       <h1>Potje</h1>
-      <div class="subtitle">Zindelijkheidstraining — tik aan wat er gebeurde en sla op. 1 uur en 45 minuten na het laatste plasje (30 na een poging) volgt een herinnering in de groep, tussen 07:00 en 19:00.</div>
+      <div class="subtitle">Zindelijkheidstraining — tik aan wat er gebeurde en sla op. 2 uur na het laatste plasje (30 na een poging) volgt een herinnering in de groep, tussen 07:00 en 19:00.</div>
     </div>
     <div style="text-align:right;">
       <div class="corner-mark">Vandaag</div>
@@ -232,8 +231,8 @@
   De registraties staan in je eigen privé Gist en zijn alleen zichtbaar met een gekoppeld account. Nergens in de publieke repo of de Actions-logs staat wanneer er iets gebeurde.
 </footer>
 
-<script src="js/theme.js"></script>
-<script src="js/shared.js?v=4"></script>
-<script src="js/potje.js?v=5"></script>
+<script src="js/theme.js?v=2"></script>
+<script src="js/shared.js?v=5"></script>
+<script src="js/potje.js?v=6"></script>
 </body>
 </html>

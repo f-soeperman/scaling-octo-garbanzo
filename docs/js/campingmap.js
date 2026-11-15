@@ -14,9 +14,8 @@
 const CAMPING_MAP = {
   viewW: 1000,
   viewH: 839.6,
-  // project(lon, lat) -> [x, y] moet clientside met dezelfde formule (zie
-  // camping.js) omdat de pins uit de live regio-lat/lon in camping_data.json
-  // komen, niet uit dit statische bestand.
+  // project(lon, lat) -> [x, y]: camping.js projecteert de pins met dezelfde
+  // formule uit de vaste `regions` hieronder (niet uit camping_data.json).
   proj: { lonMin: -9.8, latMax: 54.2, cosLat0: 0.688355, scale: 55.2372 },
   labelOffset: {"utrecht": [14, -6, "start"], "berlijn": [14, -6, "start"], "parijs": [14, -6, "start"], "madrid": [14, -6, "start"]},
   regions: [{"id": "utrecht", "label": "Utrecht", "country": "NL", "lat": 52.09, "lon": 5.12}, {"id": "berlijn", "label": "Berlijn", "country": "DE", "lat": 52.52, "lon": 13.4}, {"id": "parijs", "label": "Parijs", "country": "FR", "lat": 48.86, "lon": 2.35}, {"id": "madrid", "label": "Madrid", "country": "ES", "lat": 40.42, "lon": -3.7}],

@@ -488,7 +488,7 @@ def run_main(monkeypatch, capsys, *, now, flags=None, state=None, snapshot=None,
     files = {gc.CONFIG_FILE: config, gc.FLAGS_FILE: flags or {},
              gc.STATE_FILE: state, gc.IRRIGATIONS_FILE: irrigations or {}}
     monkeypatch.setattr(gc, "read_gist_files",
-                        lambda names: {n: files.get(n) for n in names})
+                        lambda names, **k: {n: files.get(n) for n in names})
     monkeypatch.setattr(gc, "persist_files",
                         lambda f: calls["persisted"].append(f) or True)
     monkeypatch.setattr(gc, "send_telegram",
@@ -692,7 +692,7 @@ def test_ontbrekende_gist_config_is_nette_no_op(monkeypatch, capsys):
         monkeypatch.setenv(var, val)
     monkeypatch.delenv("DRY_RUN", raising=False)
     monkeypatch.setattr(gc, "read_gist_files",
-                        lambda names: {n: None for n in names})
+                        lambda names, **k: {n: None for n in names})
     gc.main()
     assert "configuratie onvolledig" in capsys.readouterr().out
 
@@ -743,3 +743,134 @@ def test_geen_verboden_vocabulaire():
               if "gardena" in ln.lower() or "P16" in ln]
     assert regels
     assert not any(pattern.search(ln) for ln in regels)
+
+
+# ── eigen sessie die binnen één uurlijks gat opent én sluit (nov 2026) ─────────
+# Elke grasbeurt is korter dan de cadans. De meter zag dat als dicht-op-dicht
+# (dat levert terecht nooit een interval op) → geen registratie, een vals
+# "lijkt niet te zijn opengegaan"-alert en een weeklimiet die niets meetelde.
+
+def _utc(dt):
+    return _iso(dt.astimezone(timezone.utc))
+
+
+def _start_grasbeurt(monkeypatch, capsys, t1):
+    r1 = run_main(monkeypatch, capsys, now=t1, flags={"auto_lawn": True},
+                  soil=_soil(proposal=30))
+    state = json.loads(r1["persisted"][-1][gc.STATE_FILE])
+    assert state["session"]["zone"] == "lawn"
+    assert state["meter"]["lawn"]["assumed"] is True
+    return state
+
+
+def test_korte_eigen_grasbeurt_wordt_gemeten_en_geregistreerd(monkeypatch, capsys):
+    t1 = local(2026, 8, 14, 5, 2)
+    state = _start_grasbeurt(monkeypatch, capsys, t1)
+    dicht_om = _utc(t1 + timedelta(minutes=30))      # hardware-autoclose
+    r2 = run_main(monkeypatch, capsys, now=t1 + timedelta(hours=1),
+                  flags={"auto_lawn": True}, state=state, soil=_soil(proposal=30),
+                  snapshot=_snap(lawn="CLOSED", lawn_ts=dicht_om))
+    assert not any("lijkt niet te zijn opengegaan" in t for t in r2["telegram"])
+    assert any("klaar" in t for t in r2["telegram"])
+    irr = json.loads(r2["persisted"][-1][gc.IRRIGATIONS_FILE])
+    assert irr["2026-08-14_lawn"] == pytest.approx(30 * gc.RATES["lawn"], abs=0.05)
+    uit = json.loads(r2["persisted"][-1][gc.STATE_FILE])
+    assert uit["session"] is None and uit["meter"]["lawn"]["open"] is False
+    assert uit["recent"]["lawn"]            # de weeklimiet telt de beurt mee
+
+
+def test_start_zonder_bevestiging_registreert_niets(monkeypatch, capsys):
+    """START geaccepteerd, maar de activity-ts staat nog op vóór het commando: de
+    kraan is niet opengegaan. Dan géén terugval op de gecommandeerde duur."""
+    t1 = local(2026, 8, 14, 5, 2)
+    state = _start_grasbeurt(monkeypatch, capsys, t1)
+    oud = _utc(t1 - timedelta(days=1))
+    r2 = run_main(monkeypatch, capsys, now=t1 + timedelta(hours=1),
+                  flags={"auto_lawn": True}, state=state, soil=_soil(proposal=30),
+                  snapshot=_snap(lawn="CLOSED", lawn_ts=oud))
+    assert any("lijkt niet te zijn opengegaan" in t for t in r2["telegram"])
+    assert gc.IRRIGATIONS_FILE not in r2["persisted"][-1]
+
+
+def test_meter_bevestigt_een_aangenomen_open_kraan_zonder_schijninterval():
+    now = local(2026, 8, 14, 22, 10)
+    aangenomen = gc.assume_open({"ts": "2026-08-13T20:00:00+00:00"}, now, 5400)
+    later = now + timedelta(hours=1)
+    open_ts = (now + timedelta(seconds=8)).astimezone(timezone.utc)
+    entry, klaar = gc.meter_step(aangenomen, True, open_ts, 5400, later)
+    assert klaar == [] and entry["open"] is True and "assumed" not in entry
+    assert gc.parse_ts(entry["since"]) == open_ts
+    # Dicht-op-dicht zonder eigen commando verzint nog steeds nooit een beurt.
+    dicht = {"open": False, "since": None, "cmd_s": None,
+             "ts": "2026-08-13T20:00:00+00:00", "checked": _iso(now)}
+    assert gc.meter_step(dicht, False, open_ts, None, later)[1] == []
+
+
+def test_klaarbericht_telt_de_hele_sessie_niet_alleen_de_laatste_chunk(monkeypatch, capsys):
+    t0 = local(2026, 8, 14, 22, 10)
+    r = run_main(monkeypatch, capsys, now=t0, soil=_soil(proposal=180))
+    st, irr, berichten = json.loads(r["persisted"][-1][gc.STATE_FILE]), {}, []
+    stappen = [(60, "MANUAL_WATERING", 0, 5400), (120, "MANUAL_WATERING", 60, 5400),
+               (180, "MANUAL_WATERING", 120, 3600), (240, "CLOSED", 180, None)]
+    for off, act, ts_off, dur in stappen:
+        r = run_main(monkeypatch, capsys, now=t0 + timedelta(minutes=off), state=st,
+                     soil=_soil(proposal=180), irrigations=irr,
+                     snapshot=_snap(shrubs=act, shrubs_dur=dur,
+                                    shrubs_ts=_utc(t0 + timedelta(minutes=ts_off))))
+        laatste = r["persisted"][-1]
+        st = json.loads(laatste[gc.STATE_FILE])
+        if gc.IRRIGATIONS_FILE in laatste:
+            irr = json.loads(laatste[gc.IRRIGATIONS_FILE])
+        berichten += r["telegram"]
+    # De sessie loopt over middernacht: de registraties vallen op twee datums.
+    totaal_mm = round(sum(v for k, v in irr.items() if k.endswith("_shrubs")), 1)
+    assert totaal_mm == pytest.approx(180 * gc.RATES["shrubs"], abs=0.1)
+    klaar = [t for t in berichten if "klaar" in t]
+    assert len(klaar) == 1 and "3 uur" in klaar[0]
+    assert f"{totaal_mm:.1f} mm" in klaar[0]
+
+
+def test_gist_reader_volgt_afgekapte_bestanden_en_onleesbaar_logboek_is_geen_leeg(monkeypatch):
+    """De Gist-API kapt ook kleine bestanden af zodra de respons groot wordt. De
+    eigen reader las dat als "geen bestand"; voor het irrigatielogboek betekende
+    dat: het hele logboek vervangen door alleen de nieuwe registratie."""
+    monkeypatch.setenv("GIST_ID", "g")
+    monkeypatch.setenv("GH_TOKEN", "t")
+
+    class _Resp:
+        status_code = 200
+
+        def __init__(self, payload=None, text=None):
+            self._payload, self.text = payload, text
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, headers=None, timeout=None):
+        if "raw" in url:
+            return _Resp(text='{"2026-08-01_lawn": 5.0}')
+        return _Resp({"files": {
+            gc.IRRIGATIONS_FILE: {"truncated": True, "content": "",
+                                  "raw_url": "https://x/raw/irr"},
+            gc.STATE_FILE: {"content": "{half"}}})
+
+    monkeypatch.setattr(gc.gist_io.requests, "get", fake_get)
+    got = gc.read_gist_files((gc.IRRIGATIONS_FILE, gc.STATE_FILE, gc.FLAGS_FILE))
+    assert got[gc.IRRIGATIONS_FILE] == {"2026-08-01_lawn": 5.0}
+    assert got[gc.STATE_FILE] is None and got[gc.FLAGS_FILE] is None
+    with pytest.raises(ValueError):
+        gc.read_gist_files((gc.STATE_FILE,), strict=(gc.STATE_FILE,))
+
+
+def test_ongewijzigde_sensorrij_stuurt_de_maand_niet_opnieuw_mee(monkeypatch):
+    rij = {"t": "2026-08-14T10:10:00+00:00", "soil_hum": 31}
+    opgeslagen = {"schema": gc.SHARD_SCHEMA, "month": "2026-08", "rows": []}
+    monkeypatch.setattr(gc, "_history_gist_active", lambda: True)
+    monkeypatch.setattr(gc, "load_shard", lambda month: json.loads(json.dumps(opgeslagen)))
+    eerste = gc.append_sensor_rows([rij])
+    assert list(eerste) == [gc._history_name("2026-08")]
+    opgeslagen = json.loads(eerste[gc._history_name("2026-08")])
+    assert gc.append_sensor_rows([rij]) == {}

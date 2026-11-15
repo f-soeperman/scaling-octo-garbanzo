@@ -135,17 +135,20 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # docs/data.json bestaat alleen nog in de bootstrap-terugval (zonder
-          # ARTEFACT_GIST_ID); in gist-modus is er niets lokaals om te stagen en
-          # zou een kale pathspec de stap laten falen.
-          git add soil_state.json
-          [ ! -f docs/data.json ] || git add docs/data.json
+          # Alleen het meldslot. data.json leeft in de privé artefact-gist; de
+          # lokale terugval (zonder ARTEFACT_GIST_ID) staat in .gitignore en hoort
+          # ook nooit gecommit te worden — `git add` op een genegeerd pad faalt.
+          # soil_state.json leeft sinds nov 2026 ook in de artefact-gist; de eerste
+          # gist-run verwijdert de nog gecommitte kopie (zelf-uitvoerende
+          # migratie). Alleen een nog gevolgd bestand stagen (wijziging óf deletie).
+          if git ls-files --error-unmatch soil_state.json >/dev/null 2>&1; then
+            git add -A -- soil_state.json
+          fi
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
-            # [skip ci]: dit is een data-commit en draait sinds de uurlijkse
-            # cadans 24× per dag — zonder de marker zou elke verversing de
-            # hele pytest-suite starten. Zelfde patroon als window/vent/mowing.
+            # [skip ci]: dit is een data-commit; de marker houdt de testsuite
+            # buiten de data-verversingen. Zelfde patroon als window/vent/mowing.
             git commit -m "data: soil refresh $(date -u +%Y-%m-%dT%H:%M) [skip ci]"
             # De window/vent-loops committen de hele dag door naar main —
             # zonder rebase kan deze push racen en faalt de update stilletjes.
@@ -157,8 +160,21 @@ jobs:
             # en `soil_state.json` niet stilletjes achterblijft bij een
             # verstuurd bericht.
             git rebase --abort 2>/dev/null || true
-            if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}"; then
-              git push
+            # Tot drie pogingen: tussen pull en push zit een venster van ~1 s waarin
+            # een andere pijplijn naar main kan pushen (de bodem- en kampeer-run
+            # committen elke ochtend seconden na elkaar). Eén verloren race maakte de
+            # run rood, en de herkansing herhaalde dan wat al verstuurd was.
+            pushed=""
+            for attempt in 1 2 3; do
+              if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}" && git push; then
+                pushed=1
+                break
+              fi
+              git rebase --abort 2>/dev/null || true
+              sleep $(( attempt * 5 ))
+            done
+            if [ -n "$pushed" ]; then
+              :
             else
               git rebase --abort 2>/dev/null || true
               echo "::error::rebase failed, daily data not pushed"

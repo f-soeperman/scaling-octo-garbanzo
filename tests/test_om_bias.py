@@ -233,11 +233,23 @@ def test_night_weight_halveert_precies_op_de_grens():
 def test_night_weight_loopt_monotoon_door_de_overgang():
     # Rond NIGHT_START moet het gewicht netjes van 0 naar 1 lopen, zonder sprong.
     start = om_bias.NIGHT_START
-    ws = [night_weight(datetime(2026, 7, 29, start - 1, m)) for m in (0, 30)]
-    ws += [night_weight(datetime(2026, 7, 29, start, m)) for m in (0, 30)]
+    # Op kwartieren: de tweeling past de correctie per kwartierstap toe, en de
+    # sprong zat precies in het halfuur vóór de grens (21:45 → 0 i.p.v. 0,25).
+    kwartieren = (0, 15, 30, 45)
+    ws = [night_weight(datetime(2026, 7, 29, start - 1, m)) for m in kwartieren]
+    ws += [night_weight(datetime(2026, 7, 29, start, m)) for m in kwartieren]
     ws += [night_weight(datetime(2026, 7, 29, start + 1, 0))]
     assert ws[0] == 0.0 and ws[-1] == 1.0
     assert all(b >= a for a, b in zip(ws, ws[1:]))
+    assert max(b - a for a, b in zip(ws, ws[1:])) == pytest.approx(0.25)
+    assert night_weight(datetime(2026, 7, 29, start - 1, 45)) == pytest.approx(0.25)
+
+
+def test_night_weight_loopt_ook_gelijkmatig_uit_bij_het_nachteinde():
+    einde = om_bias.NIGHT_END
+    assert night_weight(datetime(2026, 7, 29, einde - 1, 45)) == pytest.approx(0.75)
+    assert night_weight(datetime(2026, 7, 29, einde, 15)) == pytest.approx(0.25)
+    assert night_weight(datetime(2026, 7, 29, einde, 30)) == 0.0
 
 
 def test_night_weight_blijft_binnen_bereik():
@@ -265,15 +277,16 @@ def test_volledige_cyclus_vastleggen_afrekenen_leren():
     log, hist = {}, []
     issue = datetime(2026, 7, 20, 6, 0)
     valid_hours = []
-    for d in range(om_bias.MIN_SAMPLES):           # genoeg nachturen verzamelen
+    uren = 0
+    while len(valid_hours) < om_bias.MIN_SAMPLES:  # genoeg nachturen verzamelen
+        d, uren = uren, uren + 1
         v = issue + timedelta(hours=12 + d)
         log = record_forecast(log, [{"dt": v, "temp": 25.0}], v - timedelta(hours=12))
         if is_night(v):
             valid_hours.append(v)
         hist.append({"t": v.isoformat(), "temp": 23.5, "om": 25.0, "src": "wu"})
-    end = issue + timedelta(hours=12 + om_bias.MIN_SAMPLES)
+    end = issue + timedelta(hours=12 + uren)
     log = verify_pending(log, hist, end)
     out = learn(log)
-    assert out["n_night"] == len(valid_hours)
-    if len(valid_hours) >= om_bias.MIN_SAMPLES:
-        assert out["night"] == pytest.approx(1.5)
+    assert out["n_night"] == len(valid_hours) >= om_bias.MIN_SAMPLES
+    assert out["night"] == pytest.approx(1.5)

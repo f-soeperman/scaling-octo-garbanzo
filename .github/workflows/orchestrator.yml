@@ -33,7 +33,8 @@ on:
         type: boolean
         default: false
 
-# De orchestrator dispatcht enkel andere workflows — geen app-secrets nodig.
+# De orchestrator dispatcht enkel andere workflows. Enige app-secret: het
+# Gist-token, read-only, voor het reminder-tijdstip van de zonwering.
 # actions:write mag workflow_dispatch triggeren (de gedocumenteerde uitzondering
 # op de "GITHUB_TOKEN-events starten geen runs"-anti-recursieregel) en impliceert
 # actions:read voor `gh run list`. contents:read voor de checkout is genoeg.
@@ -58,6 +59,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          # Alleen om shade_state.json (reminder-tijdstip) uit de privé
+          # artefact-gist te lezen — read-only, zie het zonwering-blok.
+          ARTEFACT_GIST_ID: ${{ secrets.ARTEFACT_GIST_ID }}
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
         run: |
           set -u
@@ -85,7 +90,28 @@ jobs:
               echo "::warning::handled_since($wf) query mislukte — fail-safe: behandel als al gedaan (${count})"
               return 0
             fi
-            [ "${count:-0}" -gt 0 ]
+            # `2>&1` hierboven vouwt stderr in $count. Slaagt gh mét een
+            # waarschuwing op stderr, dan is $count geen getal en zou de test
+            # hieronder met een fout "niet gedaan" teruggeven — een dubbele
+            # dispatch, precies wat de fail-safe moet voorkomen.
+            case "$count" in
+              ''|*[!0-9]*)
+                echo "::warning::handled_since($wf) gaf geen telling — fail-safe: behandel als al gedaan"
+                return 0;;
+            esac
+            [ "$count" -gt 0 ]
+          }
+
+          # Dedup-anker voor een DAGELIJKS doel: het doelmoment zelf (min een
+          # minuut klokspeling), niet middernacht. GitHub vuurt fallback-crons
+          # soms uren te laat af; zo'n run van ná middernacht wordt door zijn
+          # eigen guard terecht overgeslagen, maar eindigt als "success" in het
+          # ledger. Met middernacht als anker telde hij daarna als "vandaag al
+          # gedaan" — voor de orchestrator én voor de fallback van die dag. Zo
+          # viel de nachtvoorspelling in nov 2026 dagen achter elkaar uit, en
+          # de ochtend-zandbak na elke te late avond-cron.
+          anchor () {
+            echo $(( $(TZ=Europe/Amsterdam date -d "today $1" +%s) - 60 ))
           }
 
           # Heeft de bodem-check (daily-check.yml) sinds epoch $1 een geslaagde,
@@ -117,12 +143,11 @@ jobs:
           # De uurlijkse doelen (bodem/maaien) hebben geen doeltijd maar een
           # venster: `hour_start`, het begin van het lopende klokuur.
           tick () {
-            local h m nowm day_start evening_epoch hour_start now_epoch rem rem_min q2 q3 q4
+            local h m nowm day_start hour_start now_epoch rem rem_min q2 q3 q4
             h=$(TZ=Europe/Amsterdam date +%H)
             m=$(TZ=Europe/Amsterdam date +%M)
             nowm=$(( 10#$h * 60 + 10#$m ))
             day_start=$(TZ=Europe/Amsterdam date -d "today 00:00" +%s)
-            evening_epoch=$(TZ=Europe/Amsterdam date -d "today 20:00" +%s)
             # Begin van het lopende klokuur. Bewust epoch-afronding i.p.v.
             # `date -d "today ${h}:00"`: dat laatste is dubbelzinnig op de
             # DST-nacht (het uur bestaat twee keer, of helemaal niet), terwijl
@@ -133,7 +158,7 @@ jobs:
             echo "tick — lokaal ${h}:${m} (${nowm} min), day_start=${day_start}, hour_start=${hour_start}"
 
             # Weerbriefing — 05:00
-            if [ "$nowm" -ge 300 ] && ! handled_since weather-briefing.yml "$day_start"; then
+            if [ "$nowm" -ge 300 ] && ! handled_since weather-briefing.yml "$(anchor 05:00)"; then
               dispatch weather-briefing.yml
             fi
 
@@ -177,24 +202,24 @@ jobs:
 
             # Zandbak ochtend — 08:00 (alleen vóór het avond-slot afvuren)
             if [ "$nowm" -ge 480 ] && [ "$nowm" -lt 1200 ] \
-               && ! handled_since sandbox-notify.yml "$day_start"; then
+               && ! handled_since sandbox-notify.yml "$(anchor 08:00)"; then
               dispatch sandbox-notify.yml -f mode=morning
             fi
 
             # Zandbak avond — 20:00 (dedup vanaf 20:00, zodat de ochtendrun niet meetelt)
             if [ "$nowm" -ge 1200 ] \
-               && ! handled_since sandbox-notify.yml "$evening_epoch"; then
+               && ! handled_since sandbox-notify.yml "$(anchor 20:00)"; then
               dispatch sandbox-notify.yml -f mode=evening
             fi
 
             # Verwarmingsexperiment — maandag 21:00 (arm van de week)
             if [ "$(TZ=Europe/Amsterdam date +%u)" = "1" ] && [ "$nowm" -ge 1260 ] \
-               && ! handled_since heating-temp-notify.yml "$day_start"; then
+               && ! handled_since heating-temp-notify.yml "$(anchor 21:00)"; then
               dispatch heating-temp-notify.yml
             fi
 
             # Zonwering-plan — 08:15 (na de weerbriefing, vóór de eerste zonlast)
-            if [ "$nowm" -ge 495 ] && ! handled_since shade-notify.yml "$day_start"; then
+            if [ "$nowm" -ge 495 ] && ! handled_since shade-notify.yml "$(anchor 08:15)"; then
               dispatch shade-notify.yml -f mode=plan
             fi
 
@@ -203,8 +228,20 @@ jobs:
             # alleen WANNEER — het script hervalideert alles zelf en is idempotent
             # (reminder_sent in de state), dus herhaalde dispatches tot de
             # state-commit landt zijn goedkope no-ops.
-            rem=$(gh api "repos/${GH_REPO}/contents/shade_state.json" --jq '.content' 2>/dev/null \
-                  | base64 -d 2>/dev/null \
+            # Sinds nov 2026 leeft de state in de privé artefact-gist (de
+            # dagelijkse commit was een afgeleide van de gemelde zonweringstanden).
+            # Zonder de gist-secrets: de oude gecommitte kopie (bootstrap).
+            if [ -n "${ARTEFACT_GIST_ID:-}" ] && [ -n "${GIST_TOKEN:-}" ]; then
+              shade_json=$(curl -sS --fail --max-time 20 \
+                    -H "Authorization: Bearer ${GIST_TOKEN}" \
+                    -H "Accept: application/vnd.github+json" \
+                    "https://api.github.com/gists/${ARTEFACT_GIST_ID}" 2>/dev/null \
+                  | jq -r '.files["shade_state.json"].content // empty' 2>/dev/null) || shade_json=""
+            else
+              shade_json=$(gh api "repos/${GH_REPO}/contents/shade_state.json" --jq '.content' 2>/dev/null \
+                  | base64 -d 2>/dev/null) || shade_json=""
+            fi
+            rem=$(printf '%s' "$shade_json" \
                   | jq -r --arg today "$(TZ=Europe/Amsterdam date +%F)" \
                       'select(.date == $today and .plan_sent == true and .reminder_sent != true)
                        | .reminder_at // empty' 2>/dev/null) || rem=""
@@ -216,13 +253,13 @@ jobs:
             fi
 
             # de kinderkamer-nachtvoorspelling — 18:45
-            if [ "$nowm" -ge 1125 ] && ! handled_since night-forecast.yml "$day_start"; then
+            if [ "$nowm" -ge 1125 ] && ! handled_since night-forecast.yml "$(anchor 18:45)"; then
               dispatch night-forecast.yml
             fi
 
             # Weekjournaal — zondag 20:00
             if [ "$(TZ=Europe/Amsterdam date +%u)" = "7" ] && [ "$nowm" -ge 1200 ] \
-               && ! handled_since weekjournaal.yml "$day_start"; then
+               && ! handled_since weekjournaal.yml "$(anchor 20:00)"; then
               dispatch weekjournaal.yml
             fi
 
@@ -271,3 +308,20 @@ jobs:
               sleep $(( next - now ))
             fi
           done
+
+      # Opvolger meteen klaarzetten (zelfde patroon als potty-reminder.yml): hij
+      # wacht in de concurrency-groep tot deze run klaar is en neemt dan direct
+      # over, zonder op een cron-kick te wachten. Die kicks laat GitHub
+      # geregeld uren vallen — op 9 nov 2026 lang genoeg om de maandagavond-
+      # dispatch van het verwarmingsexperiment helemaal te missen (en de
+      # fallback-cron van 21:40 vuurde pas ná middernacht, dus die week kreeg
+      # geen bericht en geen logregel). Dit herstelt de bedoelde, constante
+      # cadans; het verandert hem niet. Alleen op main en niet bij een dry-run.
+      - name: Dispatch successor loop
+        if: ${{ success() && !inputs.dry_run && github.ref_name == 'main' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh workflow run orchestrator.yml --ref main \
+            || echo "::warning::opvolger dispatchen mislukt — de cron-kick neemt over"
