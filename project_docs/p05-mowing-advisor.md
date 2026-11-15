@@ -42,3 +42,9 @@ De accumulatiecurve op `docs/mowing.html` heeft er structureel twee, en `chartNo
 
 ## Relation to other projects
 Independent except for **one deliberate read-only consumption** of `docs/data.json` (never imports `soil_model`, never writes `data.json`). Draait elk uur, telkens ná de geslaagde bodem-run van dát uur (de orchestrator poort daarop met `soil_success_since "$hour_start"`) — in de praktijk ~15 min erna. No new secrets — reuses Telegram + `GIST_ID`/`GIST_TOKEN`.
+
+### Doorlichting nov 2026
+- **Stdout vormvast:** geen slot-, cadans- of verzendregel en geen byte-telling meer buiten `DRY_RUN`. Een zojuist gelogde maaibeurt heropent het slot en laat het artefact een regel groeien — beide dateerden de handeling op het uur.
+- **Strict reads** voor `mowings.json` en `mowing_state.json`: een léésfout las als een koude start en reset het meldgeheugen.
+- **Zelfkalibratie** telt alleen intervallen die volledig binnen het datavenster vallen (een afgekapt interval trok de geleerde drempel omlaag).
+- `mowing-notify.yml` commit niets meer (`contents: read`).

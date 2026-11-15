@@ -30,3 +30,9 @@
   the page `<style>` block, so page-specific deviations win at equal specificity). camping.html has
   its own posterthema and deliberately doesn't use it.
 - CDN scripts carry SRI `integrity` hashes (computed from the npm tarballs); bump version → recompute.
+
+### Doorlichting nov 2026
+- `artefactReadJSON` valt met een gekoppelde artefact-gist niet meer terug op het lokale pad (dat bestaat niet meer) en meldt een geweigerd token of onbereikbare gist als zodanig.
+- `localIsoDate()` in shared.js voor standaarddatums — `toISOString()` is UTC en geeft vlak na middernacht de datum van gisteren.
+- Zet een knoppengroep nooit in een `<label>`: een tik op de labeltekst activeert de eerste knop erin.
+- `frame-ancestors` is uit de meta-CSP's gehaald (browsers negeren die directive in een `<meta>`).

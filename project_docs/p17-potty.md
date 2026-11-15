@@ -35,3 +35,6 @@ Een plas-/poeplogboek met tijdstempels is gedragsdata (dagritme, en een dag zond
 
 ## Relation to other projects
 Volledig onafhankelijk. Hergebruikt `GIST_ID`/`GIST_TOKEN`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_GROUP_ID` (herinnering) en `TELEGRAM_CHAT_ID` (alerts). Geen nieuwe secrets.
+
+### Doorlichting nov 2026
+De Gist-schrijf van de loop gaat via `_quiet_write`: `gist_io.write_files` logt een 409-herkansing, en hier wordt alleen geschreven als er een herinnering uitgaat of een registratie wordt afgevinkt — die regel dateerde dat moment in het publieke log. De loop leest alleen zijn twee eigen bestanden (`read_files(names=…)`), niet de maand-shards in dezelfde Gist.

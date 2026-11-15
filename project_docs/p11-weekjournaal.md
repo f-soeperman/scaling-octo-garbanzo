@@ -5,7 +5,7 @@
 **Goal:** One Sunday-evening Telegram digest (orchestrator target zondag 20:00) summarizing the week across the pipelines — pure aggregation of the already-published artefacts, no new data fetching.
 
 ## Files
-- `weekjournaal.py` — per-section pure functions over the local checkout artefacts (env-path overrides for tests)
+- `weekjournaal.py` — per-section pure functions; de bodem-, maai- en tweeling-artefacten komen in één call uit de privé artefact-gist (`artefact_io.read_many`), alleen `accuracy_data.json` staat nog in de checkout (env-path overrides for tests)
 - `.github/workflows/weekjournaal.yml` — fallback cron zo 20:40 + guard-job; `contents: read`; no in-job retry (no external API besides Telegram, which has its own retry)
 
 ## Sections (each independently optional — missing/stale artefact → section silently omitted)
@@ -13,8 +13,8 @@
 - 🌾 **Maaien** (`docs/mowing_data.json`): mows this week from `mowings`, `accum_today` vs `params.READY_GU_effective`, next-mow prediction / maairijp / winterrust.
 - 🧠 **Tweeling** (`docs/vent_learned.json`, env-override `VENT_LEARNED_PATH`): RMSE now vs the last non-`held` point ≥ `RMSE_LOOKBACK_D 6.5` days back (fallback: earliest) + skill + trend arrow.
 - 🌤️ **Weer** (`docs/data.json`): Tmax range (bias-corrected where available), week precip, warmest day.
-- 📡 **Station** (`docs/accuracy_data.json`): overall bias one-liner, only when the (manual-dispatch) check is younger than `STATION_MAX_AGE_D 30` — stale → omitted rather than misleading.
+- 📡 **Station** (`docs/accuracy_data.json`): overall bias one-liner, only when the (maandelijkse) check is younger than `STATION_MAX_AGE_D 40` — stale → omitted rather than misleading.
 - All sections `None` → no message. Defensive truncation at `MAX_LEN 4000` (< Telegram's 4096; `send_telegram` doesn't chunk).
 
 ## Relation to other projects
-Read-only aggregation of the published artefacts of Projects 1, 5, 7, 13 from the local checkout (the `mowing_advisor` `open()`-pattern). Stateless. Telegram secrets only.
+Read-only aggregation of the published artefacts of Projects 1, 5, 7, 13 (artefact-gist via `artefact_io`; zonder `ARTEFACT_GIST_ID` de lokale paden). Stateless. Telegram secrets only.

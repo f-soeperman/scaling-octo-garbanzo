@@ -35,7 +35,7 @@
   concurrency group `airflow-advisor` (**deliberately kept name** — serializes against any
   pre-rename loop run still alive).
 - `docs/vent.html` + `docs/js/vent.js` — dashboard: **meldmodal** (writes `house_openings.json`
-  in the non-secret `GIST_ID` Gist + `workflow_dispatch`; incl. de airco-dropdown en de
+  in the non-secret `GIST_ID` Gist — bewust zónder workflow-dispatch; incl. de airco-dropdown en de
   huis-brede pauze-toggle), plattegrond met stroompijlen, kamerkaarten, temperatuurgrafiek
   (**24u terug + 12u vooruit**, met sinds aug 2026 een **p10/p90-band** om de vooruitblik per
   kamer uit `docs/js/uncertainty.json` — hulpdatasets met een "_"-label, gefilterd uit
@@ -415,3 +415,10 @@ Geen tado-auth, geen nieuwe secrets (WU-, privé-chat-Telegram- en Gist-secrets 
   draagt `exclude_from_fit` + `hide_in_charts` in `house_model.json`, dus ze leert niet meer mee
   en staat in geen enkele grafiek. Dat zijn de twee generieke vlaggen — géén bath-specifieke
   code — en een nieuwe uitzondering hoort langs dezelfde weg te lopen of helemaal niet.
+
+### Doorlichting nov 2026
+- **Stdout is nu echt vormvast.** De regel "N samples over K kamers", de RMSE-regel, de aparte regel voor een venster zonder samples en de byte-telling van `vent_data.json` hingen allemaal af van `actual` ná de pauze-/airco-/verwarmingsfilters: het sample-aantal zakte per kwartier zodra een pauze inging, het kameraantal was "alle min de airco-/gestookte kamers". Eén regel `[leren] kalibratiestap afgerond.` voor elke uitkomst; `tests/test_vent_twin.py` draait `main()` met en zonder pauze/airco en vergelijkt de logs.
+- **`load_learned` is strict**: een léésfout op de artefact-gist breekt de iteratie af i.p.v. de params naar de priors te zetten en leercurve + anomalie-state te wissen (en de nachtvoorspelling op priors te laten rekenen).
+- **`vent-notify.yml`** staget alleen nog `data/forecast_log`.
+- **Open — te méten, niet aangenomen:** `calibrate` geeft `measured=` (de γ-waarneming) wél door aan de eerste residuen maar niet aan de Jacobiaan-kolommen, de proefstap en de eind-RMSE; de fit mengt daardoor twee modelvarianten. Rechtzetten verandert het fit-traject en hoort dus met een re-seed + `tools/horizon_backtest.py` (beide armen), niet als bijvangst.
+- **Open — tools:** `tools/vent_diagnostics.py` leest nog de lokale `docs/vent_*.json` (nu gist-only) en gescrubde velden; `tools/horizon_backtest.py` past `om_learned` en de routines niet toe en scoort dus niet exact de productie-vooruitblik; `tools/export_uncertainty.py` zet `heating_season_observed` hard op False terwijl het record inmiddels november bereikt; `tools/airflow_distill.py` bemonstert de stand `"half"`, die geen openingsstand is (fractie 0).

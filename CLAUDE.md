@@ -129,6 +129,22 @@ later fallback cron plus a dedup guard job. P1, P5 and P16 run hourly so their d
 with the day; their *messages* do not scale with that — each script decides its one message
 slot per day (`shared_const.past_local_time` + a per-project day memory).
 
+**Dedup-anker = het doelmoment, niet middernacht (nov 2026).** GitHub fires fallback crons
+hours late at times. A late run that lands after midnight is skipped by its guard's clock gate,
+but still ends as a successful run in the ledger; with a midnight anchor it then counted as
+"already handled today" for both the orchestrator and that day's own fallback. That silently
+dropped the night forecast for days and the morning sandbox run after every late evening cron.
+Every daily dedup — `handled_since … "$(anchor HH:MM)"` in the orchestrator and `since=` in
+the guards — therefore counts from the job's own target time. A new daily job needs both: a
+clock gate in its guard and a target-time anchor on both sides. The orchestrator also
+dispatches its own successor at the end of a loop (the potty-loop pattern), so a dropped cron
+kick no longer leaves a hole in the clock. `tests/test_workflow_guards.py` replays the real
+scripts against a simulated ledger.
+
+**Committing workflows** retry `pull --rebase` + `push` up to three times, and never
+`git add` a gitignored path (that fails instead of doing nothing): the privatised artefacts are
+not staged anywhere.
+
 **Deliberate hand-offs — all read-only, everything else is independent:**
 
 - P5 reads P1's `data.json`. P16 reads it too and is the only *second writer* of
