@@ -211,3 +211,23 @@ def test_edit_telegram_status(monkeypatch, code, expected):
         status_code = code
     monkeypatch.setattr(notify.requests, "post", lambda *a, **k: _Resp())
     assert notify.edit_telegram("c", 5, "tekst") == expected
+
+
+def test_ratelimited_is_geen_crash(sent, tmp_path, monkeypatch):
+    """429 van een gedeeld runner-IP: exit 75 + merkbestand voor de loops, geen
+    alert en de crash-teller blijft onaangeroerd."""
+    from http_util import RateLimited
+
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    counter = tmp_path / "c"
+    counter.write_text("4")
+
+    def limiet():
+        raise RateLimited("Daily API request limit exceeded.")
+
+    with pytest.raises(SystemExit) as exc:
+        run_guarded(limiet, "loop", fail_threshold=5, counter_file=str(counter))
+    assert exc.value.code == notify.RATE_LIMITED_EXIT == 75
+    assert sent == []
+    assert counter.read_text() == "4"
+    assert (tmp_path / notify.RATE_LIMITED_MARKER).exists()

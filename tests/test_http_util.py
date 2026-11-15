@@ -62,3 +62,67 @@ def test_raist_na_laatste_poging(monkeypatch):
     with pytest.raises(requests.ConnectionError):
         http_util.get_json("https://x", attempts=3)
     assert pogingen["n"] == 3
+
+
+class _Resp429:
+    status_code = 429
+
+    def __init__(self, reason):
+        self._reason = reason
+
+    def raise_for_status(self):
+        raise requests.HTTPError("429 Client Error")
+
+    def json(self):
+        return {"error": True, "reason": self._reason}
+
+
+def test_429_uurlimiet_raist_meteen_ratelimited(monkeypatch):
+    """Uur-/daglimiet van het gedeelde runner-IP: herhalen vanaf hetzelfde IP is
+    zinloos, dus geen backoff-pogingen maar meteen RateLimited."""
+    pogingen = {"n": 0}
+    slaap = []
+
+    def limiet(url, params=None, timeout=None):
+        pogingen["n"] += 1
+        return _Resp429("Hourly API request limit exceeded. Please try again in the next hour.")
+
+    monkeypatch.setattr(http_util.requests, "get", limiet)
+    monkeypatch.setattr(http_util.time, "sleep", slaap.append)
+    with pytest.raises(http_util.RateLimited) as exc:
+        http_util.get_json("https://x")
+    assert pogingen["n"] == 1
+    assert slaap == []
+    assert exc.value.rate_limited is True
+    assert "Hourly" in str(exc.value)
+    # Blijft een HTTPError: bestaande `except requests.RequestException`-fallbacks
+    # bij de aanroepers vangen het nog steeds.
+    assert isinstance(exc.value, requests.HTTPError)
+
+
+def test_429_minuutlimiet_wacht_en_herstelt(monkeypatch):
+    pogingen = {"n": 0}
+    slaap = []
+
+    def eenmaal_limiet(url, params=None, timeout=None):
+        pogingen["n"] += 1
+        if pogingen["n"] == 1:
+            return _Resp429("Minutely API request limit exceeded. Please try again in one minute.")
+        return _Resp({"ok": True})
+
+    monkeypatch.setattr(http_util.requests, "get", eenmaal_limiet)
+    monkeypatch.setattr(http_util.time, "sleep", slaap.append)
+    assert http_util.get_json("https://x") == {"ok": True}
+    assert slaap == [http_util.RATE_LIMIT_MINUTE_WAIT]
+
+
+def test_429_zonder_leesbare_body_is_ratelimited(monkeypatch):
+    class _Kaal(_Resp429):
+        def json(self):
+            raise ValueError("geen json")
+
+    monkeypatch.setattr(http_util.requests, "get",
+                        lambda url, params=None, timeout=None: _Kaal(""))
+    monkeypatch.setattr(http_util.time, "sleep", lambda s: None)
+    with pytest.raises(http_util.RateLimited):
+        http_util.get_json("https://x")

@@ -111,6 +111,14 @@ jobs:
           for i in $(seq 1 "${ITERS}"); do
             echo "=== iteration ${i}/${ITERS} at $(date -u +%H:%M:%SZ) ==="
             run_once
+            # Open-Meteo weigert dit runner-IP (429, uur-/daglimiet van een gedeeld
+            # GitHub-IP — nov 2026: een hele loop lang, terwijl andere runners
+            # slaagden). Wachten helpt op dit IP niet: stop de loop, de wachtende
+            # herstart-kick start meteen een nieuwe op een andere runner.
+            if [ -f "${RUNNER_TEMP}/open_meteo_rate_limited" ]; then
+              echo "::warning::API-limiet op dit runner-IP — loop stopt, een verse runner neemt over"
+              break
+            fi
             if [ "${i}" -lt "${ITERS}" ]; then
               now=$(date -u +%s)
               next=$(( (now / 900 + 1) * 900 ))
