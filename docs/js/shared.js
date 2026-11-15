@@ -163,16 +163,30 @@ function ensureArtefactConfig() {
   return true;
 }
 
+// Lokale kalenderdatum (YYYY-MM-DD). `toISOString()` geeft de UTC-datum: tussen
+// middernacht en 01:00/02:00 lokaal is dat nog gisteren (en op de 1e de vorige maand).
+function localIsoDate(d = new Date()) {
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 async function artefactReadJSON(filename, fallbackUrl) {
   if (CONFIG.artefactGistId && CONFIG.githubToken) {
     const r = await fetch(`https://api.github.com/gists/${CONFIG.artefactGistId}`,
       { headers: { Authorization: `token ${CONFIG.githubToken}` }, cache: "no-store" });
-    if (r.ok) {
-      const content = await gistFileText((await r.json()).files?.[filename]);
-      if (content) return JSON.parse(content);
+    // Met een gekoppelde gist is dát de bron — geen terugval op het lokale pad. Dat
+    // pad bestaat niet meer (de artefacten zijn privé), dus de terugval maakte van
+    // elk echt probleem (verlopen token, rate limit) een nietszeggend "HTTP 404".
+    if (!r.ok) {
+      throw new Error(r.status === 401 || r.status === 403
+        ? `artefact-gist weigert het token (HTTP ${r.status}) — controleer 🔑 Account`
+        : `artefact-gist niet bereikbaar (HTTP ${r.status})`);
     }
-    // Gist geconfigureerd maar (tijdelijk) onbereikbaar → probeer het lokale pad.
+    const content = await gistFileText((await r.json()).files?.[filename]);
+    if (!content) throw new Error(`${filename} staat (nog) niet in de artefact-gist`);
+    return JSON.parse(content);
   }
+  // Geen gist gekoppeld: alleen nog het lokale pad (bootstrap/lokale ontwikkeling).
   const res = await fetch(bust(fallbackUrl));
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();

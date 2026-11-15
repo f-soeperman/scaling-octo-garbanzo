@@ -10,7 +10,6 @@
   font-src https://fonts.gstatic.com;
   img-src 'self' data:;
   connect-src 'self' https://api.github.com https://gist.githubusercontent.com;
-  frame-ancestors 'none';
   base-uri 'none';
   form-action 'none';
 ">
@@ -208,13 +207,13 @@
 
 <footer>
   <div class="hairline"></div>
-  <div><div class="rule-label" style="margin-bottom:6px;">Methode</div>FAO-56 Penman-Monteith voor referentie-ET₀. Single-bucket bodemwaterbalans per zone met seizoensgebonden Kc en bodemtemperatuur drempel (≤5°C = geen verdamping).</div>
-  <div><div class="rule-label" style="margin-bottom:6px;">Bodem</div>Zandgrond Utrecht Oost: veldcapaciteit ≈ 0,17 v/v, verwelkingspunt ≈ 0,07 v/v. Snel drainerend, weinig opslag.</div>
+  <div><div class="rule-label" style="margin-bottom:6px;">Methode</div>FAO-56 Penman-Monteith voor referentie-ET₀. Bodemwaterbalans per zone met twee bakken (oppervlaktelaag + wortelzone), dual-Kc met seizoensgebonden Kcb en een bodemtemperatuurdrempel (≤5°C = geen transpiratie).</div>
+  <div><div class="rule-label" style="margin-bottom:6px;">Bodem</div>Zandgrond Utrecht Oost: veldcapaciteit ≈ 0,20 v/v, verwelkingspunt ≈ 0,09 v/v (ophoogzand met kleicomponent). Snel drainerend, weinig opslag.</div>
   <div><div class="rule-label" style="margin-bottom:6px;">Bronnen</div>Wunderground PWS voor regen en temperatuur. Open-Meteo voor zonnestraling en 7-daagse voorspelling. Irrigaties uit GitHub Gist.</div>
 </footer>
 
 <script src="js/theme.js"></script>
-<script src="js/shared.js?v=4"></script>
-<script src="js/index.js?v=3"></script>
+<script src="js/shared.js?v=5"></script>
+<script src="js/index.js?v=4"></script>
 </body>
 </html>

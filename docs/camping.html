@@ -10,7 +10,6 @@
   font-src https://fonts.gstatic.com;
   img-src 'self' data:;
   connect-src 'self';
-  frame-ancestors 'none';
   base-uri 'none';
   form-action 'none';
 ">
@@ -143,6 +142,9 @@
     .win-mark  { pointer-events: none; align-self: stretch; border: 3px solid var(--night); z-index: 1; }
     .mx-far-first { border-left: 2px dashed #53617888; }
     .mx-note { font-size: 13px; font-style: italic; color: var(--night-soft); margin-top: 8px; }
+    /* `display` op een klasse wint van de [hidden]-regel van de browser; zonder dit
+       stond de "waarom?"-legenda altijd aan. */
+    [hidden] { display: none !important; }
     .mx-legend { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin-top: 12px; font-family: "Barlow Condensed", sans-serif; font-size: 13px; color: var(--night-soft); }
     .mx-legend .sw { display: inline-block; width: 14px; height: 14px; vertical-align: -2px; margin-right: 5px; border: 1px solid var(--hair); position: relative; }
     .mx-legend .sw-win { background: transparent; box-shadow: inset 0 0 0 2px var(--night); }
@@ -273,7 +275,7 @@
 </footer>
 
 </div>
-<script src="js/campingmap.js?v=3"></script>
-<script src="js/camping.js?v=12"></script>
+<script src="js/campingmap.js?v=4"></script>
+<script src="js/camping.js?v=13"></script>
 </body>
 </html>
