@@ -90,8 +90,17 @@ jobs:
         # daily-check.yml — Open-Meteo viel rond het hele uur ~17 min stil en
         # een herkansing na 10 min landde nog in dat venster.
         run: |
-          python weather_briefing.py || {
+          # Exit 75 = Open-Meteo weigert dit runner-IP (429, uur-/daglimiet van
+          # een gedeeld GitHub-IP; nov 2026: ook na 25 min nog 429 op dezelfde
+          # runner, terwijl andere runners slaagden). Dan géén herkansing hier:
+          # rood eindigen, zodat de orchestrator binnen een kwartier een nieuwe
+          # run op een andere runner start. Geen alert (zie notify.run_guarded).
+          rc=0
+          python weather_briefing.py || rc=$?
+          if [ "$rc" -eq 75 ]; then
+            exit 1
+          elif [ "$rc" -ne 0 ]; then
             echo "::warning::eerste poging mislukt — herkansing over 25 min"
             sleep 1500
             python weather_briefing.py
-          }
+          fi

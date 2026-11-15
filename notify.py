@@ -248,6 +248,31 @@ def _counter_path(name: str, counter_file: str | None) -> str:
     return counter_file or os.path.join(base, f"crash_counter_{slug}")
 
 
+# Exitcode voor "Open-Meteo weigert dit runner-IP" (http_util.RateLimited). 75 =
+# EX_TEMPFAIL: tijdelijk, elders opnieuw proberen. De one-shot-workflows slaan hun
+# in-job herkansing dan over (zelfde IP, zinloos) en eindigen rood, waarna de
+# orchestrator binnen een kwartier een nieuwe run op een andere runner start.
+RATE_LIMITED_EXIT = 75
+# De kwartierloops lezen in plaats van de exitcode dit merkbestand in RUNNER_TEMP en
+# stoppen dan de loop: de wachtende herstart-kick neemt over op een verse runner.
+RATE_LIMITED_MARKER = "open_meteo_rate_limited"
+
+
+def _exit_rate_limited(e: BaseException) -> None:
+    """Geen crash maar een runner-IP dat door de API wordt geweigerd: geen alert,
+    geen crash-teller (die is per job, en deze job eindigt zo), wel een zichtbare
+    ::warning:: in de run en het merkbestand voor de loops."""
+    print(f"::warning::API-limiet op dit runner-IP, laat een andere runner het "
+          f"overnemen — {sanitize_error(e)}", file=sys.stderr)
+    base = os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()
+    try:
+        with open(os.path.join(base, RATE_LIMITED_MARKER), "w") as f:
+            f.write("1")
+    except OSError:
+        pass
+    sys.exit(RATE_LIMITED_EXIT)
+
+
 def run_guarded(main_fn, name: str, *, chat_id: str | None = None,
                 fail_threshold: int = 1, counter_file: str | None = None) -> None:
     """Top-level vangnet voor de runner-scripts: print een gesanitizede FATAL,
@@ -259,11 +284,17 @@ def run_guarded(main_fn, name: str, *, chat_id: str | None = None,
     transient API-hikje spamt dan niet, een echte storing alert precies één
     keer. Een geslaagde run reset de teller. ``SystemExit`` (bewuste exits met
     eigen melding, zoals de tado-auth-paden) passeert ongemoeid; onder
-    ``DRY_RUN=1`` wordt niet verzonden."""
+    ``DRY_RUN=1`` wordt niet verzonden.
+
+    Een exceptie met ``rate_limited`` (http_util.RateLimited: de API weigert het
+    gedeelde runner-IP) is geen crash: exit ``RATE_LIMITED_EXIT`` zonder alert en
+    zonder de teller te raken, zodat de workflow het op een andere runner herhaalt."""
     counter = _counter_path(name, counter_file)
     try:
         main_fn()
     except Exception as e:
+        if getattr(e, "rate_limited", False):
+            _exit_rate_limited(e)
         err = sanitize_error(e)
         print(f"FATAL: {err}", file=sys.stderr)
         fails = 1

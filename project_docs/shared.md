@@ -70,6 +70,16 @@ Seven small cross-project Python modules (everything else is self-contained):
   `fail_threshold=2`, paired with their workflow's one in-job retry after 10 min (soil check + weerbriefing: 25 min, nov 2026 —
   Open-Meteo viel rond het hele uur ~17 min stil, een herkansing na 10 min landde nog in dat venster) — a single API blip
   retries silently; only a persistent outage pages. (`verwarming` calls no API and keeps default 1.)
+  **Rate limit ≠ crash (nov 2026):** an exception carrying `rate_limited` (`http_util.RateLimited`)
+  exits `RATE_LIMITED_EXIT` (75) with a `::warning::`, no alert and the crash counter untouched, and
+  drops the marker `$RUNNER_TEMP/open_meteo_rate_limited`. Open-Meteo's free tier limits per IP and
+  GitHub runners share their outbound IPs: measured 15 nov 2026, one runner got 429 on every attempt
+  and again after the 25-min in-job wait, while runs on other runners in the same hour succeeded;
+  the window loop (one runner for ~5h) failed six quarters in a row. So waiting on the same runner is
+  pointless — instead `daily-check.yml`/`weather-briefing.yml` skip their in-job retry on exit 75 and
+  end red (the orchestrator re-dispatches on a fresh runner within ~15 min), and the window/vent
+  loops `break` on the marker (the pending restart kick takes over on a fresh runner). Trade-off: a
+  rate limit that follows every runner never pages; it shows as red/short runs and stale dashboards.
 - **`gist_io.py`** — shared **read-only** Gist helpers (`read_file` raises, `read_json` is
   graceful, `read_files` haalt alle bestanden in één call). Volgt bij de ~1 MB-truncation
   van de Gist-API de `raw_url` i.p.v. stilletjes een halve JSON terug te geven.
@@ -94,7 +104,10 @@ Seven small cross-project Python modules (everything else is self-contained):
   `load_learned`, dus ook P10) + de dashboards client-side.
 - **`http_util.py`** — `get_json(url, params, timeout=, label=)`: the one GET→JSON transport with
   retry/backoff (5 attempts, 3+8+30+60s — a ~100s window that rides out short TLS-reset/timeout
-  bursts) and sanitized error logs, used by all six Open-Meteo fetch sites.
+  bursts) and sanitized error logs, used by all six Open-Meteo fetch sites. HTTP 429 has its own path:
+  Open-Meteo's `reason` is logged; a *minutely* limit waits `RATE_LIMIT_MINUTE_WAIT` (65 s) and retries,
+  any other limit (hourly/daily/unknown) raises `RateLimited` (an `HTTPError` subclass) at once — see
+  `run_guarded` above for what the runners do with it.
   Transport only — parameter sets and parsing stay at the call sites; exceptions propagate after the
   last attempt so existing fallback paths keep working. WU fetches deliberately stay outside it
   (apiKey embedded in the URL string + bespoke partial-failure handling).
