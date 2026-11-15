@@ -32,6 +32,8 @@ Env vars (GitHub Secrets / vars):
   SOIL_DATA_PATH, MOWING_DATA_PATH, MOWING_STATE_FILE  (override voor tests)
 """
 
+import contextlib
+import io
 import json
 import os
 from datetime import date, datetime, timedelta, timezone
@@ -121,12 +123,15 @@ LONGITUDE = shared_const.LONGITUDE
 def load_mowings_from_gist() -> dict:
     """Haalt maai-log uit GitHub Gist. Vorm: {"YYYY-MM-DD": {"length_mm": int}}."""
     gist_id = os.getenv("GIST_ID")
-    token = os.getenv("GH_TOKEN") or os.getenv("GITHUB_TOKEN")
+    token = os.getenv("GH_TOKEN") or os.getenv("GIST_TOKEN")
     if not gist_id:
         print("[mowings] geen GIST_ID, overslaan")
         return {}
+    # strict: een léésfout is geen leeg logboek. "Leeg" leest als een koude
+    # start (nooit gemaaid) en zet `last_seen_mow_date` op None — de run erna
+    # ziet het logboek dan als "zojuist gemaaid" en reset het meldgeheugen.
     raw = gist_read_json(gist_id, "mowings.json", token=token,
-                         default={}, label="mowings")
+                         default={}, label="mowings", strict=True)
 
     out = {}
     for key, val in raw.items():
@@ -343,16 +348,21 @@ def effective_threshold(mowings: dict, days: list[dict], source: str) -> tuple[f
     gu_by_date = {d["date"]: daily_growth_unit(d, source) for d in days}
     intervals = []
     for prev, cur in zip(mow_dates, mow_dates[1:]):
+        # Alleen intervallen die VOLLEDIG binnen het datavenster vallen. Een
+        # interval dat vóór het venster begon telde alleen de dagen die er nog
+        # in zaten: een echte groei van 10 kwam dan als 2 binnen en trok de
+        # geleerde drempel (de mediaan) omlaag.
         total = 0.0
-        ok = False
+        complete = True
         step = prev + timedelta(days=1)
         while step <= cur:
-            key = step.isoformat()
-            if key in gu_by_date:
-                total += gu_by_date[key]
-                ok = True
+            gu = gu_by_date.get(step.isoformat())
+            if gu is None:
+                complete = False
+                break
+            total += gu
             step += timedelta(days=1)
-        if ok and total > 0:
+        if complete and total > 0:
             intervals.append(total)
     if len(intervals) < CALIBRATE_MIN_MOWS:
         return READY_GU, False
@@ -510,7 +520,11 @@ def load_state() -> dict:
     """
     defaults = {"last_notified_date": None, "last_notified_kind": None,
                 "last_advice_date": None, "last_seen_mow_date": None}
-    stored = artefact_io.read_json("mowing_state.json", STATE_FILE, default=None)
+    # strict: dit is het geheugen dat de run terugschrijft. Een léésfout als
+    # "geen state" laten doorgaan heropent het dagslot en wist het
+    # meldgeheugen — een dubbel advies op een netwerk-blip.
+    stored = artefact_io.read_json("mowing_state.json", STATE_FILE, default=None,
+                                   strict=True)
     return {**defaults, **stored} if isinstance(stored, dict) else defaults
 
 
@@ -535,8 +549,7 @@ def return_nudge_due(prefs: dict, ready: bool, last_notified_date: str | None,
     dus na terugkeer kan de cadans-klok nog dagen dicht staan terwijl het gazon al
     lang maairijp is. Vuurt op het eerste advies-slot ná het uitzetten (cleared_at
     ≤ RETURN_NUDGE_WINDOW_H geleden) — bewust bínnen het gewone slot, zodat de
-    stempel in het publieke mowing_state.json er exact zo uitziet als elke andere
-    ochtend. `today > last_notified_date` voorkomt hervuren nadat de por gestempeld
+    state-stempel er exact zo uitziet als elke andere ochtend. `today > last_notified_date` voorkomt hervuren nadat de por gestempeld
     is; een koude start (nooit genotificeerd) vuurt niet — daar is niets gemist."""
     if not ready or bool(prefs.get("quiet")):
         return False
@@ -754,7 +767,9 @@ def write_mowing_data_json(res: dict) -> None:
     # aug 2026 — het maai-logboek is handmatige-actie-data), anders het lokale pad.
     body = json.dumps(payload, separators=(",", ":"))
     dest = artefact_io.write_json_str("mowing_data.json", MOWING_DATA_PATH, body)
-    print(f"[data] {dest} geschreven ({len(body)} bytes)")
+    # Geen byte-telling: die verspringt met één logregel zodra er een
+    # maaibeurt gelogd is, en dateert die handeling zo in het publieke log.
+    print(f"[data] {dest} geschreven")
 
 
 def main():
@@ -797,11 +812,13 @@ def main():
 
     slot = advice_slot_open(state, today)
 
+    # De publieke log is vormvast: geen slot-, cadans- of verzendregel buiten
+    # DRY_RUN. Een zojuist gelogde maaibeurt heropent het slot, dus élke regel
+    # die van slot of beslissing afhangt dateert die handeling op het uur —
+    # en een "verzonden" om de drie dagen leest als "maairijp en nog steeds
+    # niet gemaaid" (zelfde patroon als sandbox_notify._send).
     should_send = False
-    if not slot:
-        print(f"→ geen advies-slot (data ververst; bericht valt om "
-              f"{NOTIFY_AT[0]:02d}:{NOTIFY_AT[1]:02d})")
-    elif res["kind"] != "none":
+    if slot and res["kind"] != "none":
         # Terugkeer-por vóór de cadans-regels: het eerste advies-slot ná het uitzetten
         # van de stille modus mag de RENUDGE_DAYS-klok negeren (die is tijdens de
         # stilte as-if-sent doorgestempeld).
@@ -825,15 +842,14 @@ def main():
         # Berichttekst alleen onder DRY_RUN — publiek log.
         print("\n--- Telegram ---\n" + msg + "\n----------------")
 
-    if should_send:
-        if dry_run:
-            print("DRY_RUN=1, niet verzonden.")
-        else:
-            if send_telegram(msg, muted_in_quiet=True):
-                state["last_notified_date"] = today.isoformat()
-                state["last_notified_kind"] = res["kind"]
-    else:
-        print("→ geen notificatie (gesuppresseerd of niets te melden)")
+    if dry_run:
+        print(f"→ slot={slot} · versturen={should_send} (DRY_RUN: niets verzonden)")
+    elif should_send:
+        with contextlib.redirect_stdout(io.StringIO()):
+            sent = send_telegram(msg, muted_in_quiet=True)
+        if sent:
+            state["last_notified_date"] = today.isoformat()
+            state["last_notified_kind"] = res["kind"]
 
     if slot:
         # Slot verbruikt, ook als de cadans-regels zwegen — de uurlijkse runs

@@ -31,18 +31,15 @@ import requests
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import gardena_api as ga  # noqa: E402
+import gist_io  # noqa: E402
 from gardena_control import CONFIG_FILE, FLAGS_FILE  # noqa: E402
 from shared_const import utc_now_iso  # noqa: E402
 
 
 def gist_read_file(gist_id: str, token: str, filename: str):
-    r = requests.get(f"https://api.github.com/gists/{gist_id}",
-                     headers={"Authorization": f"Bearer {token}",
-                              "Accept": "application/vnd.github+json"},
-                     timeout=20)
-    r.raise_for_status()
-    f = r.json().get("files", {}).get(filename)
-    return None if f is None else f.get("content")
+    """Via gist_io: die volgt de raw-URL als de Gist-API het bestand afkapt.
+    De eigen reader zag dan lege content en zou de live vlaggen opnieuw zaaien."""
+    return gist_io.read_file(gist_id, filename, token=token)
 
 
 def gist_write_files(gist_id: str, token: str, files: dict) -> None:

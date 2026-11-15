@@ -2,7 +2,7 @@
 """meteoalarm.py — MeteoAlarm-waarschuwingen (CAP-in-ATOM) voor het Kampeerkompas.
 
 Leest de publieke legacy-ATOM-feeds van MeteoAlarm (de EU-aggregator van de
-nationale weerdiensten — KNMI, GeoSphere/ZAMG, Météo-France) en maakt er platte
+nationale weerdiensten — o.a. KNMI, DWD, Météo-France, AEMET) en maakt er platte
 waarschuwings-dicts van: {"area", "event", "level", "onset", "expires"}.
 Level is "yellow" / "orange" / "red"; groen/Minor wordt weggelaten (geen signaal).
 
@@ -28,12 +28,11 @@ import requests
 from notify import sanitize_error
 
 FEED_URL = "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-{feed}"
-# Feed-slug = de Engelse landsnaam in kleine letters. NL/AT/FR zijn tegen de
-# echte feeds geijkt; DE/ES kwamen erbij met de stedenwissel (sep 2026) en
-# volgen hetzelfde patroon, maar konden vanuit de ontwikkelomgeving niet
-# geverifieerd worden (de feed-host is daar geblokkeerd). Een verkeerde slug is
-# niet fataal: fetch_country_warnings raist, en camping_forecast degradeert dat
-# land naar warnings_status="failed" — zichtbaar op het dashboard i.p.v. stil.
+# Feed-slug = de Engelse landsnaam in kleine letters. DE/ES kwamen erbij met de
+# stedenwissel (sep 2026); sindsdien meldt het artefact voor alle vier de
+# gebruikte landen warnings_status "ok". Een verkeerde slug is niet fataal:
+# fetch_country_warnings raist, en camping_forecast degradeert dat land naar
+# warnings_status="failed" — zichtbaar op het dashboard i.p.v. stil.
 # AT draagt sinds aug 2026 geen streek meer, maar blijft staan: deze module is
 # de generieke feedclient, niet de regiolijst.
 COUNTRY_FEEDS = {"NL": "netherlands", "AT": "austria", "FR": "france",
@@ -48,7 +47,7 @@ LEVEL_RANK = {"yellow": 1, "orange": 2, "red": 3}
 DEFAULT_DURATION_H = 24
 
 FETCH_ATTEMPTS = 3
-FETCH_DELAYS = (3, 10)  # zelfde trap als http_util, korter: 3 feeds per run
+FETCH_DELAYS = (3, 10)  # zelfde trap als http_util, korter: één feed per land per run
 
 
 def _fetch_text(url: str, *, timeout: int = 20) -> str:

@@ -119,3 +119,9 @@ Twee gevolgen voor de workflow, allebei nodig zodra de cadans uurlijks is:
 Shared dashboard conventions (cache-bust, CSP, SRI, JS/CSS layout): see [`frontend.md`](frontend.md).
 - Two zone columns side by side (gauge + recommendation + minutes advice)
 - "Ik heb water gegeven" modal: input in minutes → convert to mm → write to Gist via GitHub API. **Bewust géén workflow_dispatch meer** (aug 2026, geldt voor álle dashboards): een browser-getriggerde run is publiek zichtbaar in de Actions-lijst (actor + minuut) en dateert elke huiselijke interactie; de uurlijkse run pikt het logboek vanzelf op
+
+### Doorlichting nov 2026
+- **WU-wind.** `windspeedAvg` zit in het `metric`-blok van een WU-history-record; de code zocht hem op topniveau. Daardoor was `u2 = 0.0` op élke WU-dag, en omdat 0.0 geen None is overschreef dat in de merge ook de Open-Meteo-wind. `_wu_u2` leest nu `metric` (met terugval op topniveau) en geeft None bij een ontbrekende meting, zodat de Open-Meteo-waarde blijft staan. **Dit verhoogt ET0 op WU-dagen** ten opzichte van wat het model tot nu toe liet zien — de formules zijn ongewijzigd, de invoer klopt nu met wat hierboven onder "Wind" staat. Houd de adviezen in het voorjaar tegen het licht.
+- **Stralingscorrectie op vandaag.** De WU-rij van vandaag draagt alleen neerslag; `hasWU` stond daardoor aan en de Open-Meteo-Tmax van vandaag kreeg de stationscorrectie. Additief veld `hasWUTemp` (alleen waar als WU de temperatuur leverde) stuurt de correctie; `hasWU` houdt zijn betekenis.
+- **Stdout vormvast:** geen prioriteit per zone en geen "notificatie nodig/niet nodig" meer; de verzendregel wordt onderdrukt. `soil_state.json` draagt alleen nog `last_advice_date` (het ongelezen `last_advice_priority` vervalt bij de eerstvolgende slot-run).
+- **Strict reads** voor de vorige `data.json` (één keer per run gelezen) en het irrigatielogboek.

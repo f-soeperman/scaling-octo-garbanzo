@@ -4,7 +4,7 @@
 // stip + trendpijl aan de kop. Leest dezelfde meetreeks als het raam-koeladvies
 // (window_data.json — per kamer `history` + `outside_history`, kwartiercadans).
 // COLORS-palet komt uit js/theme.js (geladen vóór dit script).
-const ROOM_COLORS = [COLORS.clay, COLORS.rain, COLORS.sun, COLORS.mossLight];
+const ROOM_COLORS = [COLORS.clay, COLORS.rain, COLORS.sun, COLORS.mossLight, COLORS.wet];
 const PROJ_H = 1.5;        // uur vooruit voor de richtingvector (zelfde als raam-scatter)
 const MIN_ALPHA = 0.08;    // doorzichtigheid van het oudste spoorsegment (vervaagt → 1.0 nu)
 const state = { data: null, chart: null, windowH: 24, hidden: new Set() };  // hidden = uitgevinkte kamers
@@ -53,7 +53,7 @@ async function loadData() {
     render();
   } catch (e) {
     document.getElementById("banner-slot").innerHTML =
-      `<div class="banner banner-error"><strong>Kan data niet laden:</strong> ${e.message}. Heeft de GitHub Action al gedraaid?</div>`;
+      `<div class="banner banner-error"><strong>Kan data niet laden:</strong> ${e.message}</div>`;
     document.getElementById("source-label").textContent = "";
   }
 }

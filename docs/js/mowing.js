@@ -6,7 +6,7 @@ const state = { data: null, chart: null, mowings: {}, pickedLen: 40 };
 
 document.getElementById("folio-mark").textContent = `Terroir de Utrecht · Est. ${new Date().getFullYear()} · Gazon`;
 document.getElementById("today-date").textContent = new Date().toLocaleDateString("nl-NL", { weekday:"long", day:"numeric", month:"long", year:"numeric" });
-document.getElementById("mow-date").value = new Date().toISOString().slice(0,10);
+document.getElementById("mow-date").value = localIsoDate();
 
 document.getElementById("refresh-btn").addEventListener("click", loadData);
 document.getElementById("mow-btn").addEventListener("click", openMowModal);

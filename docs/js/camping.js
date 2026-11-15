@@ -91,8 +91,7 @@ function esc(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-// Fallbacks op het ronde-1-artefact: de ?v=2-pagina gaat live vóór de eerste
-// ronde-2-datarun. Dood pad zodra die run gecommit heeft.
+// De deel-velden zijn additief; een artefact zonder valt terug op de gecombineerde.
 function catDag(dag) { return dag.cat_day ?? dag.cat; }
 function catNacht(dag) { return dag.cat_night ?? (dag.night_partial ? null : dag.cat); }
 function vlaggenDag(dag) { return dag.red_flags_day ?? dag.red_flags ?? []; }
@@ -183,7 +182,9 @@ function mapPinCat(r) {
   if (!r || r.status !== "ok" || !(r.days || []).length) return null;
   const vandaag = vandaagIso();
   const dag = r.days.find((x) => x.date === vandaag) || r.days[0];
-  return catDag(dag);
+  // De gecombineerde categorie — dezelfde als de matrixcel van vandaag. Met alleen
+  // het dagdeel stond er een groene pin boven een rode cel.
+  return dag.cat;
 }
 
 // Tent-silhouet i.p.v. een generieke webkaart-teardrop — sluit aan bij het

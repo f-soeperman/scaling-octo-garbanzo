@@ -10,7 +10,6 @@
   font-src https://fonts.gstatic.com;
   img-src 'self' data:;
   connect-src 'self' https://api.github.com https://gist.githubusercontent.com;
-  frame-ancestors 'none';
   base-uri 'none';
   form-action 'none';
 ">
@@ -125,26 +124,29 @@
       <span class="grp-title" style="margin:0;">Tijdstip van wijziging</span>
       <input type="datetime-local" id="report-when">
     </label>
-    <label class="when-row" id="pause-row">
+    <!-- Bewust een <div> en geen <label>: een label om een knoppengroep activeert bij
+         een tik op de titel de EERSTE knop erin (bij "Meldingen" was dat "Aan" — een
+         tik op het woord schakelde de stille modus dus uit). -->
+    <div class="when-row" id="pause-row">
       <span class="grp-title" style="margin:0;">⏸️ Huis-status</span>
       <div class="seg" id="pause-seg">
         <button type="button" data-v="false">Normaal</button>
         <button type="button" data-v="true">Gepauzeerd</button>
       </div>
-    </label>
+    </div>
     <p style="font-style:italic;color:var(--ink-soft);font-size:12px;margin:6px 0 0;" id="pause-explain">
       Pauzeer als iemand anders thuis is en de standen niet betrouwbaar te melden zijn: het
       model voorspelt door maar leert dit venster niet. De velden hieronder worden dan grijs —
       alleen tijdstip en deze knop blijven bedienbaar. Ga je later terug om de écht opgetreden
       standen alsnog (teruggedateerd) te melden, zet dan op dat tijdstip ook de pauze zelf uit,
       anders blijft dat venster uit de kalibratie.</p>
-    <label class="when-row" id="quiet-row">
+    <div class="when-row" id="quiet-row">
       <span class="grp-title" style="margin:0;">🔕 Meldingen</span>
       <div class="seg" id="quiet-seg">
         <button type="button" data-v="false">Aan</button>
         <button type="button" data-v="true">Stil</button>
       </div>
-    </label>
+    </div>
     <p style="font-style:italic;color:var(--ink-soft);font-size:12px;margin:6px 0 0;">
       <em>Stil</em> onderdrukt de adviesberichten (weerbericht, raam-advies + dagplan,
       maai-, zandbak- en zonwering-advies, nachtvoorspelling) tot je ze weer
@@ -169,9 +171,9 @@
 </div>
 
 <script src="js/theme.js"></script>
-<script src="js/shared.js?v=4"></script>
+<script src="js/shared.js?v=5"></script>
 <script src="js/vent_core.js?v=1"></script>
 <script src="js/speeltuin.js?v=8"></script>
-<script src="js/vent.js?v=8"></script>
+<script src="js/vent.js?v=9"></script>
 </body>
 </html>

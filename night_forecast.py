@@ -382,7 +382,9 @@ def main(now: datetime | None = None) -> None:
                           muted_in_quiet=True)
             sent = True
     else:
-        print(f"[kinderkamer-nacht] buiten seizoen en koele nacht (max {night_max:.1f}°) — stil.")
+        # Zonder de waarde: het nachtmaximum is in feite de geankerde tado-meting van
+        # 18:45 — een gemeten kamertemperatuur in het publieke log.
+        print("[kinderkamer-nacht] buiten seizoen en koele nacht — stil.")
 
     # Voorspellingslog — óók op een stille avond (een koude winternacht is nog steeds een
     # verifieerbare voorspelling), maar niet onder DRY_RUN: een testdispatch om 14:00 zou

@@ -244,3 +244,42 @@ def test_bodemtemperatuur_stuurt_de_waterbalans_niet_aan():
     sm.apply_et0_and_balance(koud, {})
     sm.apply_et0_and_balance(warm, {})
     assert [d["lawn_ETc"] for d in koud] == [d["lawn_ETc"] for d in warm]
+
+
+# ── WU-ingestie ───────────────────────────────────────────────────────────────
+
+def test_wu_wind_komt_uit_het_metric_blok():
+    """`windspeedAvg` zit in `metric`, niet op topniveau. Tot nov 2026 stond
+    u2 daardoor op élke WU-dag op 0.0 — en overschreef zo de Open-Meteo-wind."""
+    obs = {"humidityAvg": 70, "metric": {"tempHigh": 20.0, "windspeedAvg": 7.2}}
+    assert sm._wu_u2(obs) == pytest.approx(7.2 / 3.6 * sm.WIND_2M_FACTOR)
+    assert sm._wu_u2({"metric": {"windspeedAvg": 0.0}}) == 0.0   # gemeten windstil
+    # Geen meting → None, zodat de merge de Open-Meteo-waarde laat staan.
+    assert sm._wu_u2({"metric": {"tempHigh": 20.0}}) is None
+    assert sm._wu_u2({}) is None
+
+
+def _dag(datum, **kw):
+    return {"date": datum, "Tmax": 28.0, "Tmin": 14.0, "Tmean": 21.0,
+            "RHmean": 60.0, "u2": 2.0, "Rs": 22.0, "Rs_peak_wm2": 820.0,
+            "precip": 0.0, "forecast": False, "partial_factor": 1.0, **kw}
+
+
+def test_vandaag_met_alleen_wu_neerslag_krijgt_geen_stralingscorrectie(monkeypatch):
+    """De WU-rij van vandaag draagt alleen neerslag (current-endpoint); de
+    temperatuur is die van Open-Meteo, een modelwaarde zonder kap-fout. De
+    correctie mag daar niet op los (was: Tmax 28.0 → 24.5 voor vandaag)."""
+    om = [_dag("2026-07-01"), _dag("2026-07-02")]
+    wu = [{"date": "2026-07-01", "Tmax": 29.0, "Tmin": 15.0, "Tmean": 22.0,
+           "RHmean": 55.0, "u2": 1.0, "precip": 0.0, "wu_solar_peak": 900.0},
+          {"date": "2026-07-02", "Tmax": None, "Tmin": None, "Tmean": None,
+           "RHmean": None, "u2": None, "precip": 1.2}]
+    monkeypatch.setattr(sm, "fetch_open_meteo", lambda **k: om)
+    monkeypatch.setattr(sm, "fetch_wunderground", lambda *a, **k: wu)
+    days = sm.build_full_dataset("station", "key", irrigations={})["days"]
+    gisteren, vandaag = days
+    assert gisteren["hasWU"] and gisteren["hasWUTemp"]
+    assert gisteren["Tmax_corr"] < gisteren["Tmax"] == 29.0
+    assert vandaag["hasWU"] and not vandaag["hasWUTemp"]      # wél WU-neerslag
+    assert vandaag["precip"] == 1.2
+    assert "Tmax_corr" not in vandaag and "bias_corr" not in vandaag

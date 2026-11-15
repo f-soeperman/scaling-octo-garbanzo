@@ -36,3 +36,6 @@
 
 ## UV cloud correction
 Open-Meteo's `uv_index` field is only weakly cloud-corrected and reports clear-sky-like values on overcast/rainy days. We therefore fetch `uv_index_clear_sky` and apply the Josefsson & Landelius (2000) cloud modification factor `CMF = 1 - 0.75 * (cloud_fraction)^3.4` using the hourly `cloud_cover` from the same call. The corrected value is what `uv_windows()` thresholds against. If `uv_index_clear_sky` is missing for a given hour, fall back to the raw `uv_index`.
+
+### Doorlichting nov 2026
+`fetch_forecast` vraagt de wind nu expliciet in m/s op (`wind_speed_unit: ms`). Zonder die parameter levert Open-Meteo km/u, terwijl `WIND_GUST_ALERT_MS`/`WIND_GUST_STORM_MS` en de berichttekst in m/s rekenen: elke vlaag vanaf 20 km/u ging als "Storm … m/s" de deur uit. De kop gebruikt de Nederlandse datumnotatie.

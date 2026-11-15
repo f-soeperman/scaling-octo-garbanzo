@@ -19,3 +19,8 @@
 
 ## Relation to other projects
 Read-only on Project 13 (`vent_physics`/`vent_io` pure modules + `docs/vent_learned.json`) and Project 6's `window_data.json` (seed/now-temp, privé artefact-gist). Openings log read-only from the Gist. Writes nothing. No new secrets — reuses `TELEGRAM_CHAT_GROUP_ID` (weather-briefing's secret) instead of the privé `TELEGRAM_CHAT_ID`.
+
+### Doorlichting nov 2026
+- `night-forecast.yml` heeft een eigen concurrency-groep (het commit het log).
+- De "buiten seizoen en koele nacht"-logregel noemt het nachtmaximum niet meer (in feite de geankerde tado-meting van 18:45).
+- Gaten in `data/night_forecast_log` van nov 2026 komen van de dedup-fout die onder "Dedup-anker" in CLAUDE.md beschreven staat (verlate fallback-crons), niet van het script.

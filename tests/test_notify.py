@@ -90,10 +90,12 @@ def test_sanitize_error_patronen():
     e = Exception(
         "https://api.weather.com/x?stationId=IABC1&apiKey=k123 "
         "https://api.telegram.org/bot12345:AAH-xyz/sendMessage "
-        "https://api.github.com/gists/0123456789abcdef01"
+        "https://api.github.com/gists/0123456789abcdef01 "
+        "https://gist.githubusercontent.com/iemand/fedcba98765432100f/raw/abc/x.json"
     )
     out = sanitize_error(e)
-    for geheim in ("IABC1", "k123", "12345:AAH-xyz", "0123456789abcdef01"):
+    for geheim in ("IABC1", "k123", "12345:AAH-xyz", "0123456789abcdef01",
+                   "iemand", "fedcba98765432100f"):
         assert geheim not in out
 
 

@@ -254,7 +254,11 @@ def accept(candidate_folds: Sequence[Tuple[str, float, int]],
     reasons: List[str] = []
     if not candidate_folds or not incumbent_folds:
         return False, ["geen forward-chaining-folds (te weinig maanden in het archief)"]
-    paired = [(c, i) for c, i in zip(candidate_folds, incumbent_folds) if c[0] == i[0]]
+    # Koppel op testmaand, niet op positie: een kandidaat die een maand mist (een
+    # feature die daar ontbreekt) zou anders met de verkeerde lat-fold vergeleken
+    # worden — of met geen enkele.
+    by_month = {i[0]: i for i in incumbent_folds}
+    paired = [(c, by_month[c[0]]) for c in candidate_folds if c[0] in by_month]
     if not paired:
         return False, ["kandidaat en lat delen geen enkele testmaand"]
 

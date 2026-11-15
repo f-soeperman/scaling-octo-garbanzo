@@ -41,7 +41,6 @@ LEARNED_PATH = os.getenv("VENT_LEARNED_PATH", "docs/vent_learned.json")
 DATA_PATH = os.getenv("VENT_DATA_PATH", "docs/vent_data.json")
 
 RAIL_TOL = 0.02   # binnen deze fractie van de band-breedte → 'geraild' op die grens
-ENERGY_KEYS = ["solar_w", "env_w", "vent_w", "party_w", "ground_w", "internal_w"]
 
 
 def load_json(path: str) -> dict:

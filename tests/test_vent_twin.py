@@ -9,6 +9,7 @@ glas/vaste deuren, de nudge-teksten, en window_weather_summary.
 main() doet netwerk-I/O en wordt hier bewust nooit aangeroepen — build_dashboard en de
 pure helpers zijn de testbare laag.
 """
+import pathlib
 from datetime import datetime, timedelta
 
 import pytest
@@ -436,3 +437,96 @@ def test_workflow_checkout_pint_branch_tip(assert_checkout_pinned):
     zonder pin werkt de overnemende run de maand-shards en vent_learned.json bij
     vanaf een uren-oude stand en rebaset hij de tussenliggende samples eruit."""
     assert_checkout_pinned("vent-notify.yml")
+
+
+# ── main(): de publieke log verraadt geen pauze, airco of stille modus ─────────
+
+def _run_main(monkeypatch, tmp_path, log):
+    """Draai vent_twin.main() volledig op synthetische invoer (geen netwerk, lokale
+    artefact-paden) en geef de stdout-regels terug."""
+    import contextlib
+    import io
+    import math
+    import sys
+
+    tools = str(pathlib.Path(__file__).resolve().parent.parent / "tools")
+    monkeypatch.syspath_prepend(tools)
+    import synth_history as sh
+
+    for k in ("GIST_ID", "GIST_TOKEN", "ARTEFACT_GIST_ID", "GH_TOKEN", "WU_STATION_ID",
+              "WU_API_KEY", "TELEGRAM_BOT_TOKEN", "DRY_RUN"):
+        monkeypatch.delenv(k, raising=False)
+    tmp_path.mkdir(exist_ok=True)
+    monkeypatch.setattr(vt, "DASHBOARD_FILE", str(tmp_path / "vd.json"))
+    monkeypatch.setattr(vt, "LEARNED_FILE", str(tmp_path / "vl.json"))
+    monkeypatch.setattr(vt, "FORECAST_FILE", str(tmp_path / "vf.json"))
+    monkeypatch.setattr(vio, "LEARNED_FILE", str(tmp_path / "vl.json"))
+    nu = datetime(2026, 7, 15, 14, 0, tzinfo=TZ)
+
+    class _Klok(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return nu
+
+    def weer(lat, lon):
+        rows, t = [], nu - timedelta(days=5)
+        while t <= nu + timedelta(hours=40):
+            rows.append({**sh._weather(t), "dt": t})
+            t += timedelta(hours=1)
+        return {"hourly": rows, "current": {"temperature_2m": 24.0,
+                                            "relative_humidity_2m": 55,
+                                            "shortwave_radiation": 500,
+                                            "direct_radiation": 350}}
+
+    def kamers():
+        rooms = {}
+        for naam, (niveau, amp, lag) in sh.ROOMS.items():
+            hist, t = [], nu - timedelta(hours=48)
+            while t <= nu:
+                h = t.hour + t.minute / 60
+                temp = niveau + amp * math.sin(2 * math.pi * (h - 9 - lag) / 24)
+                hist.append({"t": t.isoformat(), "temp": round(temp, 1), "hum": 50})
+                t += timedelta(minutes=15)
+            rooms[naam] = {"inside": hist[-1]["temp"], "humidity": 50, "history": hist}
+        return {"rooms": rooms}
+
+    monkeypatch.setattr(vt, "datetime", _Klok)
+    monkeypatch.setattr(vt, "fetch_weather", weer)
+    monkeypatch.setattr(vt, "load_window_data", kamers)
+    monkeypatch.setattr(vt, "refine_outside_now", lambda w: (None, None))
+    monkeypatch.setattr(vt, "load_openings_log", lambda: log)
+    monkeypatch.setattr(vt, "read_notify_prefs", lambda: {})
+    monkeypatch.setattr(vt, "send_telegram", lambda *a, **k: True)
+    # De calibratie zelf doet er hier niet toe (en kost seconden): één vaste uitkomst.
+    monkeypatch.setattr(vt, "calibrate", lambda house, params, *a, **k: (params, 0.5))
+    for naam in ("migrate_history_shards", "migrate_shard_openings"):
+        monkeypatch.setattr(vt, naam, lambda *a, **k: None)
+    for naam in ("append_history_shard", "append_shard_weather", "append_forecast_shard"):
+        monkeypatch.setattr(vt, naam, lambda *a, **k: 0)
+    monkeypatch.setattr(vt, "append_openings_archive", lambda *a, **k: None)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        vt.main()
+    sys.modules.pop("synth_history", None)
+    return buf.getvalue().replace(str(tmp_path), "<tmp>").splitlines()
+
+
+def test_publieke_log_is_gelijk_bij_pauze_airco_en_gewone_run(monkeypatch, tmp_path):
+    """De kwartierrun is publiek. `actual` is ná de pauze-/airco-/verwarmingsfilters,
+    dus elk aantal of elke waarde die ervan afhangt verklapt die boekhouding: het
+    sample-aantal zakte per kwartier zodra een pauze inging (en dateerde zo het begin),
+    het kameraantal was "alle min de airco-kamer", en een volledig gepauzeerd venster
+    had een eigen logregel. Alle vier de runs moeten byte-gelijk loggen."""
+    nu = datetime(2026, 7, 15, 14, 0, tzinfo=TZ)
+
+    def sinds(uren, **states):
+        return [{"t": (nu - timedelta(hours=uren)).isoformat(), "states": states}]
+
+    gewoon = _run_main(monkeypatch, tmp_path / "a", [])
+    pauze = _run_main(monkeypatch, tmp_path / "b", sinds(10, paused=True))
+    heel_venster = _run_main(monkeypatch, tmp_path / "c", sinds(100, paused=True))
+    airco = _run_main(monkeypatch, tmp_path / "d", sinds(100, ac_room="office"))
+    assert gewoon == pauze == heel_venster == airco
+    tekst = "\n".join(gewoon)
+    assert "[leren] kalibratiestap afgerond." in tekst
+    assert "samples" not in tekst and "RMSE" not in tekst and "bytes" not in tekst

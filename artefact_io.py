@@ -1,12 +1,12 @@
-"""artefact_io.py — de privé artefact-Gist voor de live bodem-/maai-artefacten.
+"""artefact_io.py — de privé artefact-Gist voor de gegenereerde artefacten.
 
-`docs/data.json` en `docs/mowing_data.json` waren publieke Pages-artefacten met de
-gedateerde handmatige-actie-logboeken erin (sproei- en maaibeurten, plus het
-irrigatie-logboek integraal). Een meerweeks gat in zo'n logboek is een
-afwezigheidssignaal, en de 15-min/uurlijkse commit-historie maakte elke
-registratie voorgoed dateerbaar (privacy-deep-dive aug 2026). Beide artefacten
-verhuizen daarom naar een eigen **privé Gist** (`ARTEFACT_GIST_ID`, auth = het
-bestaande Gist-token `GIST_TOKEN`/`GH_TOKEN`):
+De dashboard-artefacten (`data.json`, `mowing_data.json`, `window_data.json`, de
+drie vent-artefacten) en `mowing_state.json` waren publieke bestanden in de repo
+met gedateerde handmatige-actie-logboeken, raamstanden en kamerreeksen erin. Een
+meerweeks gat in zo'n logboek is een afwezigheidssignaal, en de
+15-min/uurlijkse commit-historie maakte elke registratie voorgoed dateerbaar
+(privacy-deep-dive aug 2026). Ze leven daarom in een eigen **privé Gist**
+(`ARTEFACT_GIST_ID`, auth = het bestaande Gist-token `GIST_TOKEN`/`GH_TOKEN`):
 
 - Secret gezet → lezen/schrijven via de Gist-API; er wordt géén lokaal bestand
   meer geschreven, dus de workflow-commit raakt `docs/` niet meer aan.
@@ -15,15 +15,16 @@ bestaande Gist-token `GIST_TOKEN`/`GH_TOKEN`):
   secret bestaat, zonder harde knip — en valt er ook veilig op terug.
 
 Eén schrijver per bestand blijft gelden: `data.json` ← check_and_notify,
-`mowing_data.json` ← mowing_advisor. De dashboards lezen de gist client-side
-(localStorage `artefact_gist_id` + het bestaande token) en vallen terug op het
-lokale bestand zolang dat nog bestaat.
+`mowing_data.json` + `mowing_state.json` ← mowing_advisor, `window_data.json` ←
+window_advisor, de vent-artefacten ← vent_twin. De dashboards lezen de gist
+client-side (localStorage `artefact_gist_id` + het bestaande token).
 """
 
 import json
 import os
 
 import gist_io
+from notify import sanitize_error
 
 
 def _creds() -> tuple[str | None, str | None]:
@@ -36,13 +37,47 @@ def gist_active() -> bool:
     return bool(gid and token)
 
 
-def read_json(filename: str, local_path: str, default=None):
+def read_json(filename: str, local_path: str, default=None, strict: bool = False):
     """Het artefact als geparsede JSON: uit de artefact-gist wanneer die
-    geconfigureerd is, anders het lokale pad. Graceful → ``default``."""
+    geconfigureerd is, anders het lokale pad. Graceful → ``default``.
+
+    ``strict=True`` is voor wie het resultaat als basis voor een schrijf
+    gebruikt (state, rollende historie, koude opslag): een léésfout op de gist
+    raist dan i.p.v. als "leeg" door te gaan — anders overschrijft één
+    netwerk-blip de opgebouwde historie met een lege basis. Een ontbrekend
+    bestand is ook dan gewoon ``default``."""
     if gist_active():
         gid, token = _creds()
         return gist_io.read_json(gid, filename, token=token, default=default,
-                                 label="artefact")
+                                 label="artefact", strict=strict)
+    return _read_local(local_path, default)
+
+
+def read_many(files: dict[str, str], strict: bool = False) -> dict:
+    """Meerdere artefacten in één keer: ``{bestandsnaam: lokaal pad}`` →
+    ``{bestandsnaam: geparsede JSON of None}``. In gist-modus is dat één
+    API-call i.p.v. één volledige Gist-download per bestand. ``strict`` als bij
+    :func:`read_json`."""
+    if not gist_active():
+        return {fn: _read_local(path, None) for fn, path in files.items()}
+    gid, token = _creds()
+    try:
+        raw = gist_io.read_files(gid, token=token, names=files)
+    except Exception as e:
+        if strict:
+            raise
+        print(f"[artefact] kon niet laden: {sanitize_error(e)}")
+        return dict.fromkeys(files)
+    out = {}
+    for fn in files:
+        try:
+            out[fn] = json.loads(raw[fn]) if raw.get(fn) else None
+        except ValueError:
+            out[fn] = None
+    return out
+
+
+def _read_local(local_path: str, default):
     try:
         with open(local_path, encoding="utf-8") as f:
             return json.load(f)

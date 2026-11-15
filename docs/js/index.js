@@ -16,7 +16,7 @@ const state = { data: null, selectedZone: "lawn", charts: {}, irrigations: {} };
 // =======================================================================
 document.getElementById("folio-mark").textContent = `Terroir de Utrecht · Est. ${new Date().getFullYear()} · Fol. I`;
 document.getElementById("today-date").textContent = new Date().toLocaleDateString("nl-NL", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-document.getElementById("water-date").value = new Date().toISOString().slice(0,10);
+document.getElementById("water-date").value = localIsoDate();
 
 document.getElementById("refresh-btn").addEventListener("click", loadData);
 document.getElementById("water-btn").addEventListener("click", openWaterModal);
@@ -345,7 +345,7 @@ function buildMonthlyBalance(data) {
   const days = data.days || [];
   const cold = data.monthly_totals || {};
   const hasCold = Object.keys(cold).length > 0;
-  const currentYm = new Date().toISOString().slice(0, 7);
+  const currentYm = localIsoDate().slice(0, 7);
 
   // Warme data: bij koude opslag alleen huidige maand; anders alle maanden (fallback)
   const warm = {};

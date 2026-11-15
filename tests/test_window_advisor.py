@@ -1263,13 +1263,76 @@ def test_dashboard_toont_bij_stookweer_geen_open_kamer():
 
 def test_schimmelindex_stuurt_het_advies_niet_aan():
     now = datetime(2026, 1, 10, 12, 0, tzinfo=wa.TZ)
-    rooms = {"bedroom": {"inside": 16.0, "humidity": 66}}
-    ctx = {"od": 2.0, "prev_rooms": {}, "warm_ahead": False, "gated": True,
-           "heating_weather": True, "outside_rh": 85, "outside_rh_temp": 2.0,
+    # Warme kamer, koeler buiten, géén stookweer en niet gated: decide() beslist hier
+    # écht (→ open). Onder stookweer overschrijft de rij advies/reden/vensters toch al,
+    # en dan zou deze vergelijking niets bewijzen.
+    rooms = {"bedroom": {"inside": 21.0, "humidity": 80}}
+    ctx = {"od": 12.0, "prev_rooms": {}, "warm_ahead": False, "gated": False,
+           "heating_weather": False, "outside_rh": 85, "outside_rh_temp": 12.0,
            "fc": [], "hourly": []}
     zonder = wa._room_dashboard_row("bedroom", rooms, {}, now, ctx)
     met = wa._room_dashboard_row("bedroom", rooms, {}, now, {**ctx, "out_mean": 1.0})
+    assert zonder["advice"] == "open"
     assert zonder["mould"] is None
     assert met["mould"]["level"] == "risico" and met["mould"]["headroom"] < 0
     assert {k: v for k, v in met.items() if k != "mould"} == \
            {k: v for k, v in zonder.items() if k != "mould"}
+
+
+# ── regressies uit de doorlichting van nov 2026 ───────────────────────────────
+
+def test_horizon_wordt_ook_herkend_als_de_run_niet_op_het_kwartier_start():
+    """Het laatste rasterpunt ligt tot een kwartier vóór `nu + horizon`. Met de oude
+    marge (0,01 u) toonde elke run die niet precies op het kwartier begon de rand van
+    het kijkvenster weer als sluittijd ("tot ~07:15")."""
+    stap = wa.PREDICT_STEP_MIN / 60.0
+    net_binnen = {"start": "13:15", "end": "07:15", "start_h": 0.0,
+                  "end_h": wa.PREDICT_HORIZON_H - stap + 0.02}
+    assert open_end_is_horizon(net_binnen) is True
+    assert open_end_text([net_binnen]) == "de hele nacht door"
+    echt = {**net_binnen, "end_h": wa.PREDICT_HORIZON_H - 2 * stap}
+    assert open_end_is_horizon(echt) is False
+
+
+def test_raamloze_sensorkamer_krijgt_geen_koeladvies():
+    """De badkamer is sensor-only: ze liep gewoon mee door decide() en kreeg op een
+    warme dag "Nu open de hele nacht door" — zonder raam om open te zetten."""
+    now = datetime(2026, 7, 20, 21, 0, tzinfo=wa.TZ)
+    rooms = {"Shower": {"inside": 25.5, "humidity": 60}}
+    ctx = {"od": 18.0, "prev_rooms": {}, "warm_ahead": True, "gated": False,
+           "heating_weather": False, "outside_rh": 60, "outside_rh_temp": 18.0,
+           "fc": [], "hourly": []}
+    rij = wa._room_dashboard_row("Shower", rooms, {}, now, ctx)
+    assert rij["sensor_only"] is True
+    assert rij["advice"] == "dicht" and rij["open_now"] is False
+    assert rij["open_reason"] is None and rij["open_intervals"] == []
+    assert rij["status_text"] == "Alleen sensor — geen raam"
+    assert rij["inside"] == 25.5                      # de meting zelf blijft
+    assert wa._room_dashboard_row("Nursery", {"Nursery": rooms["Shower"]}, {}, now,
+                                  ctx)["sensor_only"] is False
+
+
+def test_sluitbericht_noemt_de_echte_reden():
+    """decide() sluit ook als de kamer koel genoeg is terwijl het buiten nog kouder
+    is; "buiten wordt warmer dan binnen" was dan aantoonbaar onwaar."""
+    dicht = {"kind": "dicht"}
+    koel = wa.room_message_line("bedroom", dicht, 15.9, 11.0, [])
+    assert "koel genoeg" in koel and "warmer" not in koel
+    warm = wa.room_message_line("bedroom", dicht, 22.0, 23.0, [])
+    assert "buiten wordt warmer dan binnen" in warm
+
+
+def test_leesfout_op_het_vorige_artefact_is_geen_lege_historie(monkeypatch):
+    """Eén haperende gist-read mag de 48u-historie, het schimmellogboek en het
+    om_bias-leerboek niet met een lege basis overschrijven."""
+    import requests
+
+    monkeypatch.setenv("ARTEFACT_GIST_ID", "abc123")
+    monkeypatch.setenv("GIST_TOKEN", "tok")
+
+    def kapot(*a, **k):
+        raise requests.ConnectionError("down")
+
+    monkeypatch.setattr(wa.artefact_io.gist_io.requests, "get", kapot)
+    with pytest.raises(requests.ConnectionError):
+        wa.read_prev_dashboard()

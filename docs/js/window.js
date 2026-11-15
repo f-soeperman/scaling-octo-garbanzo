@@ -1,6 +1,8 @@
 // ===================== CONFIG =====================
 // COLORS-palet komt uit js/theme.js (geladen vóór dit script).
-const ROOM_COLORS = [COLORS.clay, COLORS.rain, COLORS.sun, COLORS.mossLight];
+// Vijf kleuren: vier advies-kamers + de sensor-only badkamer (die deelde eerst de
+// kleur van de eerste kamer in elke grafiek en legenda).
+const ROOM_COLORS = [COLORS.clay, COLORS.rain, COLORS.sun, COLORS.mossLight, COLORS.wet];
 const state = { data: null, vent: null, chart: null, rhChart: null };
 
 document.getElementById("folio-mark").textContent = `Terroir de Utrecht · Est. ${new Date().getFullYear()} · Ramen`;
@@ -31,7 +33,7 @@ async function loadData() {
     render();
   } catch (e) {
     document.getElementById("banner-slot").innerHTML =
-      `<div class="banner banner-error"><strong>Kan data niet laden:</strong> ${e.message}. Heeft de GitHub Action al gedraaid?</div>`;
+      `<div class="banner banner-error"><strong>Kan data niet laden:</strong> ${e.message}</div>`;
     document.getElementById("source-label").textContent = "";
   }
 }
@@ -131,7 +133,10 @@ function summaryHTML(d) {
     const r = d.rooms[name];
     if (!r) return "";
     const open = r.advice === "open";
-    const adv = `<span class="sum-adv" style="color:${open ? "var(--moss)" : "var(--clay)"};">${open ? "● Open" : "○ Dicht"}</span>`;
+    // Sensor-only kamer (geen raam): wel de meting, geen open/dicht-advies.
+    const adv = r.sensor_only
+      ? `<span class="sum-adv" style="color:var(--ink-soft);">· sensor</span>`
+      : `<span class="sum-adv" style="color:${open ? "var(--moss)" : "var(--clay)"};">${open ? "● Open" : "○ Dicht"}</span>`;
     const tempCell = r.inside == null ? "–"
       : `<span class="sum-now">${r.inside.toFixed(1)}°</span>`
         + ` <span class="sum-rate">${trendArrow(r.trend)}</span>`
@@ -365,7 +370,8 @@ function mouldPanelHTML(d) {
 function roomCardHTML(name, r) {
   if (!r) return "";
   const open = r.advice === "open";
-  const stamp = `<span class="stamp ${open ? "stamp-open" : "stamp-dicht"}">${open ? "Open" : "Dicht"}</span>`;
+  const stamp = r.sensor_only ? ""
+    : `<span class="stamp ${open ? "stamp-open" : "stamp-dicht"}">${open ? "Open" : "Dicht"}</span>`;
   // `open` (== advice) is de bron van waarheid voor de chip; laat de statusregel-kleur
   // daarmee overeenkomen zodat "Blijft open"/"Nu open" nooit grijs oogt terwijl de kamer
   // echt open staat (zie open_reason() in window_advisor.py voor de achterliggende logica).
@@ -422,7 +428,8 @@ function scatterLegendHTML(d) {
 // ===================== TIMELINE =====================
 function timelineHTML(d) {
   const H = 18; // toon 18 uur vooruit
-  const rooms = ROOMS_ORDER(d);
+  // Geen tijdlijnrij voor een kamer zonder raam.
+  const rooms = ROOMS_ORDER(d).filter(name => !d.rooms[name].sensor_only);
   const rows = rooms.map(name => {
     const r = d.rooms[name];
     const segs = (r.open_intervals || []).map(iv => {

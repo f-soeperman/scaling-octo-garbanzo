@@ -450,19 +450,23 @@ function buildPauseToggle(live) {
   if (!seg) return;
   const d = state.data || {};
   const liveHas = live && (PAUSE_STATE_KEY in live);
-  const cur = liveHas ? !!live[PAUSE_STATE_KEY] : !!d.paused;
+  const cur = liveHas ? !!live[PAUSE_STATE_KEY] : false;
   state.pending[PAUSE_STATE_KEY] = cur;
   applyPauseGrayOut(cur);
   seg.querySelectorAll("button").forEach(b => {
     b.classList.toggle("active", (b.dataset.v === "true") === cur);
   });
-  seg.querySelectorAll("button").forEach(b => b.addEventListener("click", e => {
-    const v = e.target.dataset.v === "true";
+  // Eén handler via onclick (zoals de stille-modus-knop): de knoppen zijn statisch,
+  // dus addEventListener stapelde bij elke keer openen van de modal een extra handler.
+  seg.onclick = e => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    const v = btn.dataset.v === "true";
     seg.querySelectorAll("button").forEach(x => x.classList.remove("active"));
-    e.target.classList.add("active");
+    btn.classList.add("active");
     state.pending[PAUSE_STATE_KEY] = v;
     applyPauseGrayOut(v);
-  }));
+  };
 }
 // ── Stille modus (notify_prefs.json — eigen Gist-bestand, browser = enige schrijver) ──
 // De keuze leeft bewust BUITEN state.pending: hij mag nooit als sleutel in de
@@ -531,14 +535,11 @@ function buildAcDropdown(live) {
   const sel = document.getElementById("ac-select");
   if (!sel) return;
   const d = state.data || {};
-  let rooms = (d.ac && d.ac.rooms) || [];
-  if (!rooms.length) {
-    const meta = (d.house_meta && d.house_meta.rooms) || {};
-    rooms = Object.entries(meta).filter(([, r]) => r.sensor)
-                  .map(([id, r]) => ({ id, label: r.label || id }));
-  }
+  const meta = (d.house_meta && d.house_meta.rooms) || {};
+  const rooms = Object.entries(meta).filter(([, r]) => r.sensor)
+                      .map(([id, r]) => ({ id, label: r.label || id }));
   const liveHas = live && (AC_STATE_KEY in live);
-  let cur = liveHas ? live[AC_STATE_KEY] : ((d.ac && d.ac.room) || "");
+  let cur = liveHas ? live[AC_STATE_KEY] : "";
   cur = (cur == null ? "" : ("" + cur).trim().toLowerCase());
   if (["geen", "none", "off", "uit", "-"].includes(cur)) cur = "";
   sel.innerHTML = `<option value="">geen</option>` +

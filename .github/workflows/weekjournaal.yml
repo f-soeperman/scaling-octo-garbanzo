@@ -44,7 +44,11 @@ jobs:
             echo "Verlate fallback-cron (vóór 20:00 lokaal) — sla over."
             exit 0
           fi
-          since=$(TZ=Europe/Amsterdam date -d "today 00:00" +%s)
+          # Venster vanaf het doelmoment (min een minuut klokspeling), niet vanaf
+          # middernacht: een verlate cron van gisteren die ná middernacht
+          # binnenkwam is hierboven overgeslagen, maar staat als "success" in het
+          # ledger en zou anders als "vandaag al gedaan" tellen.
+          since=$(( $(TZ=Europe/Amsterdam date -d "today 20:00" +%s) - 60 ))
           others=$(gh run list --workflow weekjournaal.yml -L 40 \
             --json databaseId,createdAt,conclusion \
             --jq "[.[] | select(.databaseId != ${{ github.run_id }}
