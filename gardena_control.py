@@ -178,24 +178,31 @@ def _gist_env():
     return gist_id, token
 
 
-def read_gist_files(names) -> dict:
+def read_gist_files(names, strict=()) -> dict:
     """Eén GET voor de hele Gist; parse de gevraagde JSON-bestanden.
-    Ontbrekend/corrupt bestand → None voor dat bestand. Raist bij netwerk-
-    of HTTP-fouten (de aanroeper beslist)."""
+    Ontbrekend bestand → None voor dat bestand. Raist bij netwerk- of
+    HTTP-fouten (de aanroeper beslist).
+
+    Via `gist_io.read_files`: die volgt de `raw_url` van een bestand dat de
+    Gist-API afkapt. Dat gebeurt in déze Gist ook bij kleine bestanden zodra
+    de respons als geheel groot wordt (de maand-shards) — de eigen reader zag
+    dan lege of halve content, las dat als "geen bestand" en bouwde verder op
+    een lege basis.
+
+    `strict`: namen waarvan aanwezige-maar-onleesbare inhoud een fout is in
+    plaats van None. Voor de basis van een read-modify-write (het
+    irrigatielogboek): "onleesbaar" als "leeg" laten doorgaan zou het hele
+    logboek vervangen door alleen de nieuwe registratie."""
     gist_id, token = _gist_env()
-    headers = {"Accept": "application/vnd.github+json"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    r = requests.get(f"https://api.github.com/gists/{gist_id}",
-                     headers=headers, timeout=20)
-    r.raise_for_status()
-    files = r.json().get("files") or {}
+    raw = gist_io.read_files(gist_id, token=token, names=names)
     out = {}
     for name in names:
-        content = (files.get(name) or {}).get("content")
+        content = raw.get(name)
         try:
             out[name] = json.loads(content) if content else None
         except json.JSONDecodeError:
+            if name in strict:
+                raise ValueError(f"{name}: inhoud niet leesbaar als JSON") from None
             out[name] = None
     return out
 
@@ -264,6 +271,26 @@ def load_soil_data(now: datetime, path: str | None = None):
 # onderin `meter_step`): dat bleek in de praktijk een vals-positieve beurt te
 # kunnen opleveren voor een kraan die nooit heeft opengestaan.
 
+# Speling tussen onze klok (start van de run, vóór het commando) en de
+# activity-timestamp van GARDENA.
+ASSUMED_TS_SLACK = timedelta(seconds=60)
+
+
+def assume_open(prev, now: datetime, cmd_s: int) -> dict:
+    """Meter-entry direct ná een eigen START op een dichte kraan.
+
+    Zonder dit zag de meter een sessie die bínnen één uurlijks gat opent en
+    weer sluit (élke grasbeurt: LAWN_MAX_MIN is korter dan de cadans) als
+    dicht-op-dicht, en dat levert sinds aug 2026 terecht nooit een interval op.
+    Gevolg: geen registratie in het logboek, een vals "lijkt niet te zijn
+    opengegaan"-alert, en een weeklimiet die de beurt niet meetelde. De regel
+    "dicht-op-dicht verzint nooit een beurt" blijft staan voor alles wat de
+    automaat niet zelf commandeerde; `meter_step` bevestigt deze entry alleen
+    als de activity-ts ná het commando verschoof."""
+    return {"open": True, "assumed": True, "since": iso(now), "cmd_s": int(cmd_s),
+            "ts": (prev or {}).get("ts"), "checked": iso(now)}
+
+
 def meter_step(prev, cur_open: bool, cur_ts, cur_dur, now: datetime):
     """(nieuwe meter-entry, [voltooide (start, eind)-intervallen])."""
     completed = []
@@ -289,6 +316,22 @@ def meter_step(prev, cur_open: bool, cur_ts, cur_dur, now: datetime):
     prev_checked = parse_ts(prev.get("checked")) or (now - timedelta(hours=1))
     prev_ts = parse_ts(prev.get("ts"))
     changed_ts = cur_ts is not None and prev_ts is not None and cur_ts != prev_ts
+
+    if prev.get("open") and prev.get("assumed"):
+        # Wij gaven zelf het START-commando (`assume_open`), maar zágen de kraan
+        # nog niet open. De activity-ts beslist: verschoven tot ná ons commando
+        # → de kraan is opengegaan (en eventueel alweer dicht). Niet verschoven
+        # → het commando is niet aangekomen: géén interval, en de sessie eindigt
+        # met het zero-delivery-alert. Bewust geen terugval op de gecommandeerde
+        # duur: dat zou een beurt registreren die nooit liep.
+        p_since = parse_ts(prev.get("since")) or prev_checked
+        confirmed = (cur_ts is not None
+                     and p_since - ASSUMED_TS_SLACK <= cur_ts <= now)
+        if cur_open:
+            return open_entry(_clamp(cur_ts, p_since, now) if confirmed else p_since), completed
+        if confirmed:
+            completed.append((p_since, max(p_since, cur_ts)))
+        return closed_entry(), completed
 
     if prev.get("open"):
         p_since = parse_ts(prev.get("since")) or prev_checked
@@ -684,14 +727,18 @@ def append_sensor_rows(rows) -> dict:
     Gist-modus: geeft {gist-bestandsnaam: json} terug; de aanroeper zet dat in
     de state-PATCH van deze run (één schrijfmoment per run). Lokale terugval:
     schrijft de bestanden zelf en geeft {} terug."""
-    by_month = {}
+    by_month, changed = {}, set()
     for r in rows:
         month = r["t"][:7]
         if month not in by_month:
             by_month[month] = load_shard(month)
-        merge_sensor_rows(by_month[month], [r])
-    bodies = {month: json.dumps(shard, ensure_ascii=False, separators=(",", ":"))
-              for month, shard in by_month.items()}
+        if any(merge_sensor_rows(by_month[month], [r])):
+            changed.add(month)
+    # Alleen maanden die echt veranderden: de sensor meldt zich elke 30–60 min,
+    # dus de meeste uurlijkse runs zien dezelfde rij opnieuw — die hoeft de hele
+    # maand niet nog eens mee te sturen in de state-PATCH.
+    bodies = {month: json.dumps(by_month[month], ensure_ascii=False, separators=(",", ":"))
+              for month in sorted(changed)}
     if _history_gist_active():
         return {_history_name(month): body for month, body in bodies.items()}
     os.makedirs(HISTORY_DIR, exist_ok=True)
@@ -880,6 +927,13 @@ def _run(now: datetime, app_key: str, app_secret: str, report) -> None:
             if not session_overlaps(state, zone, parse_ts(reg["start"]),
                                     parse_ts(reg["end"])):
                 notify(report, registration_message(zone, reg))
+            elif (state.get("session") or {}).get("zone") == zone:
+                # Loopt mee met de eigen sessie: tel het op de sessie bij, zodat
+                # het klaar-bericht de héle beurt noemt en niet alleen de chunk
+                # die in de laatste run afliep.
+                sess = state["session"]
+                sess["ran_min"] = int(sess.get("ran_min") or 0) + reg["min"]
+                sess["ran_mm"] = round((sess.get("ran_mm") or 0) + reg["mm"], 1)
     cutoff = (now.astimezone(TZ).date() - timedelta(days=RECENT_KEEP_D)).isoformat()
     for zone in ZONES:
         recent = (state.get("recent") or {}).get(zone)
@@ -914,8 +968,11 @@ def _run(now: datetime, app_key: str, app_secret: str, report) -> None:
             state["session"] = None
             if end.get("alert") and alert_due(state, end["alert"], now):
                 notify(report, ALERT_TEXT[end["alert"]].format(zone=ZONE_MSG[zone][0]))
-            ran_min = metered_min[zone]
-            ran_mm = round(sum(e["mm"] for z, e in pending if z == zone), 1)
+            if "ran_min" in session:
+                ran_min, ran_mm = session["ran_min"], session.get("ran_mm") or 0
+            else:
+                ran_min = metered_min[zone]
+                ran_mm = round(sum(e["mm"] for z, e in pending if z == zone), 1)
             # Zero-delivery alleen bij een dicht-waargenomen einde: bij een
             # pauze-/stuck-stop staat de kraan nu nog open en int de meter het
             # interval pas volgende run — dat is geen mislukte start.
@@ -947,6 +1004,7 @@ def _run(now: datetime, app_key: str, app_secret: str, report) -> None:
                 ga.start_valve, token, app_key, config["valves"][zone], chunk_s)):
             state["session"] = session_new
             state["day"][zone] = today_iso
+            state["meter"][zone] = assume_open(state["meter"].get(zone), now, chunk_s)
             notify(report, start_message(zone, planned_min,
                                          session_new["planned_mm"],
                                          session_new["target_end_utc"]))
@@ -965,6 +1023,8 @@ def _run(now: datetime, app_key: str, app_secret: str, report) -> None:
         if _exec_command(report, state, now, functools.partial(
                 ga.start_valve, token, app_key, config["valves"][force_zone], chunk_s)):
             state["session"] = session_new
+            state["meter"][force_zone] = assume_open(state["meter"].get(force_zone),
+                                                     now, chunk_s)
             notify(report, start_message(force_zone, force_min,
                                          session_new["planned_mm"],
                                          session_new["target_end_utc"], forced=True))
@@ -1019,7 +1079,8 @@ def _run(now: datetime, app_key: str, app_secret: str, report) -> None:
         if pending:
             # Verse read vlak vóór de merge: de modal kan intussen handmatige
             # beurten hebben toegevoegd en de merge is additief.
-            irr = read_gist_files((IRRIGATIONS_FILE,)).get(IRRIGATIONS_FILE) or {}
+            irr = read_gist_files((IRRIGATIONS_FILE,),
+                                  strict=(IRRIGATIONS_FILE,)).get(IRRIGATIONS_FILE) or {}
             for zone, entry in pending:
                 merge_irrigation(irr, zone, entry)
             files[IRRIGATIONS_FILE] = json.dumps(irr, indent=2)

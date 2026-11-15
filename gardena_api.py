@@ -8,9 +8,12 @@ Quota-regels (hard, zie CLAUDE.md Project 16): het GARDENA-API-budget is
 ~3000 calls/maand (≈1 per 15 min gemiddeld; overschrijding = 429 + ~24u
 lock-out). Daarom: één `GET /locations/{id}` per run als enige leesactie,
 nooit een verificatie-GET na een commando (de volgende uurlijkse snapshot
-verifieert), en retries alléén op transiënte fouten: netwerkfouten, en voor
-de twee leesacties (token + snapshot) ook een gateway-hapering (502/503/504).
-Nooit op 429 of andere statussen, en nooit op een kraan-commando.
+verifieert), en retries alléén op transiënte fouten: netwerkfouten (timeout,
+verbroken verbinding — ook op een kraan-commando: START-override en STOP zijn
+idempotent), en voor de twee leesacties (token + snapshot) ook een
+gateway-hapering (502/503/504). Nooit op 429 of andere statussen, en nooit een
+gateway-herkansing op een kraan-commando (een 504 zegt niet dat het commando
+níet is uitgevoerd).
 
 Credentials reizen in headers (Authorization/X-Api-Key), nooit in de URL —
 een requests-exceptie kan dus geen secret lekken. Foutmeldingen gaan bij de

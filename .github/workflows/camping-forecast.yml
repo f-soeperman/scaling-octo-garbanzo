@@ -1,6 +1,6 @@
 name: Kampeerkompas
 
-# Project 15 — kampeergeschiktheid van zeven streken, 16 dagen vooruit, ververst
+# Project 15 — kampeergeschiktheid van vier steden, 16 dagen vooruit, ververst
 # op de orchestrator-slots 00:00/06:00/12:00/18:00 (Europe/Amsterdam). Deze cron
 # is de fallback ~30 min later per slot; de guard-job hieronder dedupt per slot
 # tegen de orchestrator-dispatch. Dashboard-only: geen Telegram-advies, alleen

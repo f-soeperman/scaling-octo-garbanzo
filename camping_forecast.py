@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """camping_forecast.py — Project 15: Kampeerkompas.
 
-Doorlopend (jaarrond, 4×/dag) overzicht van waar en wanneer dertien streken
+Doorlopend (jaarrond, 4×/dag) overzicht van waar en wanneer vier steden
 geschikt zijn om te kamperen met tent, peuter en auto. Per streek wordt de
 Open-Meteo-voorspelling (16 dagen) gescoord op de kampeercriteria:
 
@@ -232,8 +232,8 @@ MINOR_REASONS = frozenset({"hitte_naderend", "koele_nacht",
                            "dagregen_licht", "nachtregen_licht", "wind_fris",
                            "nachtregen_wisselvallig"})
 
-# Zekerheid: de zwakste ensemble-fractie bepaalt de tier, afgetopt op de
-# horizon (ver weg is nooit "hoog", wat de leden ook zeggen).
+# Zekerheid: de minst eensgezinde ensemble-fractie (max(v, 1−v)) bepaalt de
+# tier, afgetopt op de horizon (ver weg is nooit "hoog", wat de leden ook zeggen).
 CONF_HOOG, CONF_MIDDEL = 0.80, 0.55
 CONF_HORIZON_CAP_MIDDEL, CONF_HORIZON_CAP_LAAG = 10, 13  # dag-index
 CONF_FALLBACK = ((3, "hoog"), (8, "middel"))  # zonder ensemble: horizon-ladder
@@ -257,9 +257,7 @@ SLAAPZAK_TE_KOUD = "eigenlijk te koud voor de peuter in de tent"
 WEEKDAG_KORT = tuple(d[:2] for d in NL_DAYS)  # ma..zo, index = date.weekday()
 
 HOURLY_VARS = ["temperature_2m", "dew_point_2m", "precipitation",
-               "precipitation_probability", "wind_gusts_10m", "weather_code"]
-DAILY_VARS = ["temperature_2m_max", "temperature_2m_min", "precipitation_sum",
-              "precipitation_probability_max", "wind_gusts_10m_max"]
+               "precipitation_probability", "wind_gusts_10m"]
 
 
 # ── Fetch (dun; tests monkeypatchen get_json) ────────────────────────────────
@@ -268,7 +266,6 @@ def fetch_region_forecast(region: dict) -> dict:
     params = {
         "latitude": region["lat"], "longitude": region["lon"],
         "hourly": ",".join(HOURLY_VARS),
-        "daily": ",".join(DAILY_VARS),
         "timezone": OM_TIMEZONE,
         "forecast_days": FORECAST_DAYS,
     }
@@ -300,7 +297,7 @@ REGION_RETRY_DELAY_S = 30
 def fetch_region_forecast_resilient(region: dict) -> dict:
     """`fetch_region_forecast` met één regio-brede herkansing erbovenop.
 
-    Met dertien regio's (was zeven, aug 2026) valt een korte, bredere
+    Met meerdere regio's per run valt een korte, bredere
     netwerk-hobbel eerder samen met de volle uitputting van één regio's eigen
     5 pogingen (~100s, zie http_util.get_json) dan met zeven — gemeten
     14 aug 2026: Bretagne verloor alle 5 pogingen binnen dezelfde hobbel,
