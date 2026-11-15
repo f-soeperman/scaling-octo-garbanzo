@@ -31,7 +31,7 @@ async function loadData() {
       return loadData();
     }
     document.getElementById("banner-slot").innerHTML =
-      `<div class="banner banner-error"><strong>Kan data niet laden:</strong> ${e.message}. ` +
+      `<div class="banner banner-error"><strong>Kan data niet laden:</strong> ${escHTML(e.message)}. ` +
       `Dit dashboard is privé — koppel je Gist-gegevens (token + artefact-gist) om de data te zien.</div>`;
     document.getElementById("source-label").textContent = "";
   }
@@ -76,14 +76,14 @@ function render() {
     const over = optimal && optimal.overgrown;
     badge = `<span class="badge ${over ? "badge-over" : "badge-ready"}">${over ? "Te lang" : "Maairijp"}</span>`;
     headline = over ? "Het gras staat lang." : "Tijd om te maaien.";
-    if (optimal && optimal.is_today) sub = `Vandaag is een goede maaidag (${optimal.reason}).`;
-    else if (optimal) sub = `Beste maaidag: <b>${fmtDate(optimal.date)}</b> (${optimal.reason}).`;
+    if (optimal && optimal.is_today) sub = `Vandaag is een goede maaidag (${escHTML(optimal.reason)}).`;
+    else if (optimal) sub = `Beste maaidag: <b>${fmtDate(optimal.date)}</b> (${escHTML(optimal.reason)}).`;
     else sub = "Geen goede maaidag in de voorspelling — even afwachten.";
   } else if (d.almost) {
     badge = `<span class="badge badge-wait">Bijna</span>`;
     headline = (n != null && n >= 0) ? `Bijna maairijp — nog ~${n} ${n === 1 ? "dag" : "dagen"}.` : "Bijna maairijp.";
     sub = optimal
-      ? `Plan alvast een droge maaidag: <b>${fmtDate(optimal.date)}</b> (${optimal.reason}).`
+      ? `Plan alvast een droge maaidag: <b>${fmtDate(optimal.date)}</b> (${escHTML(optimal.reason)}).`
       : (d.predicted_next_mow ? `Verwachte maairijpheid rond <b>${fmtDate(d.predicted_next_mow)}</b>.` : "Verwachte datum nog onbekend.");
   } else {
     badge = `<span class="badge badge-wait">Nog niet</span>`;
@@ -93,7 +93,7 @@ function render() {
 
   const lastMow = d.last_mow_assumed
     ? `${fmtDate(d.last_mow)} <span style="color:var(--ink-soft)">(aanname — log je eerste beurt)</span>`
-    : `${fmtDate(d.last_mow)}${d.last_length_mm ? ` · ${d.last_length_mm}mm` : ""}`;
+    : `${fmtDate(d.last_mow)}${d.last_length_mm ? ` · ${escHTML(d.last_length_mm)}mm` : ""}`;
 
   const lenColor = rec.length_mm >= 50 ? "var(--moss)" : (rec.length_mm <= 30 ? "var(--clay)" : "var(--ink)");
 
@@ -116,10 +116,10 @@ function render() {
 
       <div class="specimen-card">
         <div class="corner-mark">Advies maaihoogte</div>
-        <div class="big-num" style="margin-top:10px;color:${lenColor};">${rec.length_mm || "—"}<span>mm</span></div>
+        <div class="big-num" style="margin-top:10px;color:${lenColor};">${escHTML(rec.length_mm || "—")}<span>mm</span></div>
         <p style="font-size:15px;color:var(--ink-soft);margin-top:10px;font-style:italic;">${rec.reason || ""}</p>
         ${d.last_length_mm && d.last_length_mm !== rec.length_mm
-          ? `<p style="margin-top:10px;font-size:12px;color:var(--clay);font-family:'JetBrains Mono',monospace;">↑ vorige keer ${d.last_length_mm}mm — advies wijkt af</p>` : ""}
+          ? `<p style="margin-top:10px;font-size:12px;color:var(--clay);font-family:'JetBrains Mono',monospace;">↑ vorige keer ${escHTML(d.last_length_mm)}mm — advies wijkt af</p>` : ""}
       </div>
     </div>
 
@@ -248,7 +248,7 @@ function renderHistory() {
     const cur = dates[i], next = dates[i+1];
     let gap = "";
     if (next) gap = `${Math.round((new Date(cur) - new Date(next)) / 86400000)} dgn`;
-    rows += `<tr><td>${fmtDate(cur)}</td><td>${state.mowings[cur].length_mm} mm</td><td style="color:var(--ink-soft)">${gap}</td></tr>`;
+    rows += `<tr><td>${fmtDate(cur)}</td><td>${escHTML(state.mowings[cur].length_mm)} mm</td><td style="color:var(--ink-soft)">${gap}</td></tr>`;
   }
   el.innerHTML = `<table><thead><tr><th>Datum</th><th>Hoogte</th><th>Interval</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
@@ -313,7 +313,7 @@ function updateMowLog() {
     return;
   }
   log.innerHTML = dates.map(date =>
-    `<div class="log-entry"><span>${date} · ${state.mowings[date].length_mm}mm</span><span class="rm" data-date="${date}">×</span></div>`
+    `<div class="log-entry"><span>${escHTML(date)} · ${escHTML(state.mowings[date].length_mm)}mm</span><span class="rm" data-date="${escHTML(date)}">×</span></div>`
   ).join('');
 }
 

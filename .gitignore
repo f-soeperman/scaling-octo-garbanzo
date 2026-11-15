@@ -4,8 +4,8 @@ __pycache__/
 .venv/
 .DS_Store
 
-# Gegenereerde ML-export (bouw lokaal met tools/export_ml_dataset.py; de bron
-# leeft in de privé Gist, zie verderop). README blijft behouden.
+# Gegenereerde ML-export (bouw lokaal met tools/export_ml_dataset.py; de bron —
+# de twin2-maand-shards — leeft sinds aug 2026 in de privé Gist). README blijft behouden.
 data/ml/ventilation_long.csv
 data/ml/ventilation_wide.csv
 data/ml/ventilation_long.parquet
@@ -53,3 +53,15 @@ data/gardena_history/*.json
 # Privé-indeling van de 3D-pagina hoort alleen in de artefact-gist
 huis3d_layout.json
 docs/huis3d_layout.json
+
+# Security-scan nov 2026: naar de privé artefact-gist. De uurreeks van het eigen
+# station (archief + de scatter in accuracy_data.json) maakt het geheime station
+# herleidbaar; het nachtvoorspellingslog is op de gemeten kinderkamertemperatuur
+# geankerd; soil-/shade-state zijn afgeleiden van gemelde handelingen. De nog
+# gecommitte kopieën verdwijnen bij de eerste gist-run (zelf-uitvoerende
+# migratie) en mogen daarna niet terugkomen.
+data/station_history/*.json
+data/night_forecast_log/*.json
+docs/accuracy_data.json
+soil_state.json
+shade_state.json

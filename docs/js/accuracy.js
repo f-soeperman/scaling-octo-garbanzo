@@ -5,16 +5,29 @@ let charts = {};
 
 async function load() {
   let d;
+  $("verdict-banner").innerHTML = "";
+  // Privé sinds nov 2026: de scatter draagt de uurwaarden van het eigen station
+  // (temperatuur + pyranometer), en daarmee is het station herleidbaar via de
+  // openbare WU-historie. Zelfde token+artefact-gist-poort als window/vent.
+  if (!(CONFIG.githubToken && CONFIG.artefactGistId)) {
+    $("verdict-banner").innerHTML =
+      `<div class="banner banner-warn">🔒 Dit dashboard is privé — koppel je account (🔑 Account hierboven) ` +
+      `om de stations-ijking te zien.</div>`;
+    return;
+  }
   try {
-    const r = await fetch(`accuracy_data.json?t=${Date.now()}`);
-    if (!r.ok) throw new Error(r.status);
-    d = await r.json();
+    d = await artefactReadJSON("accuracy_data.json", "accuracy_data.json");
   } catch (e) {
     $("verdict-banner").innerHTML =
-      `<div class="banner banner-error">Kon accuracy_data.json niet laden — draai eerst de workflow “Weerstation-nauwkeurigheid”. (${e})</div>`;
+      `<div class="banner banner-error">Kon accuracy_data.json niet laden — draai eerst de workflow “Weerstation-nauwkeurigheid”. (${escA(e)})</div>`;
     return;
   }
   render(d);
+}
+
+// Lokale HTML-escape (deze pagina laadt theme.js niet).
+function escA(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 function render(d) {
@@ -221,7 +234,7 @@ function renderReferences(d) {
        <th style="text-align:left;">referentie</th><th>n</th><th>bias</th><th>rmse</th><th>sd</th></tr>` +
     refs.map(r => {
       const mark = r.sd === best ? ' style="font-weight:600;"' : "";
-      return `<tr${mark}><td style="text-align:left;padding:4px 0;">${r.label}</td>`
+      return `<tr${mark}><td style="text-align:left;padding:4px 0;">${escA(r.label)}</td>`
         + `<td style="text-align:right;">${r.n}</td>`
         + `<td style="text-align:right;">${sign(r.bias)}</td>`
         + `<td style="text-align:right;">${r.rmse.toFixed(2)}</td>`
@@ -238,13 +251,13 @@ function renderNeighbours(d) {
     return;
   }
   const kleur = { gedeeld: "#6b8562", uitzondering: "#a0421a", onbeslist: "#4a6b8a" }[nb.verdict];
-  verdictEl.innerHTML = `<span style="color:${kleur};font-weight:600;">${nb.verdict.toUpperCase()}</span> — ${nb.explanation}`;
+  verdictEl.innerHTML = `<span style="color:${kleur};font-weight:600;">${escA(nb.verdict.toUpperCase())}</span> — ${escA(nb.explanation)}`;
 
   const bins = (nb.ours.by_wind || []).map(b => `${b.lo}-${b.hi}`);
   const cel = v => v == null ? "–" : sign(v);
   const rij = (p, eigen) => {
     const st = eigen ? ' style="font-weight:600;"' : "";
-    return `<tr${st}><td style="text-align:left;padding:4px 0;">${p.label}</td>`
+    return `<tr${st}><td style="text-align:left;padding:4px 0;">${escA(p.label)}</td>`
       + `<td style="text-align:right;">${p.n}</td>`
       + `<td style="text-align:right;">${cel(p.night_bias)}</td>`
       + `<td style="text-align:right;">${cel(p.day_bias)}</td>`

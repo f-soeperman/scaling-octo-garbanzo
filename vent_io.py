@@ -696,8 +696,7 @@ def refine_outside_now(weather: dict) -> tuple[float | None, float | None]:
                 and wu_solar >= WU_SOLAR_MIN_WM2):
             wu_solar_scale = min(WU_SOLAR_SCALE_MAX,
                                  max(WU_SOLAR_SCALE_MIN, wu_solar / om_solar_now))
-            print(f"[zon] WU/OM glas-drive-herschaling k={wu_solar_scale:.2f} "
-                  f"(WU {wu_solar}, OM {om_solar_now} W/m²)")
+            print("[zon] WU/OM glas-drive-herschaling toegepast.")
     else:
         cur["outside_source"] = "open-meteo"
         print("[buiten] WU niet beschikbaar → Open-Meteo buiten-nu.")

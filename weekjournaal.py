@@ -207,15 +207,17 @@ def main() -> None:
     today = now.date()
     print(f"[weekjournaal] Start — {now.isoformat()}")
 
-    # Bodem, maai en tweeling leven sinds de privatisering (aug 2026) in de
-    # artefact-gist (ARTEFACT_GIST_ID) — één call voor alle drie; het lokale
-    # pad is de test-/bootstrap-terugval.
+    # Bodem, maai, tweeling en (sinds nov 2026) het stationsrapport leven in de
+    # artefact-gist (ARTEFACT_GIST_ID) — één call voor alle vier; het lokale pad
+    # is de test-/bootstrap-terugval. accuracy_data.json valt daarbij terug op de
+    # nog gecommitte kopie zolang station_accuracy de gist niet gevuld heeft.
     arte = artefact_io.read_many({"data.json": SOIL_DATA_PATH,
                                   "mowing_data.json": MOWING_DATA_PATH,
-                                  "vent_learned.json": LEARNED_PATH})
+                                  "vent_learned.json": LEARNED_PATH,
+                                  "accuracy_data.json": ACCURACY_DATA_PATH})
     soil, mow, learned = (arte["data.json"], arte["mowing_data.json"],
                           arte["vent_learned.json"])
-    acc = _load(ACCURACY_DATA_PATH)
+    acc = arte["accuracy_data.json"] or _load(ACCURACY_DATA_PATH)
 
     msg = build_message([
         garden_section(soil, today),

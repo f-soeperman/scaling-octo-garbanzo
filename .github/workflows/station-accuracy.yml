@@ -66,13 +66,22 @@ jobs:
           # en het archief is idempotent op het UTC-uur dus de overlap stapelt niet.
           ACCURACY_DAYS:      ${{ inputs.days || '40' }}
           SEND_TELEGRAM:      ${{ inputs.notify && '1' || '' }}
+          # Archief + dashboard-artefact leven sinds nov 2026 in de privé
+          # artefact-gist; afwezig secret → het oude lokale pad.
+          ARTEFACT_GIST_ID:   ${{ secrets.ARTEFACT_GIST_ID }}
+          GIST_TOKEN:         ${{ secrets.GIST_TOKEN }}
         run: python station_accuracy.py
 
       - name: Commit dashboard data
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add docs/accuracy_data.json data/station_history
+          # In gist-modus verwijdert de run de nog gecommitte kopieën
+          # (zelf-uitvoerende migratie); daarna is deze stap een no-op.
+          # Per pad: een pathspec die niets meer raakt laat `git add` hard falen.
+          for p in docs/accuracy_data.json data/station_history; do
+            if [ -n "$(git ls-files -- "$p")" ]; then git add -A -- "$p"; fi
+          done
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else

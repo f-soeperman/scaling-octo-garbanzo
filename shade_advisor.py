@@ -27,6 +27,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 import vent_io as vio
+import artefact_io
 import vent_physics as vp
 from notify import run_guarded, sanitize_error, send_telegram
 from shared_const import TZ, format_date_nl
@@ -187,18 +188,19 @@ def reminder_message(entry: dict, dw_now: float) -> str:
 
 # ── State-IO (klein, zoals sandbox_state.json) ────────────────────────────────────────
 
+# Sinds nov 2026 in de privé artefact-gist: `reminder_at`/`reminder_sent` hangen af
+# van de gemelde zonweringstanden, dus de dagelijkse commit was een afgeleide van
+# de privé openingen-log. STATE_FILE blijft het lokale/test-pad en het startpunt
+# van de zelf-uitvoerende migratie (zie artefact_io).
+
 def load_state() -> dict:
-    try:
-        with open(STATE_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+    stored = artefact_io.read_json_migrating("shade_state.json", STATE_FILE, default=None)
+    return stored if isinstance(stored, dict) else {}
 
 
 def save_state(state: dict) -> None:
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2, ensure_ascii=False)
-        f.write("\n")
+    body = json.dumps(state, indent=2, ensure_ascii=False) + "\n"
+    artefact_io.write_state("shade_state.json", STATE_FILE, body)
 
 
 def _send(msg: str) -> None:

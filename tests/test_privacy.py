@@ -258,6 +258,24 @@ _PRIVATE_ARTEFACTS = (
     "docs/night_verify.json",
 )
 
+# Security-scan nov 2026: naar de artefact-gist, maar de gecommitte kopie
+# verdwijnt pas bij de eerste gist-run (zelf-uitvoerende migratie — een harde
+# `git rm` zou het dag-geheugen/archief weggooien vóór het in de gist staat).
+# Tot dan alleen de preventieve helft: gitignored, zodat ze na de migratie niet
+# terug kunnen komen. Zodra de boom schoon is horen ze in _PRIVATE_ARTEFACTS.
+_MIGRATING_ARTEFACTS = (
+    "docs/accuracy_data.json", "soil_state.json", "shade_state.json",
+    "data/station_history/2026-01.json", "data/night_forecast_log/2026-01.json",
+)
+
+
+@pytest.mark.parametrize("path", _MIGRATING_ARTEFACTS)
+def test_migrerende_artefacten_zijn_gitignored(path):
+    # --no-index: een nog gevolgd bestand telt voor check-ignore anders als niet-genegeerd.
+    ignored = subprocess.run(["git", "-C", _ROOT, "check-ignore", "-q", "--no-index",
+                              path]).returncode == 0
+    assert ignored, f"{path} ontbreekt in .gitignore"
+
 
 def test_geprivatiseerde_artefacten_zijn_niet_gecommit():
     """Deze bestanden leven in de artefact-gist. De lokale terugval mag bestaan
@@ -405,3 +423,61 @@ def test_workflows_stagen_geen_genegeerde_paden():
                 continue
             for pad in verboden:
                 assert pad not in line, f"{wf}: `git add` van genegeerd pad {pad}"
+
+
+# ── Security-scan nov 2026 ───────────────────────────────────────────────────
+
+_DOCS = os.path.join(_ROOT, "docs")
+_PAGES = sorted(f for f in os.listdir(_DOCS) if f.endswith(".html"))
+
+
+@pytest.mark.parametrize("page", _PAGES)
+def test_scripts_komen_alleen_van_de_eigen_origin(page):
+    """Geen CDN in script-src: de token-pagina's bewaren een Gist-token in
+    localStorage, en een hele CDN-host toestaan (die willekeurige npm-/GitHub-
+    inhoud serveert) maakt van elke HTML-injectie een scriptinjectie. De
+    bibliotheken staan gevendord onder docs/js/vendor/."""
+    html = _read(os.path.join("docs", page))
+    csp = re.search(r'Content-Security-Policy" content="(.*?)"', html, re.DOTALL)
+    assert csp, f"{page} mist een CSP"
+    script_src = re.search(r"script-src([^;]*);", csp.group(1))
+    if script_src:
+        assert script_src.group(1).split() == ["'self'"], page
+    else:
+        assert "default-src 'none'" in csp.group(1), page
+    for src in re.findall(r"<script\b[^>]*\bsrc=\"([^\"]+)\"", html):
+        assert not re.match(r"(https?:)?//", src), f"{page}: extern script {src}"
+
+
+def test_gevendorde_bibliotheken_kloppen_met_hun_sri():
+    """De vendor-kopieën zijn byte-identiek aan de npm-release: elke
+    integrity-hash in de HTML moet het bestand op schijf dekken."""
+    import hashlib
+    gezien = 0
+    for page in _PAGES:
+        html = _read(os.path.join("docs", page))
+        for src, sri in re.findall(
+                r'<script\b[^>]*\bsrc="(js/vendor/[^"]+)"[^>]*\bintegrity="sha384-([^"]+)"', html):
+            with open(os.path.join(_DOCS, src), "rb") as f:
+                digest = base64.b64encode(hashlib.sha384(f.read()).digest()).decode()
+            assert digest == sri, f"{page}: {src} wijkt af van zijn SRI-hash"
+            gezien += 1
+        assert not re.search(r'src="js/vendor/[^"]+"(?![^>]*integrity=)', html), \
+            f"{page}: vendor-script zonder integrity"
+    assert gezien, "geen enkel vendor-script gevonden"
+
+
+@pytest.mark.parametrize("path, verboden", [
+    # Kwartierreeksen van de eigen stationsmeting in het publieke log maken het
+    # (geheime) station herleidbaar via de openbare WU-historie.
+    ("window_advisor.py", r'print\(f"\[buiten\] WU: [^\n]*\{'),
+    ("window_advisor.py", r'print\(f"\[buiten\] beslis-temp[^\n]*\{outside_decide'),
+    ("vent_io.py", r'print\(f"\[buiten\] WU[^\n]*\{wu_temp'),
+    ("vent_io.py", r'print\(f"\[zon\][^\n]*\{wu_solar'),
+    # Huisboekhouding / kamerwaarden in scheduled stdout.
+    ("vent_twin.py", r'print\(f"\[leren\][^\n]*len\(actual'),
+    ("vent_twin.py", r"append overgeslagen: \{e\}"),
+    ("night_forecast.py", r'koele nacht[^\n]*\{night_max'),
+])
+def test_scheduled_stdout_draagt_geen_meetwaarden(path, verboden):
+    assert not re.search(verboden, _read(path)), f"{path}: {verboden}"

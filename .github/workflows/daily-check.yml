@@ -129,7 +129,12 @@ jobs:
           # Alleen het meldslot. data.json leeft in de privé artefact-gist; de
           # lokale terugval (zonder ARTEFACT_GIST_ID) staat in .gitignore en hoort
           # ook nooit gecommit te worden — `git add` op een genegeerd pad faalt.
-          git add soil_state.json
+          # soil_state.json leeft sinds nov 2026 ook in de artefact-gist; de eerste
+          # gist-run verwijdert de nog gecommitte kopie (zelf-uitvoerende
+          # migratie). Alleen een nog gevolgd bestand stagen (wijziging óf deletie).
+          if git ls-files --error-unmatch soil_state.json >/dev/null 2>&1; then
+            git add -A -- soil_state.json
+          fi
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else

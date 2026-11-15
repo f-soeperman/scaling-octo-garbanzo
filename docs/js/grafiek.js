@@ -53,7 +53,7 @@ async function loadData() {
     render();
   } catch (e) {
     document.getElementById("banner-slot").innerHTML =
-      `<div class="banner banner-error"><strong>Kan data niet laden:</strong> ${e.message}</div>`;
+      `<div class="banner banner-error"><strong>Kan data niet laden:</strong> ${escHTML(e.message)}</div>`;
     document.getElementById("source-label").textContent = "";
   }
 }
