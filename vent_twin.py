@@ -517,7 +517,8 @@ def main():
     # afzuiging zijn drijvers die de fysica niet kent en die geen melding kan repareren.
     actual, fit_excluded = filter_excluded_rooms(actual, house)
     if fit_excluded:
-        print(f"[uitgesloten] kamers structureel buiten de fit: {fit_excluded}")
+        # Alleen de namen (een eigenschap van het huismodel), geen sample-aantallen.
+        print(f"[uitgesloten] kamers structureel buiten de fit: {sorted(fit_excluded)}")
 
     # Airco-kamer uit de kalibratie (geen actieve-koel-term in de fysica). Bewust géén
     # print van kamer of aantallen: de Actions-logs zijn publiek en dit is huisboekhouding.
@@ -567,9 +568,18 @@ def main():
     published_held = False
     baseline = None
     anomaly_state = dict(learned.get("anomaly") or {})
+    # De stdout van deze tak is VORMVAST (de Actions-log is publiek): geen sample- of
+    # kameraantallen en geen RMSE-waarde. `actual` is ná de airco-, verwarmings- en
+    # pauzefilters, dus elk getal dat ervan afhangt verklapt die boekhouding — het
+    # aantal samples zakte per kwartier zodra een pauze inging en dateerde zo het
+    # begin ervan, het aantal kamers was "alle min de airco-/gestookte kamers", en een
+    # volledig gepauzeerd venster had een eigen logregel. De waarden staan in het
+    # privé artefact (vent_learned.json); debuggen kan met een DRY_RUN-dispatch.
+    dry = os.getenv("DRY_RUN") == "1"
     if actual:
-        print(f"[leren] {sum(len(v) for v in actual.values())} samples over "
-              f"{len(actual)} kamers in het venster.")
+        if dry:
+            print(f"[leren] DRY_RUN — {sum(len(v) for v in actual.values())} samples "
+                  f"over {len(actual)} kamers in het venster.")
         # Anomalie-poort: hoe goed voorspellen de húidige parameters? Veel slechter dan
         # normaal → de openingen-log klopt vermoedelijk niet met de werkelijkheid.
         rmse_cur = rmse(_residuals(house, params, timeline, seed, ctx, actual,
@@ -607,24 +617,21 @@ def main():
                     else:
                         send_telegram(msg, muted_in_quiet=True)
                     anomaly_state["nudged_at"] = now.isoformat()
-            else:
-                # Stille hold (huis-pauze of stille modus): parameters vastgehouden, maar
-                # stdout exact als een leer-run — de hold mag nergens publiek af te lezen
-                # zijn, óók niet aan een ontbrekende logregel.
-                print(f"[leren] RMSE na kalibratie: {rmse_now:.3f} °C")
-                rails = railed_params(params, house=house)
-                if rails:
-                    print(f"[saturatie] params op hun grens: {', '.join(rails)}")
+            # else: stille hold (huis-pauze of stille modus) — parameters vastgehouden,
+            # stdout exact als een leer-run (zie hieronder).
         else:
             params, rmse_now = calibrate(house, params, timeline, seed, ctx, actual,
                                          solar_mean=wx_summary.get("solar_mean"),
                                          tm_seed=tm_seed_src, measured=gamma_measured)
-            print(f"[leren] RMSE na kalibratie: {rmse_now:.3f} °C")
-            rails = railed_params(params, house=house)
-            if rails:
-                print(f"[saturatie] params op hun grens: {', '.join(rails)}")
-    else:
-        print("[leren] geen werkelijke kamertemps in het venster → alleen voorspellen.")
+        if dry:
+            print(f"[leren] DRY_RUN — RMSE {rmse_now:.3f} °C")
+    # Eén afsluitende regel voor élke uitkomst — geleerd, stil vastgehouden, of een
+    # venster zonder bruikbare samples (bv. volledig gepauzeerd). De saturatie-regel
+    # is een eigenschap van de parameters en staat er dus ook altijd.
+    print("[leren] kalibratiestap afgerond.")
+    rails = railed_params(params, house=house)
+    if rails:
+        print(f"[saturatie] params op hun grens: {', '.join(rails)}")
     # Defensief: was het héle venster gepauzeerd, dan is `actual` leeg en werd de if-tak
     # overgeslagen — een gepauzeerd/stilgezet huis mag nooit als "geleerd" geboekt worden.
     learning_held = learning_held or paused_now or quiet_now
@@ -682,7 +689,9 @@ def main():
     # huis gepauzeerd was). Secret afwezig → het oude lokale pad (bootstrap/tests).
     dash_body = json.dumps(dash, ensure_ascii=False, indent=2)
     dash_dest = artefact_io.write_json_str("vent_data.json", DASHBOARD_FILE, dash_body)
-    print(f"[vent_twin] {dash_dest} geschreven ({len(dash_body)} bytes).")
+    # Geen byte-telling: `actual_series` volgt de gefilterde samples, dus de omvang
+    # zakt mee met een pauze/airco-venster.
+    print(f"[vent_twin] {dash_dest} geschreven.")
 
     # Browser-payload voor de speeltuin: de weer-only drivers over de vooruitblik + de
     # thermische params + het geankerde zaad, zodat de JS-kern een raamstand-scenario lokaal
@@ -700,7 +709,7 @@ def main():
         drivers["physics_rev"] = PHYSICS_REV
         fc_body = json.dumps(drivers, ensure_ascii=False)
         fc_dest = artefact_io.write_json_str("vent_forecast.json", FORECAST_FILE, fc_body)
-        print(f"[vooruitblik] {fc_dest} geschreven ({len(fc_body) / 1000:.0f} kB).")
+        print(f"[vooruitblik] {fc_dest} geschreven.")
     learned_out = {"updated_at": now.isoformat(), "model_version": model_version(),
                    "physics_rev": PHYSICS_REV,
                    "params": params,
@@ -735,7 +744,9 @@ def main():
             print(f"[shards] +{n_s} kamersamples, +{n_w} weer-uren, "
                   f"+{n_f} forecast-uren gelogd.")
     except Exception as e:  # noqa: BLE001 — shard-append mag de run nooit laten falen
-        print(f"[shards] append overgeslagen: {e}")
+        # sanitize_error: sinds de shard-privatisering doet dit blok Gist-calls, en een
+        # requests-exceptie draagt de URL mét het Gist-id.
+        print(f"[shards] append overgeslagen: {sanitize_error(e)}")
     try:
         # Eenmalige zelf-uitvoerende migratie (shard-openings → Gist-archief, daarna
         # strippen; no-op zodra de shards schoon zijn), dan het lopende archief bijwerken.

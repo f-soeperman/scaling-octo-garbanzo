@@ -72,3 +72,14 @@ def test_logboek_houdt_twee_weken_en_weeksom_zeven_dagen():
     wk = mr.week_summary(t, NOW + timedelta(days=19), "a")
     assert wk["risk_h"] == pytest.approx(7 * 0.5) and wk["max"] == 85
     assert mr.week_summary(t, NOW, "onbekend")["h"] == 0
+
+
+def test_logboek_boekt_op_het_oordeel_niet_op_de_afgeronde_rh():
+    """79,6 % toont als "80" maar is "let op". Het daglogboek mag geen risico-uren
+    boeken op een moment dat het paneel zelf niet als risico meldde."""
+    now = datetime(2026, 1, 10, 12, 0, tzinfo=TZ)
+    grens = {"surface_rh": round(mr.SURFACE_RH_RISK - 0.4),
+             "level": mr.level(mr.SURFACE_RH_RISK - 0.4)}
+    assert grens["surface_rh"] == mr.SURFACE_RH_RISK and grens["level"] == "let_op"
+    rij = mr.update_tally(None, now, {"bedroom": grens})["days"]["2026-01-10"]["bedroom"]
+    assert rij["watch_h"] > 0 and rij["risk_h"] == 0

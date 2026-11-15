@@ -118,9 +118,13 @@ def update_tally(tally: dict | None, now: datetime, per_room: dict[str, dict | N
             continue
         row = bucket.setdefault(room, {"h": 0.0, "watch_h": 0.0, "risk_h": 0.0, "max": 0})
         row["h"] = round(row["h"] + dt_h, 2)
-        if a["surface_rh"] >= SURFACE_RH_WATCH:
+        # Op het óórdeel (`level`, uit de onafgeronde RH), niet op de afgeronde
+        # `surface_rh`: 79,6 % toont als "80" maar is "let op" — het logboek mag
+        # geen risico-uren boeken die het paneel niet als risico meldde.
+        lvl = a.get("level") or level(a["surface_rh"])
+        if lvl in ("let_op", "risico"):
             row["watch_h"] = round(row["watch_h"] + dt_h, 2)
-        if a["surface_rh"] >= SURFACE_RH_RISK:
+        if lvl == "risico":
             row["risk_h"] = round(row["risk_h"] + dt_h, 2)
         row["max"] = max(row["max"], a["surface_rh"])
     cutoff = (now.date() - timedelta(days=TALLY_KEEP_D - 1)).isoformat()

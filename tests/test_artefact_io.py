@@ -31,7 +31,8 @@ def test_gist_modus_leest_en_schrijft_via_de_api(tmp_path, monkeypatch):
     monkeypatch.setenv("GIST_TOKEN", "tok")
     calls = {}
 
-    def fake_read_json(gid, filename, token=None, default=None, label=None):
+    def fake_read_json(gid, filename, token=None, default=None, label=None,
+                       strict=False):
         calls["read"] = (gid, filename, token)
         return {"b": 2}
 
@@ -67,3 +68,41 @@ def test_gh_token_fallback(monkeypatch):
     monkeypatch.setenv("ARTEFACT_GIST_ID", "abc123")
     monkeypatch.setenv("GH_TOKEN", "tok2")   # daily-check/mowing/gardena-naamgeving
     assert artefact_io.gist_active() is True
+
+
+def test_read_many_is_een_enkele_gist_call(monkeypatch):
+    monkeypatch.setenv("ARTEFACT_GIST_ID", "abc123")
+    monkeypatch.setenv("GIST_TOKEN", "tok")
+    calls = []
+
+    def fake_read_files(gid, token=None, timeout=20, names=None):
+        calls.append(sorted(names))
+        return {"a.json": '{"a": 1}', "kapot.json": "{nee"}
+
+    monkeypatch.setattr(artefact_io.gist_io, "read_files", fake_read_files)
+    out = artefact_io.read_many({"a.json": "x", "weg.json": "y", "kapot.json": "z"})
+    assert out == {"a.json": {"a": 1}, "weg.json": None, "kapot.json": None}
+    assert len(calls) == 1
+
+
+def test_read_many_strict_raist_en_anders_niet(monkeypatch):
+    import pytest
+
+    monkeypatch.setenv("ARTEFACT_GIST_ID", "abc123")
+    monkeypatch.setenv("GIST_TOKEN", "tok")
+
+    def kapot(*a, **k):
+        raise OSError("down")
+
+    monkeypatch.setattr(artefact_io.gist_io, "read_files", kapot)
+    assert artefact_io.read_many({"a.json": "x"}) == {"a.json": None}
+    with pytest.raises(OSError):
+        artefact_io.read_many({"a.json": "x"}, strict=True)
+
+
+def test_read_many_lokale_modus(tmp_path, monkeypatch):
+    _clear_env(monkeypatch)
+    p = tmp_path / "a.json"
+    p.write_text('{"a": 1}')
+    assert artefact_io.read_many({"a.json": str(p), "weg.json": str(tmp_path / "w")}) == {
+        "a.json": {"a": 1}, "weg.json": None}

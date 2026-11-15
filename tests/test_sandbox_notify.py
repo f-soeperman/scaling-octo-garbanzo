@@ -121,6 +121,19 @@ def test_avond_afgedekt_droog_kondigt_aan_zonder_statewissel():
     assert state["status"] == "afgedekt"
 
 
+def test_avond_afgedekt_droog_maar_te_koud_belooft_niets():
+    """De ochtendrun opent pas vanaf MIN_TEMP_LUCHTEN. In een koude droge
+    periode mag de avond dus niet elke dag een ochtendbericht aankondigen dat
+    nooit komt (spiegel van test_ochtend_afgedekt_droog_maar_koud_geen_bericht)."""
+    koud = sandbox_notify.MIN_TEMP_LUCHTEN - 3.0
+    fc = [_day("2026-11-01", tmax=koud), _day("2026-11-02", tmax=koud),
+          _day("2026-11-03", tmax=koud)]
+    msg, state = evening_check(_state("afgedekt"), fc)
+    assert msg is None and state["status"] == "afgedekt"
+    # …en wat de avond belooft, maakt de ochtend ook waar.
+    assert morning_check(_state("afgedekt"), fc[1:])[0] is None
+
+
 def test_avond_beperkte_forecast_krijgt_waarschuwing():
     msg, state = evening_check(_state("open"), [_day("2026-07-01")])
     assert msg is not None and msg.startswith("⚠️")
@@ -198,16 +211,6 @@ def test_dry_run_toont_alles_maar_schrijft_niets(monkeypatch, capsys, tmp_path):
     assert sent == []
     assert "gelucht" in out and "DRY_RUN=1" in out
     assert json.loads(state_file.read_text())["status"] == "dicht"  # onaangeroerd
-
-
-def test_state_migreert_last_notification_weg(tmp_path, monkeypatch):
-    """Bestaande state met het gedateerde meldspoor-veld verliest het bij de
-    eerstvolgende load (privacy-assessment aug 2026)."""
-    state_file = tmp_path / "state.json"
-    state_file.write_text(json.dumps({"status": "open", "last_updated": None,
-                                      "last_notification": "2026-08-16T18:00:00+00:00"}))
-    monkeypatch.setattr(sandbox_notify, "STATE_FILE", str(state_file))
-    assert "last_notification" not in sandbox_notify.load_state()
 
 
 def test_workflow_checkout_gepind(assert_checkout_pinned):

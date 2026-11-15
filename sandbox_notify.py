@@ -9,7 +9,7 @@ Status-waarden:
   "afgedekt"  — zandbak is afgedekt met dekzeil (regen verwacht)
 
 Avondlogica:
-  - Regen verwacht (morgen of later) → altijd AFDEKKEN
+  - Regen verwacht (morgen) → altijd AFDEKKEN
   - Alleen droog verwacht → SLUITEN (dicht), morgen ochtend bericht om te luchten
   - Afgedekt + regen → geen bericht
 
@@ -69,11 +69,6 @@ def load_state() -> dict:
         try:
             with open(STATE_FILE) as f:
                 data = json.load(f)
-            # last_notification dateerde een verstuurd bericht in een publiek
-            # gecommit bestand en werd nergens gelezen — sinds de privacy-
-            # assessment (aug 2026) wordt het veld niet meer geschreven en
-            # hier weggemigreerd uit bestaande state.
-            data.pop("last_notification", None)
             return {**defaults, **data}
         except (json.JSONDecodeError, OSError) as e:
             print(f"[state] {STATE_FILE} onleesbaar ({sanitize_error(e)}), terug naar defaults")
@@ -132,7 +127,7 @@ def first_dry_day(forecast: list[dict], from_index: int = 1) -> str | None:
     return None
 
 
-# ── Ochtendlogica (07:00) ─────────────────────────────────────────────────────
+# ── Ochtendlogica (08:00) ─────────────────────────────────────────────────────
 
 def morning_check(state: dict, forecast: list[dict]) -> tuple[str | None, dict]:
     today  = forecast[0]
@@ -275,12 +270,18 @@ def evening_check(state: dict, forecast: list[dict]) -> tuple[str | None, dict]:
             # Alles klopt
             _dbg("[avond] Afgedekt + regen → geen bericht")
             return None, state
+        elif morgen["tmax"] < MIN_TEMP_LUCHTEN:
+            # Droog maar te koud om te luchten: de ochtendrun opent pas vanaf
+            # MIN_TEMP_LUCHTEN. Zonder deze tak beloofde elke avond van een
+            # koude droge periode "morgenochtend een berichtje" dat nooit kwam.
+            _dbg("[avond] Afgedekt + droog maar te koud → geen bericht")
+            return None, state
         else:
             # Droog morgen → aankondiging, ochtendrun stuurt het echte bericht
             msg = (
                 "🌤️ <b>Morgen kan de zandbak gelucht worden!</b>\n"
                 f"Morgen droog ({morgen['precip_prob_max']}% kans) "
-                f"en {morgen['tmax']}°C.\n"
+                f"en {morgen['tmax']:.0f}°C.\n"
                 "→ Je krijgt morgenochtend een berichtje."
             )
             # State blijft "afgedekt" — ochtendrun zet hem op open na het bericht

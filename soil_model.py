@@ -231,11 +231,6 @@ def seasonal_kcb(zone_key: str, doy: int) -> float:
     return 0.75  # fallback
 
 
-# Back-compat alias zodat externe importeerders (tests etc.) niet breken.
-seasonal_kc = seasonal_kcb
-KC_SEASONAL = KCB_SEASONAL
-
-
 def _depth_weighted_sm(layer_means: Dict[str, Optional[float]],
                        layer_bounds, Zr: float) -> Optional[float]:
     """Weegt per-laag bodemvocht (m³/m³) over de wortelzone [0, Zr] m.
@@ -277,31 +272,24 @@ def effective_forecast_rain(days: List[Dict], zone_key: str,
     accumulatie, dus extra vermenigvuldigen met `precipitation_probability`
     zou dubbel-discounten. Dit houdt de cijfers consistent met de
     waterbalans-simulatie, die óók de ruwe regen (minus interceptie)
-    gebruikt — zo zien beslissingslogica en dashboard dezelfde feiten.
-    `expected_mm` blijft als veld bestaan (== raw) voor achterwaartse
-    compatibiliteit."""
+    gebruikt — zo zien beslissingslogica en dashboard dezelfde feiten."""
     interception_mm = INTERCEPTION.get(zone_key, 0.0)
     forecast_days = [d for d in days if d.get("forecast")][:horizon]
     raw_sum = 0.0
-    expected_sum = 0.0
     net_sum = 0.0
     intercepted_sum = 0.0
     for d in forecast_days:
         p_raw = d.get("precip") or 0.0
-        expected = p_raw
-        if expected > 0 and interception_mm > 0:
-            intercepted = interception_mm * (1 - math.exp(-expected / interception_mm))
+        if p_raw > 0 and interception_mm > 0:
+            intercepted = interception_mm * (1 - math.exp(-p_raw / interception_mm))
         else:
             intercepted = 0.0
-        net = max(0.0, expected - intercepted)
         raw_sum += p_raw
-        expected_sum += expected
-        net_sum += net
+        net_sum += max(0.0, p_raw - intercepted)
         intercepted_sum += intercepted
     return {
         "horizon": len(forecast_days),
         "raw_mm": round(raw_sum, 2),
-        "expected_mm": round(expected_sum, 2),
         "intercepted_mm": round(intercepted_sum, 2),
         "net_mm": round(net_sum, 2),
     }
@@ -690,6 +678,24 @@ def fetch_wunderground_current(station_id: str, api_key: str) -> Optional[Dict]:
         return None
 
 
+def _wu_u2(obs: dict) -> Optional[float]:
+    """Daggemiddelde wind van een WU-history-record → u2 (m/s op 2 m).
+
+    `windspeedAvg` (km/u) zit in het eenheden-blok (`metric`), net als de
+    temperatuur en de neerslag — níet op topniveau, waar alleen de
+    eenheidsloze velden staan (humidityAvg, solarRadiationHigh). Tot nov 2026
+    werd hij op topniveau gezocht: altijd None, dus `u2 = 0.0` op élke WU-dag,
+    en omdat 0.0 geen None is overschreef dat in de merge ook nog de
+    Open-Meteo-wind. Ontbreekt de meting, dan None — zo blijft de
+    Open-Meteo-waarde staan i.p.v. windstilte te verzinnen."""
+    kmh = (obs.get("metric") or {}).get("windspeedAvg")
+    if kmh is None:
+        kmh = obs.get("windspeedAvg")
+    if kmh is None:
+        return None
+    return kmh / 3.6 * WIND_2M_FACTOR
+
+
 def fetch_wunderground(station_id: str, api_key: str, days: int = 30) -> List[Dict]:
     """Haalt WU PWS history (afgesloten dagen) + current observatie voor
     today's accumulatieve precip. Probeert range-call eerst, dan per-dag
@@ -720,7 +726,7 @@ def fetch_wunderground(station_id: str, api_key: str, days: int = 30) -> List[Di
                     "Tmin": m.get("tempLow"),
                     "Tmean": m.get("tempAvg"),
                     "RHmean": obs.get("humidityAvg"),
-                    "u2": (obs.get("windspeedAvg") or 0) / 3.6 * WIND_2M_FACTOR,
+                    "u2": _wu_u2(obs),
                     "precip": m.get("precipTotal"),
                     # WU eigen pyranometer (dagpiek, W/m²) — driver voor de
                     # Tmax-stralingsbiascorrectie. Top-level, niet in `metric`.
@@ -754,7 +760,7 @@ def fetch_wunderground(station_id: str, api_key: str, days: int = 30) -> List[Di
                     "Tmin": m.get("tempLow"),
                     "Tmean": m.get("tempAvg"),
                     "RHmean": obs.get("humidityAvg"),
-                    "u2": (obs.get("windspeedAvg") or 0) / 3.6 * WIND_2M_FACTOR,
+                    "u2": _wu_u2(obs),
                     "precip": m.get("precipTotal"),
                     "wu_solar_peak": obs.get("solarRadiationHigh"),
                 })
@@ -789,11 +795,13 @@ def apply_et0_and_balance(series: List[Dict],
         doy = datetime.fromisoformat(d["date"]).timetuple().tm_yday
 
         # --- WU stralingsbiascorrectie (zie wu_bias.py) ---------------------
-        # Alleen op WU-gemeten, niet-forecast dagen: forecast-temperaturen
-        # komen van Open-Meteo (model) en hebben deze fout niet. Driver = de
+        # Alleen op dagen met een door WU GEMETEN temperatuur (`hasWUTemp`;
+        # zonder dat veld geldt `hasWU`): forecast-temperaturen — en die van
+        # vandaag, waar WU alleen de neerslag levert — komen van Open-Meteo
+        # (model) en hebben deze fout niet. Driver = de
         # eigen WU-pyranometer (dagpiek), met Open-Meteo-piek als fallback.
         # Velden zijn additief; rauwe Tmax/Tmin/Tmean blijven ongemoeid.
-        if d.get("hasWU") and not d.get("forecast"):
+        if d.get("hasWUTemp", d.get("hasWU")) and not d.get("forecast"):
             solar_peak = d.get("wu_solar_peak")
             d["bias_solar_src"] = "wu" if solar_peak is not None else "om"
             if solar_peak is None:
@@ -884,6 +892,10 @@ def build_full_dataset(station_id: Optional[str], api_key: Optional[str],
                     if w.get(f) is not None:
                         d[f] = w[f]
                 d["hasWU"] = True
+                # Vandaag draagt alleen WU-neerslag (current-endpoint); de
+                # temperatuur blijft die van Open-Meteo. De stralingsbias-
+                # correctie hoort alleen op een door WU gemeten temperatuur.
+                d["hasWUTemp"] = w.get("Tmax") is not None
             wu_days = sum(1 for d in om if d.get("hasWU"))
             if wu_days > 0:
                 # Géén station-ID in de publieke data.json — WU_STATION_ID is een secret.
@@ -1071,7 +1083,7 @@ def assess_status(data: Dict, zone: str = "lawn") -> Dict:
             break
     rain7 = sum((d.get("precip") or 0) for d in future)
 
-    # Effectieve regen (probability × interceptie) over 3d en 7d.
+    # Effectieve regen (na canopy-interceptie) over 3d en 7d.
     eff3 = effective_forecast_rain(days, zone, horizon=3)
     eff7 = effective_forecast_rain(days, zone, horizon=7)
     eff_3d = eff3["net_mm"]

@@ -109,18 +109,38 @@ def test_build_message_skips_when_empty_and_caps_length():
     assert lang.endswith("…")
 
 
-def test_missing_artifact_skips_section(tmp_path, monkeypatch):
+def test_missing_artifact_skips_section(tmp_path, monkeypatch, capsys):
     # main() met alle paden naar niet-bestaande bestanden → geen bericht, geen crash.
     # Lokale-pad-modus (geen ARTEFACT_GIST_ID) — het bootstrap-/test-pad.
+    # Bewust zónder DRY_RUN: dan zou `sent == []` altijd waar zijn.
     monkeypatch.delenv("ARTEFACT_GIST_ID", raising=False)
+    monkeypatch.delenv("DRY_RUN", raising=False)
     for var in ("SOIL_DATA_PATH", "MOWING_DATA_PATH", "LEARNED_PATH",
                 "ACCURACY_DATA_PATH"):
         monkeypatch.setattr(wj, var, str(tmp_path / "afwezig.json"))
-    monkeypatch.setenv("DRY_RUN", "1")
     sent = []
     monkeypatch.setattr(wj, "send_telegram", lambda msg: sent.append(msg))
     wj.main()
     assert sent == []
+    assert "geen bericht" in capsys.readouterr().out
+
+
+def test_main_verstuurt_zodra_er_een_sectie_is(tmp_path, monkeypatch):
+    import json
+    monkeypatch.delenv("ARTEFACT_GIST_ID", raising=False)
+    monkeypatch.delenv("DRY_RUN", raising=False)
+    for var in ("SOIL_DATA_PATH", "MOWING_DATA_PATH", "ACCURACY_DATA_PATH"):
+        monkeypatch.setattr(wj, var, str(tmp_path / "afwezig.json"))
+    learned = tmp_path / "vent_learned.json"
+    nu = wj.datetime.now(wj.TZ)
+    learned.write_text(json.dumps({"rmse": 0.5, "skill": 0.4, "rmse_history": [
+        {"t": (nu - wj.timedelta(days=7)).isoformat(), "rmse": 0.6},
+        {"t": nu.isoformat(), "rmse": 0.5}]}))
+    monkeypatch.setattr(wj, "LEARNED_PATH", str(learned))
+    sent = []
+    monkeypatch.setattr(wj, "send_telegram", lambda msg: sent.append(msg))
+    wj.main()
+    assert len(sent) == 1 and "Tweeling" in sent[0]
 
 
 def test_load_graceful(tmp_path):

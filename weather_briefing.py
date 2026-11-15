@@ -21,6 +21,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import shared_const
+from shared_const import format_date_nl
 from http_util import get_json
 from notify import run_guarded, send_telegram
 
@@ -145,6 +146,10 @@ def fetch_forecast(location):
         ]),
         "timezone":     location["timezone"],
         "forecast_days": 1,
+        # Zonder dit levert Open-Meteo km/u, terwijl de vlaag-drempels
+        # (WIND_GUST_*_MS), de "+N° in zon"-bonus en de berichttekst in m/s
+        # rekenen: elke vlaag vanaf 20 km/u ging als "Storm … m/s" de deur uit.
+        "wind_speed_unit": "ms",
     }
     return get_json(url, params, timeout=20, label="open-meteo")
 
@@ -452,7 +457,7 @@ def build_message(location, forecast, today, pollen=None):
     rows = parse_hourly(forecast)
     weekday = today.weekday()
 
-    header = "*Weerbericht " + today.strftime("%a %d %b") + " - " + location["label"] + "*"
+    header = "*Weerbericht " + format_date_nl(today) + " - " + location["label"] + "*"
     parts = [header, ""]
 
     banner = format_extremes_banner(rows, today)
@@ -510,7 +515,7 @@ def main():
 
 
 if __name__ == "__main__":
-    # fail_threshold=2: de workflow doet bij falen één herkansing na 10 min
+    # fail_threshold=2: de workflow doet bij falen één herkansing na 25 min
     # (zelfde job, dus zelfde RUNNER_TEMP-teller) — alleen een aanhoudende
     # storing alert.
     run_guarded(main, "weerbriefing", chat_id=os.getenv("TELEGRAM_CHAT_GROUP_ID"),

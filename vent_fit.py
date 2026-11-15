@@ -514,41 +514,11 @@ def skill_score(rmse_model: float, rmse_baseline: float) -> float | None:
         return None
     return round(min(1.0, 1.0 - rmse_model / rmse_baseline), 3)
 
-def _window_naive(actual: dict, start: datetime, end: datetime) -> float:
-    """Persistentie-baseline-RMSE over een DEEL-venster [start, end] — als naive_rmse maar
-    begrensd in de tijd, zodat een herberekend leercurve-punt zijn eigen venster-baseline (en dus
-    skill) krijgt. NaN bij geen samples in het venster."""
-    sq, n = 0.0, 0
-    for samples in actual.values():
-        win = [v for (t, v) in samples if start <= t <= end]
-        if not win:
-            continue
-        base = win[0]
-        for v in win:
-            sq += (base - v) ** 2
-            n += 1
-    return math.sqrt(sq / n) if n else float("nan")
-
-def timed_residuals_from_sim(house, timeline, sim, actual: dict) -> list:
-    """(meetmoment, voorspeld−werkelijk) per sensorkamer uit een ál-uitgevoerde simulatie `sim` —
-    als _residuals maar mét de tijdstempel behouden én zónder opnieuw te simuleren, zodat een
-    deel-venster-RMSE per leercurve-punt te snijden valt. Chronologisch gesorteerd."""
-    out = []
-    for rid, samples in actual.items():
-        pred = sim.get("series", {}).get(rid, [])
-        if not pred:
-            continue
-        pred = _to_sensor_series(house, timeline, rid, pred)
-        for ts, val in samples:
-            out.append((ts, _interp(pred, ts) - val))
-    out.sort(key=lambda e: e[0])
-    return out
-
 def thin_rmse_history(hist: list[dict], now: datetime) -> list[dict]:
     """Leeftijds-gebaseerde uitdunning van de leercurve i.p.v. de oude count-slice.
 
     - Punten binnen CALIB_WINDOW_H blijven op volle kwartier-resolutie: dat is precies het
-      venster waarbinnen backfill_rmse_history nog herberekent, dus daar mag niets verdwijnen.
+      venster dat de fit nog bestrijkt, dus daar mag niets verdwijnen.
     - Oudere punten worden uitgedund naar één per klok-uur. Binnen een uur-bucket wint de
       laatste níet-held/níet-gepauzeerde vertegenwoordiger (het weekjournaal filtert op
       "live" punten), anders de laatste sowieso.
