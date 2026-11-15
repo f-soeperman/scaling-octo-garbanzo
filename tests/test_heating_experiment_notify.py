@@ -252,3 +252,8 @@ def test_dispatch_vóór_de_start_overschrijft_de_oude_week_niet(monkeypatch, tm
     monkeypatch.setenv("FORCE_SEND", "1")
     main()
     assert json.loads(path.read_text()) == OUD_LOG
+
+
+def test_workflow_checkout_gepind(assert_checkout_pinned):
+    # De job leest zijn eigen gecommitte logboek terug (previous_arm) en commit het.
+    assert_checkout_pinned("heating-temp-notify.yml")

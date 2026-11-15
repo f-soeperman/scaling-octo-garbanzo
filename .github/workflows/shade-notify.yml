@@ -48,7 +48,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          since=$(TZ=Europe/Amsterdam date -d "today 00:00" +%s)
+          # GitHub's scheduler vertraagt crons soms uren. Vóór het doelmoment
+          # (08:15) is een schedule-run altijd een verlate cron van gisteren —
+          # overslaan (zelfde klokpoort als night-forecast.yml).
+          nowm=$(( 10#$(TZ=Europe/Amsterdam date +%H) * 60 + 10#$(TZ=Europe/Amsterdam date +%M) ))
+          if [ "$nowm" -lt 495 ]; then
+            echo "handled=1" >> "$GITHUB_OUTPUT"
+            echo "Verlate fallback-cron (vóór 08:15 lokaal) — sla over."
+            exit 0
+          fi
+          # Venster vanaf het doelmoment (min een minuut klokspeling), niet vanaf
+          # middernacht: een verlate cron van gisteren die ná middernacht
+          # binnenkwam is hierboven overgeslagen, maar staat als "success" in het
+          # ledger en zou anders als "vandaag al gedaan" tellen.
+          since=$(( $(TZ=Europe/Amsterdam date -d "today 08:15" +%s) - 60 ))
           others=$(gh run list --workflow shade-notify.yml -L 40 \
             --json databaseId,createdAt,conclusion \
             --jq "[.[] | select(.databaseId != ${{ github.run_id }}
@@ -126,8 +139,21 @@ jobs:
             # (-X theirs). Falen moet hard en zichtbaar zijn (exit 1): zonder
             # gecommitte state kan de orchestrator de reminder niet timen.
             git rebase --abort 2>/dev/null || true
-            if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}"; then
-              git push
+            # Tot drie pogingen: tussen pull en push zit een venster van ~1 s waarin
+            # een andere pijplijn naar main kan pushen (de bodem- en kampeer-run
+            # committen elke ochtend seconden na elkaar). Eén verloren race maakte de
+            # run rood, en de herkansing herhaalde dan wat al verstuurd was.
+            pushed=""
+            for attempt in 1 2 3; do
+              if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}" && git push; then
+                pushed=1
+                break
+              fi
+              git rebase --abort 2>/dev/null || true
+              sleep $(( attempt * 5 ))
+            done
+            if [ -n "$pushed" ]; then
+              :
             else
               git rebase --abort 2>/dev/null || true
               echo "::error::rebase failed, shade state not pushed"

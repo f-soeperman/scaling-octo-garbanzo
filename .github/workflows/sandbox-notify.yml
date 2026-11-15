@@ -74,9 +74,13 @@ jobs:
             exit 0
           fi
           if [ "$nowm" -lt 720 ]; then
-            since=$(TZ=Europe/Amsterdam date -d "today 00:00" +%s)   # ochtend-slot
+            # Vanaf het doelmoment, niet vanaf middernacht: een verlate
+            # avond-cron die ná middernacht binnenkwam is hierboven overgeslagen,
+            # maar staat als "success" in het ledger en telde anders als
+            # "ochtend al gedaan".
+            since=$(( $(TZ=Europe/Amsterdam date -d "today 08:00" +%s) - 60 ))   # ochtend-slot
           else
-            since=$(TZ=Europe/Amsterdam date -d "today 20:00" +%s)   # avond-slot
+            since=$(( $(TZ=Europe/Amsterdam date -d "today 20:00" +%s) - 60 ))   # avond-slot
           fi
           others=$(gh run list --workflow sandbox-notify.yml -L 40 \
             --json databaseId,createdAt,conclusion \
@@ -144,7 +148,8 @@ jobs:
       - name: Overschrijf status (optioneel, alleen bij workflow_dispatch)
         if: >
           github.event_name == 'workflow_dispatch' &&
-          github.event.inputs.override_status != ''
+          github.event.inputs.override_status != '' &&
+          github.event.inputs.dry_run != 'true'
         env:
           OVERRIDE_STATUS: ${{ github.event.inputs.override_status }}
         run: |
@@ -202,8 +207,21 @@ jobs:
             # volledig opnieuw geschreven, dus bij conflict wint onze verse
             # versie (-X theirs). Falen moet hard en zichtbaar zijn (exit 1).
             git rebase --abort 2>/dev/null || true
-            if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}"; then
-              git push
+            # Tot drie pogingen: tussen pull en push zit een venster van ~1 s waarin
+            # een andere pijplijn naar main kan pushen (de bodem- en kampeer-run
+            # committen elke ochtend seconden na elkaar). Eén verloren race maakte de
+            # run rood, en de herkansing herhaalde dan wat al verstuurd was.
+            pushed=""
+            for attempt in 1 2 3; do
+              if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}" && git push; then
+                pushed=1
+                break
+              fi
+              git rebase --abort 2>/dev/null || true
+              sleep $(( attempt * 5 ))
+            done
+            if [ -n "$pushed" ]; then
+              :
             else
               git rebase --abort 2>/dev/null || true
               echo "::error::rebase failed, sandbox state not pushed"

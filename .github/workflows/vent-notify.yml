@@ -72,16 +72,16 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # One twin cycle: run the model, then commit/push the dashboard + learned
-          # params if they changed. A transient failure (network, Open-Meteo hiccup)
+          # One twin cycle: run the model, then commit/push the forecast log if it
+          # changed. A transient failure (network, Open-Meteo hiccup)
           # must not kill the loop — log it and let the next iteration retry.
           run_once () {
             python vent_twin.py || echo "::warning::vent_twin.py failed this iteration, continuing"
-            # Per pad guarden: op een allereerste run bestaan artefacten/shards mogelijk
-            # nog niet en zou één missende pathspec de hele git add laten falen.
-            for p in docs/vent_data.json docs/vent_learned.json docs/vent_forecast.json data/twin2_history data/forecast_log; do
-              [ -e "$p" ] && git add "$p"
-            done
+            # Alleen het forecast-log wordt nog gecommit. De drie artefacten en de
+            # twin2-shards leven in de privé gists; hun lokale terugval staat in
+            # .gitignore (`git add` op een genegeerd pad faalt) en hoort nooit in
+            # de repo.
+            if [ -e data/forecast_log ]; then git add data/forecast_log; fi
             if git diff --staged --quiet; then
               echo "No changes to commit"
             else

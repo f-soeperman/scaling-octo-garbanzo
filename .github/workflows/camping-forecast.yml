@@ -113,8 +113,21 @@ jobs:
             # versie wint) en hard falen — een rode run telt niet als "handled",
             # dus de volgende orchestrator-tick herkanst het slot vanzelf.
             git rebase --abort 2>/dev/null || true
-            if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}"; then
-              git push
+            # Tot drie pogingen: tussen pull en push zit een venster van ~1 s waarin
+            # een andere pijplijn naar main kan pushen (de bodem- en kampeer-run
+            # committen elke ochtend seconden na elkaar). Eén verloren race maakte de
+            # run rood, en de herkansing herhaalde dan wat al verstuurd was.
+            pushed=""
+            for attempt in 1 2 3; do
+              if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}" && git push; then
+                pushed=1
+                break
+              fi
+              git rebase --abort 2>/dev/null || true
+              sleep $(( attempt * 5 ))
+            done
+            if [ -n "$pushed" ]; then
+              :
             else
               git rebase --abort 2>/dev/null || true
               echo "::error::rebase failed, camping data not pushed"

@@ -15,6 +15,12 @@ on:
         type: boolean
         default: false
 
+# Deze workflow commit het voorspellingslog; twee runs tegelijk (dispatch +
+# fallback-cron) mogen niet door elkaar pushen.
+concurrency:
+  group: night-forecast
+  cancel-in-progress: false
+
 jobs:
   # Dedup t.o.v. de orchestrator: skip de fallback-cron als deze workflow vandaag
   # al een (niet-mislukte) run had. Alleen op `schedule` — handmatige en
@@ -44,7 +50,11 @@ jobs:
             echo "Verlate fallback-cron (vóór 18:45 lokaal) — sla over."
             exit 0
           fi
-          since=$(TZ=Europe/Amsterdam date -d "today 00:00" +%s)
+          # Venster vanaf het doelmoment (min een minuut klokspeling), niet vanaf
+          # middernacht: een verlate cron van gisteren die ná middernacht
+          # binnenkwam is hierboven overgeslagen, maar staat als "success" in het
+          # ledger en zou anders als "vandaag al gedaan" tellen.
+          since=$(( $(TZ=Europe/Amsterdam date -d "today 18:45" +%s) - 60 ))
           others=$(gh run list --workflow night-forecast.yml -L 40 \
             --json databaseId,createdAt,conclusion \
             --jq "[.[] | select(.databaseId != ${{ github.run_id }}
@@ -118,8 +128,21 @@ jobs:
             # (-X theirs: het log is per datum-slot idempotent, onze verse
             # versie wint; falen blijft hard en zichtbaar).
             git rebase --abort 2>/dev/null || true
-            if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}"; then
-              git push
+            # Tot drie pogingen: tussen pull en push zit een venster van ~1 s waarin
+            # een andere pijplijn naar main kan pushen (de bodem- en kampeer-run
+            # committen elke ochtend seconden na elkaar). Eén verloren race maakte de
+            # run rood, en de herkansing herhaalde dan wat al verstuurd was.
+            pushed=""
+            for attempt in 1 2 3; do
+              if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}" && git push; then
+                pushed=1
+                break
+              fi
+              git rebase --abort 2>/dev/null || true
+              sleep $(( attempt * 5 ))
+            done
+            if [ -n "$pushed" ]; then
+              :
             else
               git rebase --abort 2>/dev/null || true
               echo "::error::rebase failed, night forecast log not pushed"

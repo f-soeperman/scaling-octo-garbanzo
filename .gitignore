@@ -4,8 +4,8 @@ __pycache__/
 .venv/
 .DS_Store
 
-# Gegenereerde ML-export (bouw lokaal met tools/export_ml_dataset.py; de bron —
-# data/twin2_history/*.json — staat wél in git). README blijft behouden.
+# Gegenereerde ML-export (bouw lokaal met tools/export_ml_dataset.py; de bron
+# leeft in de privé Gist, zie verderop). README blijft behouden.
 data/ml/ventilation_long.csv
 data/ml/ventilation_wide.csv
 data/ml/ventilation_long.parquet

@@ -216,16 +216,11 @@ def test_geen_kamer_meetreeksen_onder_docs():
     de privé gist — zie de PRIVACY-banner. Sinds de privacy-assessment (aug
     2026) scant dit de HELE boom en niet alleen `docs/`: de twin2-shards onder
     `data/` waren precies zo'n reeks in gewone git-historie, terwijl de
-    docstring van deze test ze al als schoolvoorbeeld noemde.
-
-    Tijdelijke uitzondering: de nog gecommitte `data/twin2_history/`-maanden,
-    tot de zelf-uitvoerende migratie (vent_io.migrate_history_shards, draait in
-    de eerstvolgende kwartierrun mét secrets) ze naar de privé Gist verhuisd en
-    verwijderd heeft — daarna deze carve-out weghalen (TODO)."""
+    docstring van deze test ze al als schoolvoorbeeld noemde. (De tijdelijke
+    uitzondering voor de nog gecommitte twin2-maanden is vervallen: de
+    migratie heeft ze naar de privé Gist verhuisd.)"""
     hits = []
     for path in _tracked(".json"):
-        if path.startswith("data/twin2_history/"):
-            continue
         try:
             data = json.loads(_read(path))
         except json.JSONDecodeError:
@@ -248,9 +243,7 @@ def test_gardena_sensorshards_zijn_gitignored():
     """Zelfde preventieve helft voor de bodemsensorreeks (sep 2026): een
     vochtsprong zonder regen ís een bewateringsbeurt — automatisch of met de
     hand — dus de shards leven in de privé Gist (gardena_control.py) en de
-    lokale terugval mag nooit terug in git. De nog gevolgde maanden van vóór
-    de verhuizing verdwijnen via de zelf-uitvoerende migratie in de
-    eerstvolgende run mét secrets."""
+    lokale terugval mag nooit terug in git."""
     ignored = subprocess.run(["git", "-C", _ROOT, "check-ignore", "-q",
                               "data/gardena_history/2099-01.json"]).returncode == 0
     assert ignored, "data/gardena_history/*.json ontbreekt in .gitignore"
@@ -282,8 +275,8 @@ def test_geprivatiseerde_artefacten_zijn_gitignored(path):
 
     Zonder die regel is de test hierboven pas ná de commit een signaal, en de
     commits die het zouden veroorzaken dragen `[skip ci]` — dan draait de suite
-    er niet eens op. Genegeerd is `git add <pad>` een no-op (waarschuwing,
-    exit 0), dus dit kost geen enkele werkende run."""
+    er niet eens op. Let op: `git add <genegeerd pad>` is géén no-op maar faalt
+    (exit 1) — de workflows stagen deze paden daarom helemaal niet meer."""
     ignored = subprocess.run(["git", "-C", _ROOT, "check-ignore", "-q", path]).returncode == 0
     assert ignored, f"{path} ontbreekt in .gitignore"
 
@@ -398,3 +391,17 @@ def test_workflows_echoën_geen_state(workflow):
     text = _read(os.path.join(".github", "workflows", workflow))
     bad = re.findall(r"^\s*(?:cat|echo)\s+[^|&\n]*\.json", text, re.MULTILINE)
     assert not bad, f"{workflow} dumpt een JSON-bestand naar het publieke log: {bad}"
+
+
+def test_workflows_stagen_geen_genegeerde_paden():
+    """`git add <genegeerd pad>` faalt (exit 1) en doodt onder `bash -e` de stap —
+    of, in een loop-workflow, de hele loop. De geprivatiseerde artefacten horen
+    dus in geen enkele `git add` meer te staan."""
+    verboden = [p for p in _PRIVATE_ARTEFACTS] + ["data/twin2_history"]
+    for wf in sorted(os.listdir(os.path.join(_ROOT, ".github", "workflows"))):
+        text = _read(os.path.join(".github", "workflows", wf))
+        for line in text.splitlines():
+            if "git add" not in line:
+                continue
+            for pad in verboden:
+                assert pad not in line, f"{wf}: `git add` van genegeerd pad {pad}"
