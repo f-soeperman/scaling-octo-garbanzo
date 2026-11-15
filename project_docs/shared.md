@@ -127,6 +127,13 @@ Seven small cross-project Python modules (everything else is self-contained):
 ## Doorlichting nov 2026 — wat er in de gedeelde laag veranderde
 - **`gist_io`**: een GET herkanst kort op transiënte fouten (`READ_RETRY_DELAYS`, zonder logregel — de vormvaste loops mogen er niet door verschuiven). `read_json(..., strict=True)` en `artefact_io.read_json(..., strict=True)` laten een **léésfout** raisen in plaats van `default` terug te geven; een ontbrekend bestand blijft `default`. Gebruik `strict` voor elke read die de basis is van wat de run daarna schrijft (maandtotalen, kamerhistorie + om_bias-leerboek, geleerde tweeling-params, meldgeheugen, logboeken): "kon niet lezen" mag daar nooit als "leeg" doorgaan. `read_files(names=...)` beperkt het resultaat (en de raw-URL-volgers) tot de gevraagde bestanden.
 - **`artefact_io.read_many`**: meerdere artefacten in één Gist-call.
+- **`artefact_io` migratie + maand-shards (security-scan nov 2026):** `read_json_migrating`
+  (gist-modus strict; valt alleen bij een ontbrékend gist-bestand terug op de nog gecommitte
+  kopie) + `write_state` (paar pogingen, daarna `retire_local`) voor `soil_state.json` en
+  `shade_state.json`; `load_shard`/`save_shards`/`load_all_shards`/`migrate_shards` voor
+  `station_history_<YYYY-MM>.json` en `night_forecast_log_<YYYY-MM>.json`. De migratie
+  verifieert met een read-back vóór ze lokale bestanden verwijdert; de workflow commit die
+  verwijdering, daarna is de commit-stap een no-op.
 - **`om_bias.night_weight`**: de inloop bij het nachtbegin werkte niet (gewicht sprong op 22:00 van 0 naar 0,5 — precies de sprong die `TRANSITION_H` moest voorkomen); nu symmetrisch met de uitloop. Raakt de driver van de tweeling op hooguit twee kwartierstappen per dag; geen `PHYSICS_REV`-bump.
 - **`notify.sanitize_error`** poetst ook de raw-URL (`gist.githubusercontent.com/<gebruiker>/<id>/…`) die `gist_io` volgt voor een afgekapt bestand.
 - **Publieke stdout**: de bodemcheck, de maai-adviseur en de tweeling loggen nu vormvast (geen prioriteit, slot-/verzendregel, byte-telling, sample-/kameraantal of RMSE); de raam-adviseur en de tweeling printen geen ruwe stationswaarden meer. Elk van die regels dateerde een handeling of verklapte huisboekhouding. Nieuwe melders volgen dit patroon; debuggen kan met een `DRY_RUN`-dispatch.

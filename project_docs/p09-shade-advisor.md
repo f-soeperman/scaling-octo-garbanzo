@@ -6,7 +6,7 @@
 
 ## Files
 - `shade_advisor.py` — plan/reminder brain (env `SHADE_MODE=plan|reminder`, like the sandbox morning/evening pattern)
-- `shade_state.json` — tiny day-state (**alleen** `date`/`plan_sent`/`reminder_at`/`reminder_sent`), committed by the action; the orchestrator reads `reminder_at` from it via `gh api`. De oude `windows[]`-payload is geschrapt (aug 2026): die codeerde welke zonwering die ochtend open gemeld stond — een afgeleide van de privé openingen-log in een publiek bestand. De reminder-fase herrekent het plan zelf uit de live bronnen (en geeft stil op als er geen actionabel raam meer is, bv. al dichtgemeld)
+- `shade_state.json` — tiny day-state (**alleen** `date`/`plan_sent`/`reminder_at`/`reminder_sent`), sinds nov 2026 in de privé artefact-gist (zelf-uitvoerende migratie, zie P1). De orchestrator leest `reminder_at` daar read-only uit — het Gist-token is daarmee zijn enige app-secret; zonder de gist-secrets valt hij terug op de oude gecommitte kopie via `gh api`. De oude `windows[]`-payload is geschrapt (aug 2026): die codeerde welke zonwering die ochtend open gemeld stond — een afgeleide van de privé openingen-log in een publiek bestand. De reminder-fase herrekent het plan zelf uit de live bronnen (en geeft stil op als er geen actionabel raam meer is, bv. al dichtgemeld)
 - `.github/workflows/shade-notify.yml` — orchestrator target 08:15 (plan) + fallback cron 08:40 + guard-job; reminder is purely orchestrator-dispatched (no own cron); `contents: write` (commits the state)
 
 ## Logic

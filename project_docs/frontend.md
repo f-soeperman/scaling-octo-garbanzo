@@ -7,7 +7,7 @@
   shared.js use the `bust(url)` helper from it (the purely public pages keep it inline)
 - **Page-asset cache-bust:** static `<script src="js/<page>.js?v=N">`/`<link ... shared.css?v=N>`
   version params **must be bumped on every change to that file** (mirror of the SRI-bump rule for
-  CDN versions) — the JSON `?t=` bust refreshes data but not the page assets, so a forgotten bump
+  the vendored libraries) — the JSON `?t=` bust refreshes data but not the page assets, so a forgotten bump
   shows fresh data through stale JS (bit us twice, juli 2026)
 - **JS layout:** per-page script in `docs/js/<page>.js`; shared Gist/token/artefact-gist logic
   plus `bust()`/`gistReadJSON()`/`artefactReadJSON()` in `docs/js/shared.js` (loaded *before*
@@ -29,7 +29,16 @@
 - **CSS layout:** rules shared by the dashboard pages live in `docs/css/shared.css` (linked *before*
   the page `<style>` block, so page-specific deviations win at equal specificity). camping.html has
   its own posterthema and deliberately doesn't use it.
-- CDN scripts carry SRI `integrity` hashes (computed from the npm tarballs); bump version → recompute.
+- **Geen CDN-scripts (security-scan nov 2026):** Chart.js, de twee plugins en three.js staan
+  gevendord onder `docs/js/vendor/` (byte-identiek aan de npm-tarballs) en `script-src` is op elke
+  pagina exact `'self'`. De token-pagina's bewaren een Gist-token in localStorage; een hele CDN-host
+  toestaan maakte van elke HTML-injectie een scriptinjectie. De tags houden hun SRI `integrity`;
+  versie bijwerken → bestand vervangen + hash herberekenen (zie `docs/js/vendor/README.md`, test bewaakt).
+- **Niet-numerieke waarden in een `innerHTML`-template gaan door `escHTML()`** (theme.js; accuracy.js
+  heeft een lokale `escA`) — ook artefact-labels, foutteksten en Gist-waarden.
+- **Het Gist-token is account-breed:** GitHub kent geen per-gist-scoping, dus het browser-token kan bij
+  álle gists van het account. Bewaar daar geen andere geheimen; gebruik aparte tokens met een
+  vervaldatum voor browser en Actions.
 
 ### Doorlichting nov 2026
 - `artefactReadJSON` valt met een gekoppelde artefact-gist niet meer terug op het lokale pad (dat bestaat niet meer) en meldt een geweigerd token of onbereikbare gist als zodanig.

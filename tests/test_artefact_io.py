@@ -190,3 +190,19 @@ def test_shard_migratie_laat_lokaal_staan_als_de_readback_niet_klopt(tmp_path, m
     with pytest.raises(RuntimeError):
         artefact_io.migrate_shards("x", str(d), "rows", "t")
     assert (d / "2026-01.json").exists()
+
+
+def test_migrerende_state_lees_raist_op_een_gistfout(tmp_path, monkeypatch):
+    """Na de migratie is er geen lokale kopie meer: een leesfout mag niet als
+    "geen state" doorgaan (dan verdwijnt het dag-geheugen en gaat hetzelfde
+    bericht nog eens uit)."""
+    import pytest
+
+    _FakeGist(monkeypatch)
+
+    def kapot(*a, **k):
+        raise OSError("down")
+
+    monkeypatch.setattr(artefact_io.gist_io, "read_file", kapot)
+    with pytest.raises(OSError):
+        artefact_io.read_json_migrating("soil_state.json", str(tmp_path / "weg.json"))

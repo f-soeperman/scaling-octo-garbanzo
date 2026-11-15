@@ -112,9 +112,15 @@ def write_json_str(filename: str, local_path: str, payload: str) -> str:
 
 def read_json_migrating(filename: str, local_path: str, default=None):
     """Als :func:`read_json`, maar valt in gist-modus terug op het (nog
-    gecommitte) lokale bestand zolang de gist het niet kent."""
+    gecommitte) lokale bestand zolang de gist het niet kent.
+
+    In gist-modus is de lees *strict*: de aanroepers zijn meld-states, dus
+    basis voor een schrijf. Na de migratie bestaat het lokale bestand niet
+    meer, en een netwerk-blip die als "leeg" doorging zou het dag-geheugen
+    wissen en hetzelfde bericht nog eens laten sturen. Alleen een ontbrekend
+    gist-bestand valt terug op de lokale kopie."""
     if gist_active():
-        stored = read_json(filename, local_path, default=None)
+        stored = read_json(filename, local_path, default=None, strict=True)
         if stored is not None:
             return stored
     try:
