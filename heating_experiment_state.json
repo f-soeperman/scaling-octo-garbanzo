@@ -41,7 +41,16 @@
       "switched_at": "2026-11-02",
       "analyse_from": "2026-11-04",
       "analyse_through": "2026-11-09"
+    },
+    {
+      "week": "2026-W47",
+      "experiment": "night_setpoint",
+      "arm": "afkoelen",
+      "night_setpoint": 16.0,
+      "switched_at": "2026-11-16",
+      "analyse_from": "2026-11-18",
+      "analyse_through": "2026-11-23"
     }
   ],
-  "last_updated": "2026-11-02T20:45:34.632675+00:00"
+  "last_updated": "2026-11-16T20:00:42.203787+00:00"
 }
