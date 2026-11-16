@@ -256,26 +256,11 @@ _PRIVATE_ARTEFACTS = (
     # Privacy-assessment aug 2026: per-nacht kinderkamerscores tegen gemeten
     # temperaturen — naar de artefact-gist, nooit onder docs/.
     "docs/night_verify.json",
-)
-
-# Security-scan nov 2026: naar de artefact-gist, maar de gecommitte kopie
-# verdwijnt pas bij de eerste gist-run (zelf-uitvoerende migratie — een harde
-# `git rm` zou het dag-geheugen/archief weggooien vóór het in de gist staat).
-# Tot dan alleen de preventieve helft: gitignored, zodat ze na de migratie niet
-# terug kunnen komen. Zodra de boom schoon is horen ze in _PRIVATE_ARTEFACTS.
-_MIGRATING_ARTEFACTS = (
+    # Security-scan nov 2026: gemigreerd naar de artefact-gist (de gecommitte
+    # kopieën zijn door de eerste gist-runs verwijderd).
     "docs/accuracy_data.json", "soil_state.json", "shade_state.json",
     "data/station_history/2026-01.json", "data/night_forecast_log/2026-01.json",
 )
-
-
-@pytest.mark.parametrize("path", _MIGRATING_ARTEFACTS)
-def test_migrerende_artefacten_zijn_gitignored(path):
-    # --no-index: een nog gevolgd bestand telt voor check-ignore anders als niet-genegeerd.
-    ignored = subprocess.run(["git", "-C", _ROOT, "check-ignore", "-q", "--no-index",
-                              path]).returncode == 0
-    assert ignored, f"{path} ontbreekt in .gitignore"
-
 
 def test_geprivatiseerde_artefacten_zijn_niet_gecommit():
     """Deze bestanden leven in de artefact-gist. De lokale terugval mag bestaan
