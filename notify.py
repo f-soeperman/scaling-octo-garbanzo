@@ -259,11 +259,12 @@ RATE_LIMITED_MARKER = "open_meteo_rate_limited"
 
 
 def _exit_rate_limited(e: BaseException) -> None:
-    """Geen crash maar een runner-IP dat door de API wordt geweigerd: geen alert,
+    """Geen crash maar een runner die de API niet bereikt (429 of alleen
+    timeouts): geen alert,
     geen crash-teller (die is per job, en deze job eindigt zo), wel een zichtbare
     ::warning:: in de run en het merkbestand voor de loops."""
-    print(f"::warning::API-limiet op dit runner-IP, laat een andere runner het "
-          f"overnemen — {sanitize_error(e)}", file=sys.stderr)
+    print(f"::warning::API onbereikbaar vanaf deze runner, laat een andere runner "
+          f"het overnemen — {sanitize_error(e)}", file=sys.stderr)
     base = os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()
     try:
         with open(os.path.join(base, RATE_LIMITED_MARKER), "w") as f:
@@ -274,7 +275,8 @@ def _exit_rate_limited(e: BaseException) -> None:
 
 
 def run_guarded(main_fn, name: str, *, chat_id: str | None = None,
-                fail_threshold: int = 1, counter_file: str | None = None) -> None:
+                fail_threshold: int = 1, counter_file: str | None = None,
+                hand_off: bool = False) -> None:
     """Top-level vangnet voor de runner-scripts: print een gesanitizede FATAL,
     alerteer via Telegram en exit 1.
 
@@ -286,14 +288,19 @@ def run_guarded(main_fn, name: str, *, chat_id: str | None = None,
     eigen melding, zoals de tado-auth-paden) passeert ongemoeid; onder
     ``DRY_RUN=1`` wordt niet verzonden.
 
-    Een exceptie met ``rate_limited`` (http_util.RateLimited: de API weigert het
-    gedeelde runner-IP) is geen crash: exit ``RATE_LIMITED_EXIT`` zonder alert en
-    zonder de teller te raken, zodat de workflow het op een andere runner herhaalt."""
+    ``hand_off=True`` is voor scripts waarvan de workflow een mislukte run zelf
+    op een andere runner herhaalt (orchestrator-redispatch of een loop met
+    herstart-kick). Daar is een exceptie met ``retry_elsewhere`` geen crash maar
+    "deze runner krijgt de API niet te pakken": http_util.RateLimited (429 op het
+    gedeelde runner-IP) of een fetch waarvan álle pogingen timeden-out. Dan exit
+    ``RATE_LIMITED_EXIT`` zonder alert en zonder de teller te raken. Zonder
+    ``hand_off`` (maandelijkse/wekelijkse jobs zonder herdispatch) blijft het een
+    gewone crash met alert — anders viel zo'n run ongemerkt uit."""
     counter = _counter_path(name, counter_file)
     try:
         main_fn()
     except Exception as e:
-        if getattr(e, "rate_limited", False):
+        if hand_off and getattr(e, "retry_elsewhere", False):
             _exit_rate_limited(e)
         err = sanitize_error(e)
         print(f"FATAL: {err}", file=sys.stderr)

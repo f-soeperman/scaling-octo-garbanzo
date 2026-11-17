@@ -346,4 +346,4 @@ if __name__ == "__main__":
     # fail_threshold=2: de workflow doet bij falen één herkansing na 10 min
     # (zelfde job, dus zelfde RUNNER_TEMP-teller) — alleen een aanhoudende
     # storing alert.
-    run_guarded(main, "zandbak", fail_threshold=2)
+    run_guarded(main, "zandbak", fail_threshold=2, hand_off=True)

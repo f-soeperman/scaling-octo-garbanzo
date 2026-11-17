@@ -121,6 +121,9 @@ jobs:
           # runner, terwijl andere runners slaagden). Dan géén herkansing hier:
           # rood eindigen, zodat de orchestrator binnen een kwartier een nieuwe
           # run op een andere runner start. Geen alert (zie notify.run_guarded).
+          # Sinds 17 nov ook bij een fetch waarvan alle pogingen timeden-out:
+          # 13–17 nov bleef zo'n runner ook ná 25 min timen-out, terwijl de
+          # orchestrator-run op een verse runner in seconden slaagde.
           rc=0
           python check_and_notify.py || rc=$?
           if [ "$rc" -eq 75 ]; then
