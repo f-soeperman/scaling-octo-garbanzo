@@ -339,4 +339,4 @@ if __name__ == "__main__":
     # fail_threshold=2: de workflow doet bij falen één herkansing na 25 min
     # (zelfde job, dus zelfde RUNNER_TEMP-teller) — alleen als die óók faalt
     # is de dag echt verloren en komt er één alert.
-    run_guarded(main, "Pineapple Under The Sea check", fail_threshold=2)
+    run_guarded(main, "Pineapple Under The Sea check", fail_threshold=2, hand_off=True)

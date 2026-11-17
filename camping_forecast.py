@@ -1085,4 +1085,4 @@ def main() -> None:
 if __name__ == "__main__":
     # fail_threshold=2: de workflow herkanst één keer in dezelfde job (sleep 600),
     # dus pas de tweede opeenvolgende crash is een echte storing waard.
-    run_guarded(main, "kampeerkompas", fail_threshold=2)
+    run_guarded(main, "kampeerkompas", fail_threshold=2, hand_off=True)

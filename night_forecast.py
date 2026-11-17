@@ -407,4 +407,4 @@ def main(now: datetime | None = None) -> None:
 
 if __name__ == "__main__":
     run_guarded(main, "kinderkamer-nacht", chat_id=os.getenv("TELEGRAM_CHAT_GROUP_ID"),
-               fail_threshold=2)
+               fail_threshold=2, hand_off=True)

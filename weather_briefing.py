@@ -519,4 +519,4 @@ if __name__ == "__main__":
     # (zelfde job, dus zelfde RUNNER_TEMP-teller) — alleen een aanhoudende
     # storing alert.
     run_guarded(main, "weerbriefing", chat_id=os.getenv("TELEGRAM_CHAT_GROUP_ID"),
-                fail_threshold=2)
+                fail_threshold=2, hand_off=True)

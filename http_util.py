@@ -35,6 +35,7 @@ class RateLimited(requests.HTTPError):
     niet als crash. `rate_limited` is het merkteken (notify importeert dit niet)."""
 
     rate_limited = True
+    retry_elsewhere = True
 
     def __init__(self, reason: str, *, response=None):
         super().__init__(f"429 Too Many Requests — {reason}", response=response)
@@ -62,8 +63,15 @@ def get_json(url: str, params: dict | None = None, *, timeout: int = 20,
 
     HTTP 429 krijgt een eigen pad: een minuutlimiet wacht ~1 min en probeert
     opnieuw; elke andere limiet (uur, dag, onbekend) raist meteen `RateLimited`,
-    want herhalen vanaf hetzelfde runner-IP lukt binnen deze job niet."""
+    want herhalen vanaf hetzelfde runner-IP lukt binnen deze job niet.
+
+    Lopen álle pogingen op een timeout of verbindingsfout stuk, dan krijgt de
+    laatste exceptie `retry_elsewhere = True` (type en tekst ongewijzigd, dus
+    bestaande `except`-fallbacks blijven werken). Gemeten 13–17 nov 2026: zo'n
+    runner bleef ook na 25 min wachten timen-out, terwijl de orchestrator-run op
+    een verse runner een kwartier later wel in seconden antwoord kreeg."""
     wait = None
+    only_unreachable = True
     for attempt in range(1, attempts + 1):
         if attempt > 1:
             time.sleep(wait if wait is not None
@@ -84,5 +92,9 @@ def get_json(url: str, params: dict | None = None, *, timeout: int = 20,
             raise
         except requests.RequestException as e:
             print(f"[{label}] poging {attempt}/{attempts} mislukt: {sanitize_error(e)}")
+            if not isinstance(e, (requests.Timeout, requests.ConnectionError)):
+                only_unreachable = False
             if attempt == attempts:
+                if only_unreachable:
+                    e.retry_elsewhere = True
                 raise

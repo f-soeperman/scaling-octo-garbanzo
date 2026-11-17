@@ -114,7 +114,8 @@ jobs:
             # Open-Meteo weigert dit runner-IP (429, uur-/daglimiet van een gedeeld
             # GitHub-IP — nov 2026: een hele loop lang, terwijl andere runners
             # slaagden). Wachten helpt op dit IP niet: stop de loop, de wachtende
-            # herstart-kick start meteen een nieuwe op een andere runner.
+            # herstart-kick start meteen een nieuwe op een andere runner. Zelfde
+            # merkbestand bij een fetch waarvan alle pogingen timeden-out.
             if [ -f "${RUNNER_TEMP}/open_meteo_rate_limited" ]; then
               echo "::warning::API-limiet op dit runner-IP — loop stopt, een verse runner neemt over"
               break

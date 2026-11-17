@@ -126,3 +126,41 @@ def test_429_zonder_leesbare_body_is_ratelimited(monkeypatch):
     monkeypatch.setattr(http_util.time, "sleep", lambda s: None)
     with pytest.raises(http_util.RateLimited):
         http_util.get_json("https://x")
+
+
+def test_alleen_timeouts_markeert_retry_elsewhere(monkeypatch):
+    """13–17 nov 2026: een runner die op alle pogingen timet-out, blijft dat ook
+    na 25 min doen. De exceptie behoudt type en tekst, maar krijgt het merkteken
+    waarmee run_guarded het aan een verse runner overlaat."""
+    def traag(url, params=None, timeout=None):
+        raise requests.ReadTimeout("Read timed out. (read timeout=20)")
+
+    monkeypatch.setattr(http_util.requests, "get", traag)
+    monkeypatch.setattr(http_util.time, "sleep", lambda s: None)
+    with pytest.raises(requests.ReadTimeout) as exc:
+        http_util.get_json("https://x")
+    assert getattr(exc.value, "retry_elsewhere", False) is True
+
+
+def test_gemengde_fouten_markeren_niet(monkeypatch):
+    """Een 5xx tussen de timeouts door: de server zelf hapert, een andere
+    runner helpt dan niet — gewone crash-afhandeling."""
+    pogingen = {"n": 0}
+
+    class _Resp500(_Resp):
+        status_code = 500
+
+        def raise_for_status(self):
+            raise requests.HTTPError("500 Server Error")
+
+    def gemengd(url, params=None, timeout=None):
+        pogingen["n"] += 1
+        if pogingen["n"] == 2:
+            return _Resp500({})
+        raise requests.ReadTimeout("Read timed out.")
+
+    monkeypatch.setattr(http_util.requests, "get", gemengd)
+    monkeypatch.setattr(http_util.time, "sleep", lambda s: None)
+    with pytest.raises(requests.ReadTimeout) as exc:
+        http_util.get_json("https://x")
+    assert not getattr(exc.value, "retry_elsewhere", False)

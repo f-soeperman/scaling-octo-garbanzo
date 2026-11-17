@@ -228,8 +228,43 @@ def test_ratelimited_is_geen_crash(sent, tmp_path, monkeypatch):
         raise RateLimited("Daily API request limit exceeded.")
 
     with pytest.raises(SystemExit) as exc:
-        run_guarded(limiet, "loop", fail_threshold=5, counter_file=str(counter))
+        run_guarded(limiet, "loop", fail_threshold=5, counter_file=str(counter),
+                    hand_off=True)
     assert exc.value.code == notify.RATE_LIMITED_EXIT == 75
     assert sent == []
     assert counter.read_text() == "4"
     assert (tmp_path / notify.RATE_LIMITED_MARKER).exists()
+
+
+def test_zonder_hand_off_blijft_ratelimited_een_crash(sent, tmp_path, monkeypatch):
+    """Jobs zonder herdispatch (maandelijks/wekelijks) moeten blijven alerten,
+    anders valt zo'n run ongemerkt uit."""
+    from http_util import RateLimited
+
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+
+    def limiet():
+        raise RateLimited("Daily API request limit exceeded.")
+
+    with pytest.raises(SystemExit) as exc:
+        run_guarded(limiet, "maand", counter_file=str(tmp_path / "c"))
+    assert exc.value.code == 1
+    assert len(sent) == 1
+    assert not (tmp_path / notify.RATE_LIMITED_MARKER).exists()
+
+
+def test_alleen_timeouts_gaan_naar_een_andere_runner(sent, tmp_path, monkeypatch):
+    import requests
+
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+
+    def traag():
+        e = requests.ReadTimeout("Read timed out. (read timeout=20)")
+        e.retry_elsewhere = True
+        raise e
+
+    with pytest.raises(SystemExit) as exc:
+        run_guarded(traag, "check", fail_threshold=1,
+                    counter_file=str(tmp_path / "c"), hand_off=True)
+    assert exc.value.code == notify.RATE_LIMITED_EXIT
+    assert sent == []

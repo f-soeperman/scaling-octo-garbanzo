@@ -328,4 +328,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    run_guarded(main, "zonwering", fail_threshold=2)
+    run_guarded(main, "zonwering", fail_threshold=2, hand_off=True)

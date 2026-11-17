@@ -2083,4 +2083,4 @@ if __name__ == "__main__":
     # fail_threshold=6: kwartierloop — pas alerten bij ~1,5 uur aanhoudende
     # storing. Een gemiste iteratie is onschuldig (de volgende haalt bij);
     # alleen een echte outage is een bericht waard.
-    run_guarded(main, "window-advisor", fail_threshold=6)
+    run_guarded(main, "window-advisor", fail_threshold=6, hand_off=True)

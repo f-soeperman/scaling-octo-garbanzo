@@ -761,4 +761,4 @@ def main():
 
 
 if __name__ == "__main__":
-    run_guarded(main, "vent-twin", fail_threshold=6)
+    run_guarded(main, "vent-twin", fail_threshold=6, hand_off=True)
