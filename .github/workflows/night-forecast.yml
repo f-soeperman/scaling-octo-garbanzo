@@ -15,8 +15,8 @@ on:
         type: boolean
         default: false
 
-# Deze workflow commit het voorspellingslog; twee runs tegelijk (dispatch +
-# fallback-cron) mogen niet door elkaar pushen.
+# Twee runs tegelijk (dispatch + fallback-cron) mogen het log in de gist niet
+# door elkaar schrijven.
 concurrency:
   group: night-forecast
   cancel-in-progress: false
@@ -70,13 +70,10 @@ jobs:
     needs: guard
     if: needs.guard.outputs.handled != '1'
     runs-on: ubuntu-latest
-    # Sinds aug 2026 niet meer stateless: elke avondrun legt zijn voorspelling vast in
-    # data/night_forecast_log (het verificatiespoor van tools/night_verify.py) en
-    # commit die — vandaar contents: write + de branch-tip-pin op de checkout (een
-    # dispatch mag niet vanaf een oudere momentopname committen, zelfde reden als
-    # shade-notify/station-accuracy).
+    # Het voorspellingslog (verificatiespoor van tools/night_verify.py) leeft sinds
+    # nov 2026 in de privé artefact-gist; deze job commit niets meer.
     permissions:
-      contents: write
+      contents: read
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
@@ -111,46 +108,3 @@ jobs:
             sleep 300
             python night_forecast.py
           }
-
-      - name: Commit forecast log
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Het log leeft sinds nov 2026 in de privé artefact-gist; de eerste
-          # gist-run verwijdert de nog gecommitte maanden (zelf-uitvoerende
-          # migratie), daarna is deze stap een no-op.
-          if [ -n "$(git ls-files data/night_forecast_log)" ]; then
-            git add -A -- data/night_forecast_log
-          fi
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "data: nachtvoorspelling gelogd $(date -u +%Y-%m-%dT%H:%M) [skip ci]"
-            # De window/vent-loops committen de hele dag door naar main; met
-            # `|| true` bleef de repo bij een conflict mid-rebase achter en
-            # faalde de push stil — precies het verificatielog-verlies waar
-            # dit spoor voor bestaat. Zelfde geharde blok als daily-check.yml
-            # (-X theirs: het log is per datum-slot idempotent, onze verse
-            # versie wint; falen blijft hard en zichtbaar).
-            git rebase --abort 2>/dev/null || true
-            # Tot drie pogingen: tussen pull en push zit een venster van ~1 s waarin
-            # een andere pijplijn naar main kan pushen (de bodem- en kampeer-run
-            # committen elke ochtend seconden na elkaar). Eén verloren race maakte de
-            # run rood, en de herkansing herhaalde dan wat al verstuurd was.
-            pushed=""
-            for attempt in 1 2 3; do
-              if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}" && git push; then
-                pushed=1
-                break
-              fi
-              git rebase --abort 2>/dev/null || true
-              sleep $(( attempt * 5 ))
-            done
-            if [ -n "$pushed" ]; then
-              :
-            else
-              git rebase --abort 2>/dev/null || true
-              echo "::error::rebase failed, night forecast log not pushed"
-              exit 1
-            fi
-          fi

@@ -65,7 +65,7 @@ jobs:
     if: needs.guard.outputs.handled != '1'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     # API-calls + commit duren normaal <5 min; zonder cap houdt een hangende
     # HTTP-call de runner 6 uur (GitHub-default) vast. De cap dekt ook de
     # in-job herkansing (25 min slaap + tweede poging) bij een API-storing:
@@ -132,55 +132,4 @@ jobs:
             echo "::warning::eerste poging mislukt — herkansing over 25 min"
             sleep 1500
             python check_and_notify.py
-          fi
-
-      - name: Commit updated data
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Alleen het meldslot. data.json leeft in de privé artefact-gist; de
-          # lokale terugval (zonder ARTEFACT_GIST_ID) staat in .gitignore en hoort
-          # ook nooit gecommit te worden — `git add` op een genegeerd pad faalt.
-          # soil_state.json leeft sinds nov 2026 ook in de artefact-gist; de eerste
-          # gist-run verwijdert de nog gecommitte kopie (zelf-uitvoerende
-          # migratie). Alleen een nog gevolgd bestand stagen (wijziging óf deletie).
-          if git ls-files --error-unmatch soil_state.json >/dev/null 2>&1; then
-            git add -A -- soil_state.json
-          fi
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            # [skip ci]: dit is een data-commit; de marker houdt de testsuite
-            # buiten de data-verversingen. Zelfde patroon als window/vent/mowing.
-            git commit -m "data: soil refresh $(date -u +%Y-%m-%dT%H:%M) [skip ci]"
-            # De window/vent-loops committen de hele dag door naar main —
-            # zonder rebase kan deze push racen en faalt de update stilletjes.
-            # data.json wordt elke run volledig opnieuw gegenereerd, dus bij
-            # conflict wint onze verse versie (-X theirs, zie de uitleg in
-            # window-notify.yml). Falen blijft hard en zichtbaar (exit 1): een
-            # rode run houdt `handled_since` in de orchestrator op "niet
-            # gedaan", zodat de volgende tick het gewoon opnieuw probeert —
-            # en `soil_state.json` niet stilletjes achterblijft bij een
-            # verstuurd bericht.
-            git rebase --abort 2>/dev/null || true
-            # Tot drie pogingen: tussen pull en push zit een venster van ~1 s waarin
-            # een andere pijplijn naar main kan pushen (de bodem- en kampeer-run
-            # committen elke ochtend seconden na elkaar). Eén verloren race maakte de
-            # run rood, en de herkansing herhaalde dan wat al verstuurd was.
-            pushed=""
-            for attempt in 1 2 3; do
-              if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}" && git push; then
-                pushed=1
-                break
-              fi
-              git rebase --abort 2>/dev/null || true
-              sleep $(( attempt * 5 ))
-            done
-            if [ -n "$pushed" ]; then
-              :
-            else
-              git rebase --abort 2>/dev/null || true
-              echo "::error::rebase failed, daily data not pushed"
-              exit 1
-            fi
           fi

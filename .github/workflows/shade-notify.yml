@@ -78,7 +78,7 @@ jobs:
     if: needs.guard.outputs.handled != '1'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     # Cap dekt ook de in-job herkansing (10 min slaap + tweede poging).
     timeout-minutes: 30
     steps:
@@ -126,45 +126,3 @@ jobs:
             sleep 600
             python shade_advisor.py
           }
-
-      - name: Commit updated state
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          # In gist-modus is er niets lokaals meer: de eerste run verwijdert de
-          # nog gecommitte kopie (zelf-uitvoerende migratie) en daarna is dit een
-          # no-op. Alleen een nog gevolgd bestand stagen (wijziging óf deletie).
-          if git ls-files --error-unmatch shade_state.json >/dev/null 2>&1; then
-            git add -A -- shade_state.json
-          fi
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "chore: update shade_state.json [skip ci]"
-            # De soil-run en de window/vent-loops committen de hele dag door
-            # naar main — rebase vóór push. De state wordt elke run volledig
-            # opnieuw geschreven, dus bij conflict wint onze verse versie
-            # (-X theirs). Falen moet hard en zichtbaar zijn (exit 1): zonder
-            # gecommitte state kan de orchestrator de reminder niet timen.
-            git rebase --abort 2>/dev/null || true
-            # Tot drie pogingen: tussen pull en push zit een venster van ~1 s waarin
-            # een andere pijplijn naar main kan pushen (de bodem- en kampeer-run
-            # committen elke ochtend seconden na elkaar). Eén verloren race maakte de
-            # run rood, en de herkansing herhaalde dan wat al verstuurd was.
-            pushed=""
-            for attempt in 1 2 3; do
-              if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}" && git push; then
-                pushed=1
-                break
-              fi
-              git rebase --abort 2>/dev/null || true
-              sleep $(( attempt * 5 ))
-            done
-            if [ -n "$pushed" ]; then
-              :
-            else
-              git rebase --abort 2>/dev/null || true
-              echo "::error::rebase failed, shade state not pushed"
-              exit 1
-            fi
-          fi

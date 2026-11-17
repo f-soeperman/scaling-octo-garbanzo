@@ -106,9 +106,8 @@ git-historie staan; volledig verwijderen kan alleen met een nieuwe history-squas
   stationsmetingen.
 - **Ook naar de artefact-gist:** het nachtvoorspellingslog (op de gemeten kamertemperatuur
   geankerd), `soil_state.json` en `shade_state.json` (dagelijkse commits die afgeleiden van
-  handmatige meldingen dateerden). Zelf-uitvoerende migratie; tot de eerste gist-run staan de
-  kopieën nog in de boom (`_MIGRATING_ARTEFACTS` in `tests/test_privacy.py` — daarna naar
-  `_PRIVATE_ARTEFACTS`).
+  handmatige meldingen dateerden). De zelf-uitvoerende migratie is op 15–16 nov 2026 gelopen; de paden staan sindsdien in
+  `_PRIVATE_ARTEFACTS` in `tests/test_privacy.py`.
 - **Dashboards:** geen CDN-scripts, `escHTML()` op elke niet-numerieke waarde in een
   HTML-template. Het Gist-token is account-breed: aparte tokens met vervaldatum voor browser
   en Actions. De orchestrator krijgt het Actions-token read-only voor het reminder-tijdstip

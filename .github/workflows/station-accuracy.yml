@@ -28,7 +28,7 @@ on:
         default: false
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: station-accuracy
@@ -71,45 +71,3 @@ jobs:
           ARTEFACT_GIST_ID:   ${{ secrets.ARTEFACT_GIST_ID }}
           GIST_TOKEN:         ${{ secrets.GIST_TOKEN }}
         run: python station_accuracy.py
-
-      - name: Commit dashboard data
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          # In gist-modus verwijdert de run de nog gecommitte kopieën
-          # (zelf-uitvoerende migratie); daarna is deze stap een no-op.
-          # Per pad: een pathspec die niets meer raakt laat `git add` hard falen.
-          for p in docs/accuracy_data.json data/station_history; do
-            if [ -n "$(git ls-files -- "$p")" ]; then git add -A -- "$p"; fi
-          done
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "data: station accuracy refresh $(date -u +%Y-%m-%dT%H:%M) [skip ci]"
-            # Zelfde geharde blok als daily-check.yml: `|| true` liet een
-            # conflict-rebase stil mislukken en de maandelijkse archief-commit
-            # wegvallen. accuracy_data.json wordt volledig gegenereerd en de
-            # shards zijn per UTC-uur idempotent → onze versie wint (-X theirs);
-            # falen blijft hard en zichtbaar.
-            git rebase --abort 2>/dev/null || true
-            # Tot drie pogingen: tussen pull en push zit een venster van ~1 s waarin
-            # een andere pijplijn naar main kan pushen (de bodem- en kampeer-run
-            # committen elke ochtend seconden na elkaar). Eén verloren race maakte de
-            # run rood, en de herkansing herhaalde dan wat al verstuurd was.
-            pushed=""
-            for attempt in 1 2 3; do
-              if git pull --rebase -X theirs origin "${GITHUB_REF_NAME}" && git push; then
-                pushed=1
-                break
-              fi
-              git rebase --abort 2>/dev/null || true
-              sleep $(( attempt * 5 ))
-            done
-            if [ -n "$pushed" ]; then
-              :
-            else
-              git rebase --abort 2>/dev/null || true
-              echo "::error::rebase failed, accuracy data not pushed"
-              exit 1
-            fi
-          fi
